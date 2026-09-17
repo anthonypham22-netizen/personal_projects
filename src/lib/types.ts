@@ -1,0 +1,14 @@
+export type Role = "buyer" | "owner" | "advisor";
+export type User = { id: string; email: string; name: string; company: string; role: Role; province: string; bio: string; sectors: string; min_revenue: number; max_revenue: number; is_demo: number };
+export type Deal = { id: string; title: string; company_name: string; sector: string; province: string; city: string; revenue: number; ebitda: number; asking_price: number; employees: number; founded: number; description: string; confidential_summary: string; owner_id: string; advisor_id: string | null; stage: string; published: number; created_at: string; access_status?: string; can_manage?: boolean; has_access?: boolean; match_score?: number; match_reasons?: string[] };
+export type Access = { id: string; deal_id: string; buyer_id: string; status: string; nda_status: string; nda_document_id: string | null; notes: string; created_at: string; name: string; company: string; email: string };
+export type Document = { id: string; deal_id: string; name: string; category: string; size: number; version: number; audience: string; buyer_id: string | null; uploaded_by: string; created_at: string; uploader_name: string; deal_title: string };
+export type Message = { id: string; deal_id: string; buyer_id: string; sender_id: string; body: string; created_at: string; sender_name: string; sender_role: Role; deal_title: string; buyer_name: string };
+export type Task = { id: string; deal_id: string; title: string; due_date: string; status: string; buyer_id: string | null; created_by: string; created_at: string; deal_title: string };
+export type Offer = { id: string; deal_id: string; buyer_id: string; amount: number; structure: string; notes: string; status: string; document_id: string; created_at: string; buyer_name: string };
+export type Activity = { id: string; deal_id: string; actor_id: string; action: string; created_at: string; actor_name: string; deal_title: string };
+export type WorkspaceData = { user: User; deals: Deal[]; access: Access[]; documents: Document[]; messages: Message[]; tasks: Task[]; offers: Offer[]; activity: Activity[]; advisors: Pick<User, "id" | "name" | "company" | "province" | "bio">[]; demo: boolean };
+export const SECTORS = ["Business services", "Manufacturing", "Healthcare", "Technology", "Consumer & retail", "Food & beverage", "Transportation", "Construction"];
+export const PROVINCES = ["Ontario", "Québec", "British Columbia", "Alberta", "Manitoba", "Saskatchewan", "Nova Scotia", "New Brunswick", "Newfoundland and Labrador", "Prince Edward Island", "Yukon", "Northwest Territories", "Nunavut"];
+export const STAGES = ["Preparation", "On market", "LOI review", "Due diligence", "Closing", "Closed"];
+export const money = (n: number, compact = true) => new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD", maximumFractionDigits: compact ? 1 : 0, notation: compact ? "compact" : "standard" }).format(n);

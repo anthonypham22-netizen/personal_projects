@@ -1,0 +1,21 @@
+{
+  "name": "northlane", "version": "0.1.0", "private": true,
+  "engines": { "node": ">=24.14.0 <25" },
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build", "start": "next start --hostname 0.0.0.0",
+    "typecheck": "tsc --noEmit", "test": "tsx --test tests/*.test.ts tests/*.test.mjs",
+    "test:core": "node --test tests/*.test.mjs",
+    "test:e2e": "playwright test", "check": "npm run typecheck && npm test && npm run build",
+    "backup": "node scripts/backup.mjs", "format": "prettier --write src tests e2e *.ts *.mjs"
+  },
+  "dependencies": {
+    "next": "16.3.5", "react": "19.3.0", "react-dom": "19.3.0",
+    "lucide-react": "^0.577.0", "zod": "^4.3.6", "clsx": "^2.1.1", "tailwind-merge": "^3.5.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3", "tailwindcss": "4.3.3", "typescript": "^5.9.3",
+    "@types/node": "^24.10.0", "@types/react": "^19.2.0", "@types/react-dom": "^19.2.0",
+    "tsx": "^4.21.0", "@playwright/test": "^1.58.2", "prettier": "^3.8.1"
+  }
+}

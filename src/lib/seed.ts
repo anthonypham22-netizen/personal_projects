@@ -1,0 +1,47 @@
+import type { DatabaseSync } from "node:sqlite";
+import { randomBytes } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { hashPassword } from "./passwords.ts";
+
+export function seed(d: DatabaseSync, directory: string) {
+  if (d.prepare("SELECT id FROM users WHERE id='demo-advisor'").get()) return;
+  d.exec("BEGIN IMMEDIATE");
+  try {
+    const password = hashPassword(randomBytes(32).toString("hex"));
+    const people = [
+      ["demo-advisor", "advisor@example.test", "Alex Morgan", "Northstar Advisory", "advisor", "Ontario", "Independent M&A advisor focused on Canadian business services and industrial companies."],
+      ["demo-owner", "owner@example.test", "Jamie Chen", "Cedar & Co.", "owner", "Ontario", "Building the next chapter for a family of Canadian businesses."],
+      ["demo-buyer", "buyer@example.test", "Taylor Reid", "Evergreen Capital", "buyer", "Ontario", "Patient capital for enduring Canadian businesses. Focused on business services and manufacturing."],
+      ["demo-buyer-2", "buyer2@example.test", "Sam Laurent", "Laurent Partners", "buyer", "Québec", "An operator-led acquisition group investing across Canada."],
+      ["demo-advisor-2", "advisor2@example.test", "Morgan Ellis", "Pacific Partners", "advisor", "British Columbia", "Advising business owners on succession and strategic acquisitions across Western Canada."]
+    ];
+    for (const [id,email,name,company,role,province,bio] of people) d.prepare("INSERT INTO users(id,email,password_hash,name,company,role,province,bio,sectors,is_demo) VALUES(?,?,?,?,?,?,?,?,?,1)").run(id,email,password,name,company,role,province,bio, "Business services,Manufacturing");
+    const deals = [
+      ["cedar", "Project Cedar", "Cedar Industrial Services Ltd.", "Business services", "Ontario", "Hamilton", 8400000, 1800000, 9500000, 42, 2004, "An established industrial maintenance partner with recurring contracts and a diversified customer base.", "Maintenance and inspection services across Southern Ontario. 72% recurring revenue. The founder is seeking a succession partner and is open to a transition period.", "Due diligence"],
+      ["summit", "Project Summit", "Summit Precision Manufacturing Inc.", "Manufacturing", "Alberta", "Calgary", 12600000, 2400000, 14000000, 68, 1998, "Precision manufacturing business serving energy, infrastructure, and industrial customers.", "A 38,000-square-foot facility with an experienced management team. Customer concentration and equipment schedules are available in the data room.", "LOI review"],
+      ["harbour", "Project Harbour", "Harbour Health Group Inc.", "Healthcare", "British Columbia", "Victoria", 4200000, 820000, 5100000, 26, 2011, "A community-focused allied health group with multiple locations and a strong referral network.", "Three leased clinic locations and a contracted team. Personal patient information is excluded from this demonstration.", "On market"],
+      ["maple", "Project Maple", "Maple Cloud Solutions Inc.", "Technology", "Ontario", "Ottawa", 3100000, 620000, 4600000, 18, 2015, "Managed IT and cloud services provider with long-standing small-business clients.", "Subscription-based IT support with a focus on professional services firms. The founder is open to remaining in a commercial role.", "On market"],
+      ["atlas", "Project Atlas", "Atlas Logistics Inc.", "Transportation", "Québec", "Montréal", 17800000, 2100000, 11800000, 84, 2001, "Regional logistics operator connecting businesses across Québec and Eastern Ontario.", "Privately owned fleet and dispatch operation. Financial and fleet records are available to approved counterparties.", "Preparation"],
+      ["birch", "Project Birch", "Birch Specialty Foods Ltd.", "Food & beverage", "Nova Scotia", "Halifax", 5600000, 940000, 6300000, 35, 2008, "Specialty food producer with regional retail distribution and a growing private-label business.", "Family-owned production business with an established local management team and a multi-year supply base.", "On market"]
+    ];
+    for (const row of deals) d.prepare("INSERT INTO deals(id,title,company_name,sector,province,city,revenue,ebitda,asking_price,employees,founded,description,confidential_summary,stage,owner_id,advisor_id,published) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'demo-owner','demo-advisor',?)").run(...row, row[13] === "Preparation" ? 0 : 1);
+    for (const [id,deal,buyer,status,nda] of [["access-cedar","cedar","demo-buyer","approved","verified"],["access-summit","summit","demo-buyer","approved","verified"],["access-harbour","harbour","demo-buyer","requested","not_requested"],["access-cedar-2","cedar","demo-buyer-2","nda_pending","requested"]]) d.prepare("INSERT INTO access(id,deal_id,buyer_id,status,nda_status,notes) VALUES(?,?,?,?,?,?)").run(id,deal,buyer,status,nda,"Fictional demonstration record. No legal agreement was signed.");
+    mkdirSync(path.join(directory,"uploads"),{recursive:true,mode:0o700});
+    for (const [id,deal,name,category,audience,buyer] of [["doc-cedar-fin","cedar","Financial overview — FY2025.txt","Financials","approved",null],["doc-cedar-cim","cedar","Confidential information memorandum.txt","Company overview","approved",null],["doc-cedar-nda","cedar","NDA — demonstration record.txt","NDA","buyer","demo-buyer"],["doc-summit-fin","summit","Financial overview — FY2025.txt","Financials","approved",null],["doc-summit-loi","summit","Letter of intent — demonstration.txt","LOI","buyer","demo-buyer"],["doc-cedar-internal","cedar","Seller strategy notes.txt","Other","team",null]] as const) {
+      const content = `ACQUIRE — FICTIONAL DEMONSTRATION\n${name}\n\nThis file contains no real company or transaction information. It is not a legal agreement, financial statement, or executed signature record. Replace it with your own reviewed documents for a private pilot.\n`;
+      writeFileSync(path.join(directory,"uploads",id),content,{mode:0o600});
+      d.prepare("INSERT INTO documents(id,deal_id,name,storage_key,mime,category,size,audience,buyer_id,uploaded_by) VALUES(?,?,?,?,?,?,?,?,?,?)").run(id,deal,name,id,"text/plain",category,Buffer.byteLength(content),audience,buyer,id.includes("loi")?"demo-buyer":"demo-advisor");
+    }
+    d.prepare("UPDATE access SET nda_document_id='doc-cedar-nda' WHERE id='access-cedar'").run();
+    for (const [id,deal,title,days,buyer] of [["task-1","cedar","Review the FY2025 financial overview",3,"demo-buyer"],["task-2","cedar","Schedule the management meeting",5,"demo-buyer"],["task-3","summit","Review indicative offer terms",7,null],["task-4","harbour","Review buyer access request",2,null]] as const) {
+      const date = new Date(Date.now()+days*86400000).toISOString().slice(0,10);
+      d.prepare("INSERT INTO tasks(id,deal_id,title,due_date,buyer_id,created_by) VALUES(?,?,?,?,?,'demo-advisor')").run(id,deal,title,date,buyer);
+    }
+    d.prepare("INSERT INTO offers(id,deal_id,buyer_id,amount,structure,notes,document_id) VALUES('offer-1','summit','demo-buyer',13200000,'Share purchase','Fictional indicative offer, subject to diligence.','doc-summit-loi')").run();
+    d.prepare("INSERT INTO messages(id,deal_id,buyer_id,sender_id,body) VALUES('message-1','cedar','demo-buyer','demo-advisor','Welcome to the Cedar workspace. The financial overview is ready to review. Please add your questions here so we can keep the process organized.')").run();
+    d.prepare("INSERT INTO messages(id,deal_id,buyer_id,sender_id,body) VALUES('message-2','cedar','demo-buyer','demo-buyer','Thank you, Alex. We will review the financials ahead of the management meeting.')").run();
+    d.prepare("INSERT INTO activity(id,deal_id,actor_id,action) VALUES('activity-1','cedar','demo-advisor','Opened the demonstration deal room'),('activity-2','summit','demo-buyer','Submitted an indicative LOI'),('activity-3','harbour','demo-buyer','Requested confidential access')").run();
+    d.exec("COMMIT");
+  } catch (e) { d.exec("ROLLBACK"); throw e; }
+}
