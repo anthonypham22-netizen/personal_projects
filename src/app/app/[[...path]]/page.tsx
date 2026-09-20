@@ -2,6 +2,7 @@ import { requireUser } from "@/lib/auth";
 import { workspace } from "@/lib/service";
 import { Workspace } from "@/components/workspace";
 import { DemoNotice } from "@/components/demo-notice";
+import "@/components/workspace-overflow.css";
 export const dynamic="force-dynamic";
 export const runtime="nodejs";
 export const metadata={title:"Workspace",robots:{index:false,follow:false}};
