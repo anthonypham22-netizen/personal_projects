@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, copyFileSync } from "node:fs";
 
 const output = "test-results/demo-preview";
 async function capture(page: Page, name: string) {
@@ -9,12 +9,17 @@ async function capture(page: Page, name: string) {
 }
 
 test("capture landing page and all three real demo workspaces", async ({ page }) => {
+  test.setTimeout(120000);
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Great businesses. New beginnings." })).toBeVisible();
   await capture(page, "01-landing-desktop");
+  // Source-only snapshots make the reviewed component and stylesheet available beside the screenshots.
+  mkdirSync(`${output}/review-source`, { recursive: true });
+  copyFileSync("src/components/workspace.tsx", `${output}/review-source/workspace.tsx`);
+  copyFileSync("src/app/globals.css", `${output}/review-source/globals.css`);
   for (const role of ["Advisor", "Buyer", "Owner"]) {
     await page.goto("/login");
     await page.getByRole("button", { name: `${role} demo`, exact: true }).click();
@@ -36,7 +41,16 @@ test("capture landing page and all three real demo workspaces", async ({ page })
       await page.goto("/app/documents");
       await expect(page.getByText("Cedar - Financial overview FY2025.pdf", { exact: true })).toBeVisible();
       await capture(page, "05-documents-mobile");
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      const layout = await page.evaluate(() => ({
+        viewport: window.innerWidth, document: document.documentElement.scrollWidth,
+        elements: Array.from(document.querySelectorAll("body *")).filter(el => el.getBoundingClientRect().right > window.innerWidth + 1).map(el => ({
+          tag: el.tagName, className: el.getAttribute("class"), text: el.textContent?.slice(0,100), right: el.getBoundingClientRect().right,
+          width: el.getBoundingClientRect().width, overflowX: getComputedStyle(el).overflowX, position: getComputedStyle(el).position,
+          parent: el.parentElement?.getAttribute("class")
+        }))
+      }));
+      writeFileSync(`${output}/mobile-layout.json`, JSON.stringify(layout, null, 2));
+      expect.soft(layout.document).toBeLessThanOrEqual(layout.viewport);
       await page.setViewportSize({ width: 1440, height: 1000 });
     }
   }
