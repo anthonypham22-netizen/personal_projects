@@ -4,7 +4,7 @@ A standalone website and SaaS MVP for Canadian M&A, targeting businesses with ap
 
 ## Current delivery status
 
-The local MVP now installs and builds successfully. TypeScript checking, all 16 backend tests, and all 5 Chromium browser checks pass. The initial installation approval error did not recur on the approved retry; `package-lock.json` is now present. The local preview is available while `npm run dev` is running. This is not a publicly deployed or production-ready release; Docker deployment, broader security review, and live-launch requirements remain outstanding. See [validation status](docs/VALIDATION.md).
+The local MVP now installs and builds successfully. TypeScript checking, all 17 backend tests, and all 6 Chromium browser checks pass. The initial installation approval error did not recur on the approved retry; `package-lock.json` is now present. The local preview is available while `npm run dev` is running. This is not a publicly deployed or production-ready release; Docker deployment, broader security review, and live-launch requirements remain outstanding. See [validation status](docs/VALIDATION.md).
 
 ## Start locally
 
@@ -24,7 +24,7 @@ npm run dev
 
 Open [localhost:3000](http://localhost:3000). At `/login`, choose **Advisor demo**, **Buyer demo**, or **Owner demo**. These appear only with `ALLOW_DEMO=true`. Passwords for demo records are random and are not exposed; the explicit demo entry points establish their sessions.
 
-Demo data is shared and persistent. Use fictional files only. New registered accounts are isolated from demo deals and begin with an empty workspace. Register an owner, advisor, and buyer to try a real multi-account workflow with test information.
+Demo data is shared and persistent. Use fictional files only. New registered accounts are isolated from demo deals and begin with an empty workspace. The shared Buyer Demo can preview published teasers from registered owners, but it cannot request confidential access or contact those deal teams. Register an owner, advisor, and buyer to try the complete multi-account workflow with test information.
 
 After the initial successful `npm install`, keep and commit the generated `package-lock.json`. Future installations, Docker builds, and CI should use `npm ci`.
 
@@ -85,7 +85,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-`test:core` uses only Node and can run without npm dependencies. The broader service tests cover redaction, document permissions, buyer isolation, NDA approval, revocation, shared mandates, session expiry, and demo segregation. Browser tests exercise navigation, tasks, downloads, origin checks, and a mobile viewport. Stop any development server on port 3000 before the browser suite; it starts an isolated instance with its own test data.
+`test:core` uses only Node and can run without npm dependencies. The broader service tests cover redaction, document permissions, buyer isolation, NDA approval, revocation, shared mandates, session expiry, and safe preview boundaries. Browser tests exercise navigation, buyer previews, tasks, downloads, origin checks, and a mobile viewport. Stop any development server on port 3000 before the browser suite; it starts an isolated instance with its own test data.
 
 Use `npm run format` after dependencies are installed to format the source with Prettier.
 

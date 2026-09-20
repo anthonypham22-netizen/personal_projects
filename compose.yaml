@@ -5,7 +5,7 @@ services:
     environment:
       APP_URL: https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
       DATA_DIR: /app/data
-      ALLOW_DEMO: "false"
+      ALLOW_DEMO: ${ALLOW_DEMO:-false}
       COOKIE_SECURE: "true"
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
     volumes:

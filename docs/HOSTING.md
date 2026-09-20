@@ -8,7 +8,7 @@ The first deployment should be a staging environment with fictional data. A succ
 
 ## 1. Complete local verification
 
-Local installation, TypeScript checking, the production build, 16 backend tests, and 5 Chromium checks passed on 2026-09-16. Repeat verification after changes and before deployment:
+Local installation, TypeScript checking, the production build, 17 backend tests, and 6 Chromium checks passed. Repeat verification after changes and before deployment:
 
 ```sh
 npm ci
@@ -32,6 +32,24 @@ Choose a domain you own, such as `app.your-domain.ca`. Point its DNS A record at
 
 Canadian-region infrastructure is a hosting choice, not a claim of legal compliance. Review where backups, logs, support access, and future email/signature integrations handle data too.
 
+## Staging and production are separate environments
+
+Use two deployments before inviting real users. GitHub Environments are recommended once GitHub Actions performs deployments, but they do not host the application themselves; each environment still needs its own server, domain, persistent storage, and secrets.
+
+| Boundary | Staging | Production |
+| --- | --- | --- |
+| Purpose | Test releases and complete fictional transaction walkthroughs | Real customer accounts and approved live data |
+| Example domain | `staging.your-domain.ca` | `app.your-domain.ca` |
+| `ALLOW_DEMO` | `true` | `false` |
+| Registration | Controlled test accounts | Invitation-only initially is recommended |
+| Data | Fictional only | Live data under approved operating controls |
+| Storage | Dedicated staging volume and backups | Dedicated production volume and backups |
+| GitHub protection | Automatic deployment is acceptable | Required reviewer approval before deployment |
+
+Never share a database, upload directory, encryption secret, session secret, or backup destination between staging and production. Promote the same reviewed commit or container image from staging to production; do not copy the staging database into production.
+
+In GitHub repository settings, create `staging` and `production` Environments when deployment automation is added. Store only environment-specific deployment credentials there. Configure the production Environment with required reviewers and restrict deployments to the protected release branch or tag policy you adopt.
+
 ## 3. Prepare the server
 
 Install Docker Engine and the Compose plugin using the [official Ubuntu instructions](https://docs.docker.com/engine/install/ubuntu/). Use a supported Ubuntu release and enable automatic security updates according to your administrator's policy.
@@ -51,10 +69,13 @@ Create a server-side `.env` file in the repository directory with:
 
 ```dotenv
 APP_DOMAIN=app.your-domain.ca
+ALLOW_DEMO=false
 ALLOW_REGISTRATION=true
 ```
 
-Replace the example domain with the actual DNS name. Do not include `https://` in `APP_DOMAIN`. Docker Compose constructs the exact `APP_URL` from it, enables secure cookies, and disables demo accounts. Ensure `.env` is readable only by the deployment administrator.
+Replace the example domain with the actual DNS name. Do not include `https://` in `APP_DOMAIN`. Docker Compose constructs the exact `APP_URL` from it and enables secure cookies. `ALLOW_DEMO` defaults to `false` when omitted. Ensure `.env` is readable only by the deployment administrator.
+
+For staging, use a separate checkout or Compose project, domain, and volume with `ALLOW_DEMO=true`. Keep staging private or access-controlled and use fictional information only.
 
 The development `.env.local` file is excluded from the Docker image. Do not copy local demo databases to the live volume. A fresh volume is initialized automatically on first application database access.
 
