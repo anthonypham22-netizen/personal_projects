@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./responsive-tables.css";
 export const metadata: Metadata = {title:{default:"Acquire — The next chapter starts here",template:"%s · Acquire"},description:"A private workspace for Canadian business acquisitions. Connect buyers, owners, and advisors, and move every deal forward.",icons:{icon:"/favicon.svg"}};
 export default function RootLayout({children}:{children:React.ReactNode}){return <html lang="en"><body>{children}</body></html>;}
