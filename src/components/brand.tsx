@@ -1,3 +1,18 @@
+import Image from "next/image";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-export function Brand({dark=false,href="/"}:{dark?:boolean;href?:string}){return <Link href={href} className={cn("brand",dark&&"brand-light")} aria-label="Acquire home"><span className="brand-mark" aria-hidden="true">A</span><span>acquire<span className="brand-period">.</span></span></Link>;}
+
+export function Brand({ dark = false, href = "/" }: { dark?: boolean; href?: string }) {
+  return (
+    <Link href={href} className={cn("brand", dark && "brand-light")} aria-label="Acquire home">
+      <Image
+        src="/acquire-logo-exchange.png"
+        alt=""
+        aria-hidden="true"
+        width={2440}
+        height={677}
+        sizes="(max-width: 480px) 128px, 164px"
+      />
+    </Link>
+  );
+}

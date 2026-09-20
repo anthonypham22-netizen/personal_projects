@@ -16,11 +16,9 @@
   th,td { @apply text-left; }
 }
 @layer components {
-  .brand { @apply inline-flex items-center gap-2.5 text-2xl font-bold text-slate-950; }
-  .brand-mark { @apply flex size-8 items-center justify-center rounded-lg bg-emerald-900 text-xl text-white; }
-  .brand-period { @apply text-emerald-700; }
-  .brand-light { @apply text-white; }
-  .brand-light .brand-mark { @apply bg-white text-emerald-950; }
+  .brand { @apply inline-flex shrink-0 items-center; }
+  .brand img { @apply block h-auto w-[164px]; }
+  .brand-light img { filter: brightness(0) invert(1); }
   .button { @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-transparent px-4 py-2.5 text-sm font-semibold; }
   .button-dark { @apply bg-slate-900 text-white hover:bg-slate-700; }
   .button-green { @apply bg-emerald-800 text-white hover:bg-emerald-900; }
@@ -148,7 +146,7 @@
   .breadcrumbs strong { @apply font-medium text-slate-700; }
   .topbar-right { @apply ml-auto flex items-center gap-4 text-xs text-slate-500; }
   .mobile-brand { @apply lg:hidden; }
-  .mobile-brand .brand { @apply text-xl; }
+  .mobile-brand .brand img { @apply w-32; }
   .mobile-nav { @apply flex gap-2 overflow-x-auto border-b border-slate-200 bg-white px-4 py-2 lg:hidden; }
   .mobile-nav a { @apply whitespace-nowrap rounded-md px-3 py-2 text-sm text-slate-500; }
   .mobile-nav a.active { @apply bg-emerald-50 text-emerald-900; }
@@ -274,4 +272,4 @@
   .settings-grid { @apply grid gap-6 xl:grid-cols-3; }
   .settings-main { @apply space-y-6 xl:col-span-2; }
 }
-@media (max-width: 480px) { .nav-actions { gap: 12px; } .marketing-nav { gap: 12px; padding: 16px; } .marketing-nav .brand { font-size:20px; } .marketing-nav .text-link { display:none; } .hero h1 { font-size:42px; } .topbar-right>span:first-child { display:none; } }
+@media (max-width: 480px) { .nav-actions { gap: 12px; } .marketing-nav { gap: 12px; padding: 16px; } .marketing-nav .brand img { width:128px; } .marketing-nav .text-link { display:none; } .hero h1 { font-size:42px; } .topbar-right>span:first-child { display:none; } }
