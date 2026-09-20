@@ -1,9 +1,0 @@
-/* A positioned scroll container keeps absolutely-positioned accessible labels
-   inside the table's scrollport rather than extending the page on narrow screens.
-   Keep horizontal table scrolling available; do not hide overflow on the body. */
-.table-scroll {
-  position: relative;
-  width: 100%;
-  max-width: 100%;
-  overflow-x: auto;
-}
