@@ -1,0 +1,13 @@
+/* Keep absolutely positioned accessibility labels inside each scrollport.
+   Without a containing block, the off-screen Download header can expand the
+   page width even though the document table itself scrolls independently. */
+.table-scroll {
+  position: relative;
+  max-width: 100%;
+}
+
+.app-body,
+.app-main,
+.document-name > div {
+  min-width: 0;
+}
