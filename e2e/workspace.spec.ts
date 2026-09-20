@@ -42,6 +42,30 @@ test("buyer sees approved documents but cannot download seller-only files", asyn
   await expect(page.getByText("Your request is with the deal team.", { exact: false })).toBeVisible();
 });
 
+test("buyer demo previews a published owner listing without confidential actions", async ({ page }) => {
+  const suffix = Date.now();
+  const project = `Project Preview ${suffix}`;
+  const headers = { Origin: "http://localhost:3000" };
+  const registered = await page.request.post("/api/auth", { headers, data: { action: "register", name: "Preview Owner", company: "Preview Owner Inc.", email: `preview-owner-${suffix}@example.test`, password: "preview-password-2026", role: "owner" } });
+  expect(registered.status()).toBe(200);
+  const created = await page.request.post("/api/workspace", { headers, data: { action: "createDeal", data: { title: project, company_name: "Preview Owner Inc.", sector: "Manufacturing", province: "Ontario", city: "Toronto", revenue: 3000000, ebitda: 500000, asking_price: 4000000, employees: 20, founded: 2012, description: "A fictional Ontario manufacturer used to verify published buyer previews.", confidential_summary: "This must remain hidden from the shared demo buyer." } } });
+  expect(created.status()).toBe(200);
+  const { id } = await created.json();
+  expect((await page.request.post("/api/workspace", { headers, data: { action: "updateDeal", data: { deal_id: id, stage: "On market", published: true } } })).status()).toBe(200);
+  expect((await page.request.post("/api/auth", { headers, data: { action: "logout" } })).status()).toBe(200);
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await expect(page.getByRole("heading", { name: "Welcome back, Taylor." })).toBeVisible();
+  await page.goto("/app/opportunities");
+  const card = page.getByRole("link", { name: new RegExp(project) });
+  await expect(card).toContainText("Preview only");
+  await card.click();
+  await expect(page.getByText("This shared preview account can view published teasers", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Request confidential access" })).toHaveCount(0);
+  await expect(page.getByText("Preview Owner Inc.", { exact: true })).toHaveCount(0);
+});
+
 test("unauthenticated downloads and foreign-origin mutations are rejected", async ({ request }) => {
   expect((await request.get("/api/documents/doc-cedar-fin")).status()).toBe(401);
   const response = await request.post("/api/auth", { headers: { Origin: "https://untrusted.example" }, data: { action: "demo", role: "advisor" } });

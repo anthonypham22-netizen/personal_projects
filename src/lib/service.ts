@@ -13,16 +13,17 @@ const parse = <T>(schema: z.ZodType<T>, input: unknown): T => { const result = s
 export const isManager = (user: User, deal: Deal) => deal.owner_id === user.id || deal.advisor_id === user.id;
 export const getDeal = (id: string) => { const deal = one<Deal>("SELECT * FROM deals WHERE id=?", id); if (!deal) throw new AppError("This deal is not available.",404); return deal; };
 export const membership = (dealId: string, userId: string) => one<Access>("SELECT * FROM access WHERE deal_id=? AND buyer_id=?",dealId,userId);
-export const canAccess = (user: User, deal: Deal) => isManager(user,deal) || membership(deal.id,user.id)?.status === "approved";
+const hasApprovedAccess = (user: User, deal: Deal, member?: Pick<Access,"status">) => isManager(user,deal) || member?.status === "approved";
+export const canAccess = (user: User, deal: Deal) => hasApprovedAccess(user,deal,membership(deal.id,user.id));
 export function requireManager(user: User, deal: Deal) { if (!isManager(user,deal)) throw new AppError("Only this deal’s owner or appointed advisor can do that.",403); }
 export function requireAccess(user: User, deal: Deal) { if (!canAccess(user,deal)) throw new AppError("Confidential access has not been approved.",403); }
-export function canReadDocument(user: User, deal: Deal, doc: Pick<Document,"audience"|"buyer_id"|"category">) {
+function canReadDocumentWithMembership(user: User, deal: Deal, doc: Pick<Document,"audience"|"buyer_id"|"category">, member?: Pick<Access,"status">) {
   if (isManager(user,deal)) return true;
-  const member = membership(deal.id,user.id);
   if (!member || ["denied","revoked"].includes(member.status)) return false;
   if (doc.category === "NDA" && doc.audience === "buyer" && doc.buyer_id === user.id) return true;
   return member.status === "approved" && (doc.audience === "approved" || (doc.audience === "buyer" && doc.buyer_id === user.id));
 }
+export function canReadDocument(user: User, deal: Deal, doc: Pick<Document,"audience"|"buyer_id"|"category">) { return canReadDocumentWithMembership(user,deal,doc,membership(deal.id,user.id)); }
 export function audit(user: User, dealId: string, action: string) { run("INSERT INTO activity(id,deal_id,actor_id,action) VALUES(?,?,?,?)",randomUUID(),dealId,user.id,action); }
 export function limit(key: string, maximum: number, seconds = 900) {
   const now = Date.now();
@@ -64,17 +65,28 @@ export function match(user: User, deal: Deal) {
   return {match_score:Math.round(reasons.length/3*100),match_reasons:reasons};
 }
 export function workspace(user: User): WorkspaceData {
-  const rawDeals = all<Deal>("SELECT d.* FROM deals d JOIN users owner ON owner.id=d.owner_id WHERE owner.is_demo=? AND (d.owner_id=? OR d.advisor_id=? OR (?='buyer' AND (d.published=1 OR d.id IN (SELECT deal_id FROM access WHERE buyer_id=?)))) ORDER BY d.created_at DESC,d.title",user.is_demo,user.id,user.id,user.role,user.id);
+  const memberships = user.role==="buyer"?all<Access>("SELECT * FROM access WHERE buyer_id=?",user.id):[];
+  const membershipByDeal = new Map(memberships.map(member=>[member.deal_id,member]));
+  const rawDeals = all<Deal & {owner_is_demo:number}>(`SELECT d.*,owner.is_demo owner_is_demo FROM deals d JOIN users owner ON owner.id=d.owner_id
+    WHERE (owner.is_demo=? OR (?='buyer' AND ?=1 AND owner.is_demo=0 AND d.published=1))
+    AND (d.owner_id=? OR d.advisor_id=? OR (?='buyer' AND (d.published=1 OR d.id IN (SELECT deal_id FROM access WHERE buyer_id=?))))
+    ORDER BY d.created_at DESC,d.title`,user.is_demo,user.role,user.is_demo,user.id,user.id,user.role,user.id);
   const deals = rawDeals.map(d=> {
-    const managing=isManager(user,d), allowed=canAccess(user,d), member=membership(d.id,user.id);
-    return {...d,company_name:allowed?d.company_name:"Confidential company", city:allowed?d.city:"", employees:allowed?d.employees:0,founded:allowed?d.founded:0,confidential_summary:allowed?d.confidential_summary:"",can_manage:managing,has_access:allowed,access_status:member?.status || "none",...match(user,d)};
+    const previewOnly=user.role==="buyer"&&!!user.is_demo&&!d.owner_is_demo;
+    const {owner_is_demo:_,...deal}=d;
+    if(previewOnly)return {id:d.id,title:d.title,company_name:"Confidential company",sector:d.sector,province:d.province,city:"",revenue:d.revenue,ebitda:d.ebitda,asking_price:d.asking_price,employees:0,founded:0,description:d.description,confidential_summary:"",owner_id:"",advisor_id:null,stage:d.stage,published:d.published,created_at:d.created_at,can_manage:false,has_access:false,preview_only:true,access_status:"none",...match(user,d)};
+    const member=membershipByDeal.get(d.id), managing=isManager(user,d), allowed=hasApprovedAccess(user,d,member);
+    return {...deal,company_name:allowed?d.company_name:"Confidential company", city:allowed?d.city:"", employees:allowed?d.employees:0,founded:allowed?d.founded:0,confidential_summary:allowed?d.confidential_summary:"",can_manage:managing,has_access:allowed,preview_only:false,access_status:member?.status || "none",...match(user,d)};
   });
   const ids = new Set(deals.map(d=>d.id));
-  const manages = (id:string)=>rawDeals.some(d=>d.id===id&&isManager(user,d));
-  const has = (id:string)=>rawDeals.some(d=>d.id===id&&canAccess(user,d));
-  const activeThread = (id:string,buyerId:string)=> manages(id) || (buyerId===user.id && !["denied","revoked"].includes(membership(id,user.id)?.status || "denied"));
-  const access = all<Access>("SELECT a.*,u.name,u.company,u.email FROM access a JOIN users u ON u.id=a.buyer_id ORDER BY a.created_at DESC").filter(a=>ids.has(a.deal_id)&&(manages(a.deal_id)||a.buyer_id===user.id));
-  const documents = all<Document>("SELECT d.id,d.deal_id,d.name,d.category,d.size,d.version,d.audience,d.buyer_id,d.uploaded_by,d.created_at,u.name uploader_name,p.title deal_title FROM documents d JOIN users u ON u.id=d.uploaded_by JOIN deals p ON p.id=d.deal_id ORDER BY d.created_at DESC").filter(doc=> { const d=rawDeals.find(d=>d.id===doc.deal_id); return d&&canReadDocument(user,d,doc); });
+  const previewIds = new Set(deals.filter(d=>d.preview_only).map(d=>d.id));
+  const rawDealById = new Map(rawDeals.map(d=>[d.id,d]));
+  const accessibleIds = new Set(deals.filter(d=>d.has_access).map(d=>d.id));
+  const manages = (id:string)=> { const deal=rawDealById.get(id);return !!deal&&!previewIds.has(id)&&isManager(user,deal); };
+  const has = (id:string)=>accessibleIds.has(id);
+  const activeThread = (id:string,buyerId:string)=> !previewIds.has(id)&&(manages(id) || (buyerId===user.id && !["denied","revoked"].includes(membershipByDeal.get(id)?.status || "denied")));
+  const access = all<Access>("SELECT a.*,u.name,u.company,u.email FROM access a JOIN users u ON u.id=a.buyer_id ORDER BY a.created_at DESC").filter(a=>ids.has(a.deal_id)&&!previewIds.has(a.deal_id)&&(manages(a.deal_id)||a.buyer_id===user.id));
+  const documents = all<Document>("SELECT d.id,d.deal_id,d.name,d.category,d.size,d.version,d.audience,d.buyer_id,d.uploaded_by,d.created_at,u.name uploader_name,p.title deal_title FROM documents d JOIN users u ON u.id=d.uploaded_by JOIN deals p ON p.id=d.deal_id ORDER BY d.created_at DESC").filter(doc=> { const deal=rawDealById.get(doc.deal_id); return !!deal&&!previewIds.has(doc.deal_id)&&canReadDocumentWithMembership(user,deal,doc,membershipByDeal.get(doc.deal_id)); });
   const messages = all<Message>("SELECT m.*,u.name sender_name,u.role sender_role,d.title deal_title,b.name buyer_name FROM messages m JOIN users u ON u.id=m.sender_id JOIN users b ON b.id=m.buyer_id JOIN deals d ON d.id=m.deal_id ORDER BY m.created_at,m.rowid").filter(m=>ids.has(m.deal_id)&&activeThread(m.deal_id,m.buyer_id));
   const tasks=all<Task>("SELECT t.*,d.title deal_title FROM tasks t JOIN deals d ON d.id=t.deal_id ORDER BY t.due_date").filter(t=>ids.has(t.deal_id)&&(manages(t.deal_id)||(has(t.deal_id)&&t.buyer_id===user.id)));
   const offers=all<Offer>("SELECT o.*,u.company buyer_name FROM offers o JOIN users u ON u.id=o.buyer_id ORDER BY o.created_at DESC").filter(o=>ids.has(o.deal_id)&&(manages(o.deal_id)||(has(o.deal_id)&&o.buyer_id===user.id)));

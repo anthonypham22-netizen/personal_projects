@@ -92,6 +92,47 @@ test("real accounts cannot discover or mutate demonstration deals", () => {
   assert.throws(() => login({ email: "real@example.test", password: "exact-password-2026" }), /incorrect/);
 });
 
+test("demo buyers can preview a published real teaser without crossing the confidential boundary", () => {
+  const token = register({ name: "Preview Owner", company: "Preview Owner Inc.", email: "preview-owner@example.test", role: "owner", password: "preview-password-2026" });
+  const realOwner = sessionUser(token)!;
+  const advisorToken = register({ name: "Preview Advisor", company: "Preview Advisory Inc.", email: "preview-advisor@example.test", role: "advisor", password: "preview-password-2026" });
+  const realAdvisor = sessionUser(advisorToken)!;
+  const created = mutate(realOwner, { action: "createDeal", data: { title: "Project Preview", company_name: "Preview Owner Inc.", sector: "Manufacturing", province: "Ontario", city: "Toronto", revenue: 3000000, ebitda: 500000, asking_price: 4000000, employees: 20, founded: 2012, description: "A fictional Ontario manufacturer used to verify published buyer previews.", confidential_summary: "This must remain hidden from the shared demo buyer." } });
+  const dealId = created.id!;
+  mutate(realOwner, { action: "appointAdvisor", data: { deal_id: dealId, advisor_id: realAdvisor.id } });
+  assert.equal(workspace(buyer).deals.some(deal => deal.id === dealId), false, "an unpublished real listing must remain hidden from the demo buyer");
+  mutate(realOwner, { action: "updateDeal", data: { deal_id: dealId, stage: "On market", published: true } });
+
+  run("INSERT INTO access(id,deal_id,buyer_id,status) VALUES(?,?,?,'approved')","cross-realm-preview",dealId,buyer.id);
+  run("INSERT INTO documents(id,deal_id,name,storage_key,mime,category,size,audience,uploaded_by) VALUES(?,?,?,?,?,?,?,?,?)","cross-realm-doc",dealId,"Imported financials.txt","cross-realm-doc.txt","text/plain","Financials",20,"approved",realOwner.id);
+  run("INSERT INTO messages(id,deal_id,buyer_id,sender_id,body) VALUES(?,?,?,?,?)","cross-realm-message",dealId,buyer.id,realOwner.id,"This imported conversation must remain hidden.");
+  run("INSERT INTO tasks(id,deal_id,title,due_date,buyer_id,created_by) VALUES(?,?,?,?,?,?)","cross-realm-task",dealId,"Imported diligence task","2026-12-31",buyer.id,realOwner.id);
+  run("INSERT INTO offers(id,deal_id,buyer_id,amount,structure,notes,document_id) VALUES(?,?,?,?,?,?,?)","cross-realm-offer",dealId,buyer.id,3500000,"Asset purchase","Imported offer","cross-realm-doc");
+  run("INSERT INTO activity(id,deal_id,actor_id,action) VALUES(?,?,?,?)","cross-realm-activity",dealId,buyer.id,"Imported activity");
+
+  const state = workspace(buyer);
+  const preview = state.deals.find(deal => deal.id === dealId);
+  assert.ok(preview, "the published real teaser should appear for the demo buyer");
+  assert.equal(preview.preview_only, true);
+  assert.equal(preview.has_access, false);
+  assert.equal(preview.access_status, "none");
+  assert.equal(preview.company_name, "Confidential company");
+  assert.equal(preview.city, "");
+  assert.equal(preview.employees, 0);
+  assert.equal(preview.founded, 0);
+  assert.equal(preview.confidential_summary, "");
+  assert.equal(preview.owner_id, "");
+  assert.equal(preview.advisor_id, null);
+  assert.equal(state.advisors.some(advisor => advisor.id === realAdvisor.id), true, "the advisor directory can remain available without linking it to this preview");
+  assert.equal(state.access.some(access => access.deal_id === dealId), false);
+  assert.equal(state.documents.some(document => document.deal_id === dealId), false);
+  assert.equal(state.messages.some(message => message.deal_id === dealId), false);
+  assert.equal(state.tasks.some(task => task.deal_id === dealId), false);
+  assert.equal(state.offers.some(offer => offer.deal_id === dealId), false);
+  assert.equal(state.activity.some(activity => activity.deal_id === dealId), false);
+  assert.throws(() => mutate(buyer, { action: "requestAccess", data: { deal_id: dealId, notes: "Shared demo accounts stay read-only." } }), /not available/);
+});
+
 test("disabled demo mode invalidates existing demo sessions", () => {
   const token = createSession(buyer.id);
   assert.equal(sessionUser(token)?.id, buyer.id);
