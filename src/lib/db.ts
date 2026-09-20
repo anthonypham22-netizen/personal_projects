@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { seed } from "./seed";
+import { refreshDemoDocuments } from "./demo-documents";
 
 export const dataDirectory = () => path.resolve(process.env.DATA_DIR || "./data");
 const globalDb = globalThis as unknown as { northlaneDb?: DatabaseSync };
@@ -25,9 +26,17 @@ export function db() {
     CREATE INDEX IF NOT EXISTS idx_messages_deal ON messages(deal_id,buyer_id);
     CREATE INDEX IF NOT EXISTS idx_deals_owner ON deals(owner_id,advisor_id);
   `);
-  globalDb.northlaneDb = d;
-  if (process.env.ALLOW_DEMO === "true") seed(d, dataDirectory());
-  return d;
+  try {
+    if (process.env.ALLOW_DEMO === "true") {
+      seed(d, dataDirectory());
+      refreshDemoDocuments(d, dataDirectory());
+    }
+    globalDb.northlaneDb = d;
+    return d;
+  } catch (error) {
+    d.close();
+    throw error;
+  }
 }
 export function all<T>(sql: string, ...params: (string | number | null)[]): T[] { return db().prepare(sql).all(...params).map(row=>({...row})) as unknown as T[]; }
 export function one<T>(sql: string, ...params: (string | number | null)[]): T | undefined { const row=db().prepare(sql).get(...params);return row?({...row} as T):undefined; }

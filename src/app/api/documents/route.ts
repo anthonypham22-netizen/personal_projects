@@ -11,6 +11,7 @@ export async function POST(request: Request){
   let storedPath:string|undefined;
   try{
     checkOrigin(request);const user=await currentUser();if(!user)throw new AppError("Please sign in.",401);
+    if(user.is_demo || process.env.ALLOW_UPLOADS === "false") throw new AppError("Uploads are disabled in this demonstration. Use the supplied fictional sample documents; do not enter confidential information.",403);
     limit(`upload:${user.id}`,20,60);
     const length=Number(request.headers.get("content-length"));if(!length||length>11*1024*1024)throw new AppError("Upload requires a content length and must be under 10 MB.",413);
     const form=await request.formData();const file=form.get("file");
