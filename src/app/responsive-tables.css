@@ -1,0 +1,7 @@
+/* Keep absolutely positioned accessibility labels inside the table scroller.
+   Without a positioned containing block, an offscreen header label can enlarge
+   the document viewport even though the visible table is correctly clipped. */
+.table-scroll {
+  position: relative;
+  max-width: 100%;
+}
