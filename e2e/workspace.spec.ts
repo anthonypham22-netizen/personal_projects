@@ -36,7 +36,7 @@ test("buyer sees approved documents but cannot download seller-only files", asyn
   expect(denied.status()).toBe(404);
   const allowed = await page.request.get("/api/documents/doc-cedar-fin");
   expect(allowed.status()).toBe(200);
-  expect(await allowed.text()).toContain("FICTIONAL DEMONSTRATION");
+  expect(await allowed.text()).toContain("SAMPLE TRANSACTION DOCUMENT");
   await page.goto("/app/deals/harbour");
   await expect(page.getByText("Harbour Health Group Inc.", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Your request is with the deal team.", { exact: false })).toBeVisible();
