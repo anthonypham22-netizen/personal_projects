@@ -68,7 +68,7 @@ After the initial successful `npm install`, keep and commit the generated `packa
 - Parameterized SQL, server-side input validation, and authorization on reads, mutations, and downloads.
 - `data/northlane.sqlite` and `data/uploads/` contain application records and files. Never commit these paths.
 - The visible product is branded Acquire. Legacy internal identifiers (`northlane.sqlite`, `northlane_session`, package name, and Docker volume) are intentionally retained so the rebrand does not reset existing data, deployments, or sessions. Previously seeded demo files are not rewritten; newly generated examples use Acquire.
-- Automatic first-run schema initialization. Future changes need versioned migrations; rerunning `CREATE TABLE IF NOT EXISTS` does not migrate an existing table.
+- Versioned SQLite migrations run automatically at startup from `src/lib/migrations/`. Applied versions are recorded in `schema_migrations`, so fresh and existing databases follow the same upgrade path and migration history remains directly inspectable.
 - Database-backed rate limits are basic per-account protection, not a complete anti-abuse system.
 - Matching is a transparent three-factor comparison: industry, province, and revenue range. A percentage is criteria fit, not investment suitability or a statistical probability.
 
