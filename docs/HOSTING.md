@@ -1,4 +1,4 @@
-# Hosting Acquire
+# Hosting Succera
 
 ## What you will host
 

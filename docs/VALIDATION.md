@@ -30,9 +30,9 @@ Node reports its SQLite and TypeScript transformation APIs as experimental. Nati
 
 The build reports a dynamic filesystem tracing warning at `src/lib/db.ts:6`. Audit standalone output and narrow tracing before publishing a server image to avoid unintended build contents and excessive size. Docker build, actual deployment, restore on a separate host, load testing, and comprehensive security/accessibility review have **not** run. The browser tests are a smoke suite, not exhaustive coverage. Only the landing page received visual inspection in this continuation.
 
-## Acquire branding update
+## Succera branding update
 
-Visible website, auth screens, portal labels, metadata, favicon, new demo-file headers, and product documentation now use Acquire. Database filenames, session cookies, package identifiers, backup format, Docker volumes, and existing documents were deliberately preserved.
+Visible website, auth screens, portal labels, metadata, favicon, new demo-file headers, and product documentation now use Succera. Database filenames, session cookies, package identifiers, backup format, Docker volumes, and existing documents were deliberately preserved.
 
 `npm run check` passed again after the rename: TypeScript, 16 backend tests, and the production build. The logged-in document library was visually checked at desktop and 390px mobile width, with the existing session and documents intact. Title/logo assertions were added to the existing E2E suite; those new assertions have not yet been rerun through Playwright.
 

@@ -1,6 +1,6 @@
-# Acquire
+# Succera
 
-A standalone website and SaaS MVP for Canadian M&A, targeting businesses with approximately C$1M–C$20M annual revenue. Acquire is a provisional product name and an original implementation; it is not affiliated with Axial.
+A standalone website and SaaS MVP for Canadian M&A, targeting businesses with approximately C$1M–C$20M annual revenue. Succera is a provisional product name and an original implementation; it is not affiliated with Axial.
 
 ## Current delivery status
 
@@ -30,21 +30,22 @@ After the initial successful `npm install`, keep and commit the generated `packa
 
 ## Implemented application paths
 
-| Path | Purpose |
-| --- | --- |
-| `/` | Public website with product, audience, and process sections |
-| `/register`, `/login` | Role-specific registration, password login, local demo entry |
-| `/app` | Role-aware overview, transaction pipeline, tasks, recent activity |
-| `/app/opportunities` | Anonymous teasers; search and industry/province filters; explained criteria matching |
-| `/app/deals` | List and board views of mandates or acquisition pipeline |
-| `/app/new` | Private mandate creation by owners or advisors |
-| `/app/deals/:id` | Deal overview, confidential information, documents, conversations, tasks, LOIs, buyer access |
-| `/app/documents` | Permission-filtered document library with search and download |
-| `/app/messages` | Buyer-specific conversations with the seller's deal team |
-| `/app/tasks` | Open/completed diligence tasks |
-| `/app/network` | Self-reported advisor directory |
-| `/app/settings` | Profile, acquisition criteria, password change |
-| `/about-this-release` | Honest release capabilities and limitations |
+| Path                  | Purpose                                                                                      |
+| --------------------- | -------------------------------------------------------------------------------------------- |
+| `/`                   | Public website with product, audience, and process sections                                  |
+| `/register`, `/login` | Role-specific registration, password login, local demo entry                                 |
+| `/app`                | Role-aware overview, transaction pipeline, tasks, recent activity                            |
+| `/app/opportunities`  | Anonymous teasers; search and industry/province filters; explained criteria matching         |
+| `/app/projects`       | Buyer acquisition projects with normalized sector, province, keyword, and financial criteria |
+| `/app/deals`          | List and board views of mandates or acquisition pipeline                                     |
+| `/app/new`            | Private mandate creation by owners or advisors                                               |
+| `/app/deals/:id`      | Deal overview, confidential information, documents, conversations, tasks, LOIs, buyer access |
+| `/app/documents`      | Permission-filtered document library with search and download                                |
+| `/app/messages`       | Buyer-specific conversations with the seller's deal team                                     |
+| `/app/tasks`          | Open/completed diligence tasks                                                               |
+| `/app/network`        | Self-reported advisor directory                                                              |
+| `/app/settings`       | Profile, acquisition criteria, password change                                               |
+| `/about-this-release` | Honest release capabilities and limitations                                                  |
 
 ## Run a complete transaction walkthrough
 
@@ -67,12 +68,12 @@ After the initial successful `npm install`, keep and commit the generated `packa
 - HTTP-only, SameSite cookies; secure cookies under HTTPS; mutation origin checks against `APP_URL`.
 - Parameterized SQL, server-side input validation, and authorization on reads, mutations, and downloads.
 - `data/northlane.sqlite` and `data/uploads/` contain application records and files. Never commit these paths.
-- The visible product is branded Acquire. Legacy internal identifiers (`northlane.sqlite`, `northlane_session`, package name, and Docker volume) are intentionally retained so the rebrand does not reset existing data, deployments, or sessions. Previously seeded demo files are not rewritten; newly generated examples use Acquire.
+- The visible product is branded Succera. Legacy internal identifiers (`northlane.sqlite`, `northlane_session`, package name, and Docker volume) are intentionally retained so the rebrand does not reset existing data, deployments, or sessions. Previously seeded demo files are not rewritten; newly generated examples use Succera.
 - Versioned SQLite migrations run automatically at startup from `src/lib/migrations/`. Applied versions are recorded in `schema_migrations`, so fresh and existing databases follow the same upgrade path and migration history remains directly inspectable.
 - Database-backed rate limits are basic per-account protection, not a complete anti-abuse system.
 - Matching is a transparent three-factor comparison: industry, province, and revenue range. A percentage is criteria fit, not investment suitability or a statistical probability.
 
-The current model has one controlling owner/creator and one advisor per mandate, plus multiple buyers. Each account represents an individual using a firm name; organization memberships, shared firm seats, and organization-wide permissions are not implemented.
+Each account now belongs to an organization with an `owner`, `admin`, `member`, or read-only `viewer` membership. Existing and demo accounts are migrated into one-person organizations without merging firms that happen to share a name. Owner and advisor mandates are organization-scoped while retaining their original user creator/representative fields for compatibility and audit context. Firm owners and administrators can edit the firm profile; membership invitations and role administration are intentionally not included yet. Buyer organizations can create multiple private acquisition projects with normalized filters and draft/active/paused/archived lifecycle states. Buyer deal access remains individual, and project-to-opportunity matching is intentionally deferred to a later phase.
 
 ## Verification
 
@@ -97,6 +98,6 @@ Do not deploy this SQLite/local-upload version to an ephemeral filesystem or a s
 
 ## Explicitly not finished
 
-This is an early MVP implementation, not Axial feature parity or a production certification. Remaining work includes electronic-signature integration, email verification and delivery, password recovery, MFA/SSO, file malware scanning, billing, identity/capital verification, multi-user organizations, notification delivery, French localization, audited admin support, and privacy/legal documents. No actual subscription charges, signatures, financing, or transaction closing are performed.
+This is an early MVP implementation, not Axial feature parity or a production certification. Remaining work includes organization invitations and membership administration, electronic-signature integration, email verification and delivery, password recovery, MFA/SSO, file malware scanning, billing, identity/capital verification, notification delivery, French localization, audited admin support, and privacy/legal documents. No actual subscription charges, signatures, financing, or transaction closing are performed.
 
 See [launch requirements](docs/LAUNCH-CHECKLIST.md) before inviting customers or using confidential deal files.

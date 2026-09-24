@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
+import { inImmediateTransaction } from "../sqlite-transaction.ts";
 import { initialUpgrade } from "./001_initial_upgrade.ts";
+import { organizationsMigration } from "./002_organizations.ts";
+import { buyerProjectsMigration } from "./003_buyer_projects.ts";
 
 export type Migration = {
   version: number;
@@ -13,7 +16,11 @@ export type MigrationRecord = {
   applied_at: string;
 };
 
-const migrations: readonly Migration[] = [initialUpgrade];
+const migrations: readonly Migration[] = [
+  initialUpgrade,
+  organizationsMigration,
+  buyerProjectsMigration,
+];
 
 const migrationTableSql = `
   CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -22,21 +29,6 @@ const migrationTableSql = `
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )
 `;
-
-function transaction(database: DatabaseSync, operation: () => void) {
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    operation();
-    database.exec("COMMIT");
-  } catch (error) {
-    try {
-      database.exec("ROLLBACK");
-    } catch {
-      // Preserve the migration failure if SQLite already ended the transaction.
-    }
-    throw error;
-  }
-}
 
 function validateMigrations(migrationList: readonly Migration[]) {
   const names = new Set<string>();
@@ -87,7 +79,7 @@ export function applyMigrations(
 ) {
   validateMigrations(migrationList);
   if (!migrationTableExists(database)) {
-    transaction(database, () => database.exec(migrationTableSql));
+    inImmediateTransaction(database, () => database.exec(migrationTableSql));
   }
 
   const knownMigrations = new Map(
@@ -111,7 +103,7 @@ export function applyMigrations(
   const appliedVersions = new Set(history.map((record) => record.version));
   for (const migration of migrationList) {
     if (appliedVersions.has(migration.version)) continue;
-    transaction(database, () => {
+    inImmediateTransaction(database, () => {
       const existing = database
         .prepare("SELECT name FROM schema_migrations WHERE version=?")
         .get(migration.version) as { name: string } | undefined;

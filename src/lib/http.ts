@@ -15,6 +15,6 @@ export async function jsonBody(request: Request) {
 }
 export function failure(error: unknown) {
   if(error instanceof AppError)return NextResponse.json({error:error.message},{status:error.status});
-  console.error("Acquire request failed",error instanceof Error?error.message:"Unknown error");
+  console.error("Succera request failed",error instanceof Error?error.message:"Unknown error");
   return NextResponse.json({error:"Something went wrong. Please try again."},{status:500});
 }

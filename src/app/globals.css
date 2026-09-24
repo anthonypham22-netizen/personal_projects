@@ -1,275 +1,987 @@
 @import "tailwindcss";
-@theme { --font-sans: Arial, Helvetica, sans-serif; }
+@theme {
+  --font-sans: Arial, Helvetica, sans-serif;
+}
 @layer base {
-  * { @apply box-border; }
-  body { @apply m-0 bg-white text-slate-800 antialiased; font-family: Arial, Helvetica, sans-serif; font-size: 16px; }
-  h1,h2,h3,h4 { @apply text-balance; }
-  p { @apply text-pretty; }
-  button,a,input,select,textarea { @apply outline-offset-4; }
-  button { @apply cursor-pointer; }
-  button:disabled { @apply cursor-wait opacity-50; }
-  a { @apply no-underline; }
-  label { @apply flex flex-col gap-2 text-sm font-medium text-slate-700; }
-  input,select,textarea { @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-base text-slate-900 outline-emerald-700; }
-  input[type=checkbox] { @apply size-4 accent-emerald-700; }
-  textarea { @apply min-h-24 resize-y; }
-  th,td { @apply text-left; }
+  * {
+    @apply box-border;
+  }
+  body {
+    @apply m-0 bg-white text-slate-800 antialiased;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 16px;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply text-balance;
+  }
+  p {
+    @apply text-pretty;
+  }
+  button,
+  a,
+  input,
+  select,
+  textarea {
+    @apply outline-offset-4;
+  }
+  button {
+    @apply cursor-pointer;
+  }
+  button:disabled {
+    @apply cursor-wait opacity-50;
+  }
+  a {
+    @apply no-underline;
+  }
+  label {
+    @apply flex flex-col gap-2 text-sm font-medium text-slate-700;
+  }
+  input,
+  select,
+  textarea {
+    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-base text-slate-900 outline-emerald-700;
+  }
+  input[type="checkbox"] {
+    @apply size-4 accent-emerald-700;
+  }
+  textarea {
+    @apply min-h-24 resize-y;
+  }
+  th,
+  td {
+    @apply text-left;
+  }
 }
 @layer components {
-  .brand { @apply inline-flex shrink-0 items-center; }
-  .brand img { @apply block h-auto w-[164px]; }
-  .brand-light img { filter: brightness(0) invert(1); }
-  .button { @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-transparent px-4 py-2.5 text-sm font-semibold; }
-  .button-dark { @apply bg-slate-900 text-white hover:bg-slate-700; }
-  .button-green { @apply bg-emerald-800 text-white hover:bg-emerald-900; }
-  .button-white { @apply bg-white text-emerald-950 hover:bg-slate-100; }
-  .button-quiet { @apply border-slate-200 bg-white text-slate-700 hover:bg-slate-50; }
-  .button-small { @apply min-h-9 px-3 py-1.5; }
-  .text-link { @apply text-sm font-semibold text-slate-700 hover:text-emerald-800; }
-  .eyebrow { @apply mb-4 text-xs font-semibold; }
-  .muted { @apply text-sm leading-relaxed text-slate-500; }
-  .badge { @apply inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600; }
-  .badge-green { @apply bg-emerald-50 text-emerald-800; }
-  .badge-amber { @apply bg-amber-50 text-amber-800; }
-  .badge-blue { @apply bg-blue-50 text-blue-800; }
-  .badge-red { @apply bg-rose-50 text-rose-800; }
-  .icon-tile { @apply inline-flex size-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-600; }
-  .marketing-header { @apply border-b border-slate-200 bg-white; }
-  .marketing-nav { @apply mx-auto flex max-w-7xl items-center justify-between gap-8 px-6 py-5 lg:px-10; }
-  .marketing-nav nav { @apply hidden gap-8 text-sm text-slate-600 md:flex; }
-  .nav-actions { @apply flex items-center gap-6; }
-  .hero { @apply bg-slate-50; }
-  .hero-inner { @apply mx-auto grid max-w-7xl items-center gap-16 px-6 pb-20 pt-20 lg:grid-cols-2 lg:px-10 lg:pt-24; }
-  .hero .eyebrow { @apply flex items-center gap-2 text-emerald-800; }
-  .tiny-maple { @apply text-xl; }
-  .hero h1 { @apply text-5xl leading-tight text-slate-950 lg:text-6xl; font-family: Georgia,serif; }
-  .hero-description { @apply mt-6 max-w-lg text-lg leading-relaxed text-slate-600; }
-  .hero-actions { @apply mt-8 flex flex-wrap gap-3; }
-  .hero-proof { @apply mt-7 flex flex-wrap items-center gap-2 text-xs text-slate-500; }
-  .divider-dot { @apply mx-1; }
-  .hero-product { @apply overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl; }
-  .mock-header { @apply flex items-center gap-3 border-b border-slate-200 px-6 py-4 text-sm font-semibold; }
-  .mock-header .badge { @apply ml-auto; }
-  .mock-mark { @apply flex size-7 items-center justify-center rounded bg-emerald-900 text-white; }
-  .mock-deal { @apply p-7; }
-  .mock-deal h2 { @apply mb-2 text-3xl font-semibold; }
-  .mock-metrics { @apply mt-7 grid grid-cols-3 gap-3 border-t border-slate-100 pt-5; }
-  .mock-metrics span { @apply mb-2 block text-xs text-slate-500; }
-  .mock-metrics strong { @apply text-base font-semibold tabular-nums; }
-  .mock-progress { @apply mx-5 flex items-center gap-3 rounded-lg border border-emerald-100 bg-emerald-50 p-4 text-emerald-900; }
-  .check-icon { @apply flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-800 text-white; }
-  .mock-progress strong { @apply block text-sm; }
-  .mock-progress span:not(.check-icon) { @apply mt-1 block text-xs; }
-  .mock-progress>svg { @apply ml-auto shrink-0; }
-  .mock-caption { @apply px-5 py-4 text-center text-xs text-slate-500; }
-  .hero-bottom { @apply mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-5 border-t border-slate-200 px-6 py-6 text-sm text-slate-600 lg:px-10; }
-  .hero-bottom>span:first-child { @apply text-xs text-slate-500; }
-  .canada-tag { @apply inline-flex items-center gap-2 text-emerald-800; }
-  .marketing-section { @apply mx-auto max-w-7xl px-6 py-20 lg:px-10; }
-  .marketing-section .eyebrow { @apply text-emerald-800; }
-  .marketing-section h2 { @apply text-3xl leading-tight md:text-4xl; font-family:Georgia,serif; }
-  .section-heading { @apply mb-12 flex flex-col justify-between gap-5 md:flex-row md:items-end; }
-  .section-heading>p { @apply max-w-md leading-relaxed text-slate-500; }
-  .feature-grid { @apply grid gap-8 md:grid-cols-3; }
-  .feature { @apply relative border-t border-slate-200 pt-7; }
-  .feature>svg { @apply mb-6 text-emerald-800; }
-  .feature-number { @apply absolute right-0 top-7 text-xs text-slate-400; }
-  .feature h3 { @apply mb-3 text-lg font-semibold; }
-  .feature p { @apply leading-relaxed text-slate-500; }
-  .audiences { @apply bg-slate-950 text-white; }
-  .audiences .eyebrow { @apply text-emerald-300; }
-  .audience-grid { @apply mt-12 grid gap-10 md:grid-cols-3; }
-  .audience-grid article { @apply border-t border-slate-700 pt-7; }
-  .audience-grid svg { @apply text-emerald-300; }
-  .audience-grid h3 { @apply my-5 text-xl font-semibold; }
-  .audience-grid p { @apply leading-relaxed text-slate-300; }
-  .audience-grid a { @apply mt-7 flex items-center justify-between gap-2 text-sm font-semibold; }
-  .process-grid { @apply grid gap-8 md:grid-cols-4; }
-  .process-grid li>span { @apply mb-5 block text-sm text-emerald-800; }
-  .process-grid h3 { @apply mb-3 text-lg font-semibold; }
-  .process-grid p { @apply text-sm leading-relaxed text-slate-500; }
-  .closing-cta { @apply bg-emerald-900 px-6 py-16 text-center text-white; }
-  .closing-cta h2 { @apply text-4xl; font-family:Georgia,serif; }
-  .closing-cta p:not(.eyebrow) { @apply mb-8 mt-5 text-emerald-100; }
-  .cta-demo { @apply ml-5 inline-block text-sm font-semibold; }
-  .marketing-footer { @apply mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-6 px-6 py-9 text-sm text-slate-500; }
-  .marketing-footer>div { @apply flex gap-5; }
-  .auth-page { @apply min-h-dvh lg:grid lg:grid-cols-2; }
-  .auth-aside { @apply hidden flex-col justify-between bg-emerald-950 p-12 text-white lg:flex; }
-  .auth-aside h1 { @apply text-6xl leading-tight; font-family:Georgia,serif; }
-  .auth-aside h1 em { @apply text-emerald-300; }
-  .auth-aside>div>p:last-child { @apply mt-8 max-w-sm leading-relaxed text-emerald-100; }
-  .auth-aside-footer { @apply text-sm text-emerald-200; }
-  .auth-main { @apply p-6 md:p-10; }
-  .auth-back { @apply text-sm text-slate-500; }
-  .auth-card { @apply mx-auto max-w-sm py-12; }
-  .auth-card h2 { @apply mb-3 text-3xl font-semibold; }
-  .auth-card>.eyebrow { @apply text-emerald-800; }
-  .stack-form { @apply mt-6 flex flex-col gap-4; }
-  .field-hint { @apply text-xs font-normal text-slate-500; }
-  .auth-switch { @apply mt-6 text-center text-sm text-slate-500; }
-  .auth-switch a { @apply font-semibold text-emerald-800; }
-  .demo-entry { @apply mt-9 border-t border-slate-200 pt-6; }
-  .demo-entry>span { @apply block text-center text-xs text-slate-500; }
-  .demo-entry>div { @apply mt-4 grid grid-cols-3 gap-2; }
-  .demo-entry button { @apply flex flex-col items-center gap-2 rounded-lg border border-slate-200 px-2 py-4 text-xs text-slate-600 hover:border-emerald-600; }
-  .demo-entry p,.auth-release { @apply mt-4 text-center text-xs leading-relaxed text-slate-500; }
-  .form-error { @apply my-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800; }
-  .notice { @apply rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-relaxed text-amber-900; }
-  .release-page { @apply mx-auto max-w-3xl px-6 py-16; }
-  .release-page h1 { @apply mb-6 mt-12 text-4xl font-semibold; }
-  .release-page h2 { @apply mb-3 mt-8 text-xl font-semibold; }
-  .release-page p { @apply mb-5 leading-relaxed text-slate-600; }
-  .app-shell { @apply min-h-dvh bg-slate-50; }
-  .sidebar { @apply fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-slate-200 bg-white p-5 lg:flex; }
-  .sidebar .brand { @apply mb-8; }
-  .firm-switch { @apply mb-7 flex items-center gap-3 rounded-lg border border-slate-200 p-3; }
-  .firm-switch strong { @apply block max-w-32 truncate text-sm; }
-  .firm-switch span { @apply text-xs capitalize text-slate-500; }
-  .firm-avatar { @apply flex size-8 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-sm font-semibold text-emerald-900; }
-  .nav-label { @apply mb-3 px-3 text-xs text-slate-400; }
-  .sidebar nav { @apply flex flex-col gap-1; }
-  .sidebar nav a { @apply flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-500 hover:bg-slate-50; }
-  .sidebar nav a.active { @apply bg-emerald-50 font-semibold text-emerald-900; }
-  .nav-count { @apply ml-auto rounded bg-white px-1.5 py-0.5 text-xs tabular-nums; }
-  .sidebar-bottom { @apply mt-auto pt-8; }
-  .workspace-note { @apply mb-5 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-500; }
-  .workspace-note strong { @apply mb-1 block text-slate-700; }
-  .user-summary { @apply flex items-center gap-2 border-t border-slate-100 pt-4; }
-  .avatar { @apply flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600; }
-  .user-summary strong { @apply block text-sm; }
-  .user-summary small { @apply text-xs capitalize text-slate-500; }
-  .icon-button { @apply inline-flex size-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100; }
-  .app-body { @apply lg:ml-60; }
-  .topbar { @apply flex min-h-20 items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 md:px-8; }
-  .breadcrumbs { @apply hidden items-center gap-3 text-sm text-slate-400 sm:flex; }
-  .breadcrumbs strong { @apply font-medium text-slate-700; }
-  .topbar-right { @apply ml-auto flex items-center gap-4 text-xs text-slate-500; }
-  .mobile-brand { @apply lg:hidden; }
-  .mobile-brand .brand img { @apply w-32; }
-  .mobile-nav { @apply flex gap-2 overflow-x-auto border-b border-slate-200 bg-white px-4 py-2 lg:hidden; }
-  .mobile-nav a { @apply whitespace-nowrap rounded-md px-3 py-2 text-sm text-slate-500; }
-  .mobile-nav a.active { @apply bg-emerald-50 text-emerald-900; }
-  .app-main { @apply mx-auto max-w-7xl px-5 py-7 md:px-8 md:py-8; }
-  .page-heading { @apply mb-7 flex flex-wrap items-start justify-between gap-4; }
-  .page-heading h1 { @apply mb-2 text-3xl font-semibold text-slate-900; }
-  .page-heading p { @apply text-sm leading-relaxed text-slate-500; }
-  .page-heading .eyebrow { @apply mb-2 text-xs text-emerald-800; }
-  .stats-grid { @apply mb-7 grid grid-cols-2 gap-4 xl:grid-cols-4; }
-  .stat { @apply rounded-xl border border-slate-200 bg-white p-5; }
-  .stat-label { @apply flex items-center justify-between gap-2 text-sm text-slate-500; }
-  .stat-value { @apply mb-2 mt-4 text-3xl font-semibold tabular-nums text-slate-900; }
-  .stat-note { @apply text-xs text-slate-500; }
-  .dashboard-grid { @apply grid gap-6 xl:grid-cols-3; }
-  .dashboard-primary { @apply min-w-0 space-y-6 xl:col-span-2; }
-  .panel { @apply min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white; }
-  .panel-header { @apply flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4; }
-  .panel-header h2 { @apply text-base font-semibold; }
-  .panel-header a { @apply inline-flex items-center gap-1 text-xs font-semibold text-emerald-800; }
-  .panel-body { @apply p-5; }
-  .pipeline-strip { @apply grid grid-cols-3 gap-4 p-5 md:grid-cols-6; }
-  .pipeline-strip>div { @apply border-t-4 border-emerald-700 pt-3; }
-  .pipeline-strip>div:nth-child(even) { @apply border-emerald-300; }
-  .pipeline-strip span { @apply block text-xs text-slate-500; }
-  .pipeline-strip strong { @apply mt-3 block text-xl font-semibold tabular-nums; }
-  .table-scroll { @apply overflow-x-auto; }
-  .data-table { @apply w-full border-collapse text-sm; }
-  .data-table th { @apply whitespace-nowrap bg-slate-50 px-5 py-3 text-xs font-medium text-slate-500; }
-  .data-table td { @apply border-t border-slate-100 px-5 py-4 align-middle; }
-  .data-table td.numeric { @apply whitespace-nowrap tabular-nums; }
-  .deal-cell { @apply flex items-center gap-3; }
-  .deal-cell strong { @apply block whitespace-nowrap font-semibold text-slate-800; }
-  .deal-cell small { @apply mt-1 block text-xs text-slate-500; }
-  .task-row { @apply flex items-start gap-3 border-b border-slate-100 py-4 last:border-0; }
-  .task-row button { @apply mt-0.5 flex size-5 shrink-0 items-center justify-center rounded border border-slate-300 text-white; }
-  .task-row button.checked { @apply border-emerald-700 bg-emerald-700; }
-  .task-row strong { @apply block text-sm font-medium; }
-  .task-row small { @apply mt-1 block text-xs text-slate-500; }
-  .activity-item { @apply flex items-start gap-3 py-3; }
-  .activity-item p { @apply text-sm leading-relaxed; }
-  .activity-item small { @apply mt-1 block text-xs text-slate-500; }
-  .activity-dot { @apply mt-2 size-1.5 shrink-0 rounded-full bg-emerald-700; }
-  .filters { @apply mb-5 flex flex-wrap gap-3; }
-  .search-field { @apply relative min-w-48 flex-1; }
-  .search-field svg { @apply absolute left-3 top-3 text-slate-400; }
-  .search-field input { @apply pl-10 text-sm; }
-  .filters select { @apply w-auto max-w-full text-sm; }
-  .deal-grid { @apply grid gap-5 md:grid-cols-2 xl:grid-cols-3; }
-  .deal-card { @apply flex flex-col rounded-xl border border-slate-200 bg-white p-5 hover:border-emerald-700; }
-  .deal-card-top { @apply mb-5 flex items-center justify-between; }
-  .deal-card h2 { @apply mb-2 text-xl font-semibold; }
-  .deal-card .description { @apply mb-6 mt-4 line-clamp-3 flex-1 text-sm leading-relaxed text-slate-500; }
-  .deal-card-metrics { @apply mb-5 grid grid-cols-2 border-t border-slate-100 pt-4; }
-  .deal-card-metrics span { @apply block text-xs text-slate-500; }
-  .deal-card-metrics strong { @apply mt-1 block text-lg font-semibold tabular-nums; }
-  .deal-card-footer { @apply flex items-center justify-between border-t border-slate-100 pt-4 text-sm font-semibold text-emerald-800; }
-  .board { @apply grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3; }
-  .board-column { @apply min-h-48 rounded-xl border border-slate-200 bg-slate-100 p-3; }
-  .board-column>h2 { @apply mb-4 flex items-center justify-between text-sm font-semibold; }
-  .board-card { @apply mb-3 block rounded-lg border border-slate-200 bg-white p-4; }
-  .board-card strong { @apply text-sm; }
-  .board-card p { @apply my-2 text-xs text-slate-500; }
-  .board-card span { @apply text-sm tabular-nums; }
-  .empty { @apply flex flex-col items-center justify-center px-5 py-12 text-center; }
-  .empty svg { @apply mb-4 text-slate-400; }
-  .empty h3 { @apply mb-2 text-base font-semibold; }
-  .empty p { @apply max-w-sm text-sm leading-relaxed text-slate-500; }
-  .empty a { @apply mt-5; }
-  .tabs { @apply mb-6 flex gap-6 overflow-x-auto border-b border-slate-200; }
-  .tabs button { @apply whitespace-nowrap border-b-2 border-transparent pb-3 text-sm text-slate-500; }
-  .tabs button.selected { @apply border-emerald-800 font-semibold text-emerald-800; }
-  .detail-grid { @apply grid gap-6 xl:grid-cols-3; }
-  .detail-main { @apply space-y-6 xl:col-span-2; }
-  .detail-sidebar { @apply space-y-5; }
-  .detail-metrics { @apply grid grid-cols-2 gap-5 border-t border-slate-100 pt-5; }
-  .detail-metrics dt { @apply text-xs text-slate-500; }
-  .detail-metrics dd { @apply mt-1 text-lg font-semibold tabular-nums; }
-  .form-grid { @apply grid gap-4 md:grid-cols-2; }
-  .form-grid .full { @apply md:col-span-2; }
-  .inline-form { @apply space-y-4; }
-  .form-actions { @apply mt-5 flex flex-wrap items-center gap-3; }
-  .feedback { @apply mb-5 flex items-start justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900; }
-  .feedback.error { @apply border-rose-200 bg-rose-50 text-rose-800; }
-  .feedback button { @apply shrink-0; }
-  .disclosure { @apply mt-5 rounded-lg border border-slate-200 bg-white; }
-  .disclosure summary { @apply cursor-pointer px-5 py-4 text-sm font-semibold; }
-  .disclosure>div { @apply border-t border-slate-100 p-5; }
-  .document-name { @apply flex items-center gap-3; }
-  .document-name>svg { @apply shrink-0 text-emerald-700; }
-  .document-name span { @apply block max-w-64 truncate; }
-  .document-name small { @apply mt-1 block text-xs text-slate-500; }
-  .access-card { @apply border-b border-slate-100 p-5 last:border-0; }
-  .access-card-heading { @apply mb-4 flex flex-wrap items-start justify-between gap-3; }
-  .access-card-heading h3 { @apply text-base font-semibold; }
-  .access-card-heading p { @apply mt-1 text-sm text-slate-500; }
-  .inline-buttons { @apply flex flex-wrap gap-2; }
-  .checkbox-label { @apply flex-row items-start text-sm font-normal; }
-  .checkbox-label input { @apply mt-0.5 shrink-0; }
-  .message-layout { @apply grid gap-5 lg:grid-cols-3; }
-  .thread-list { @apply overflow-hidden rounded-xl border border-slate-200 bg-white; }
-  .thread-list button { @apply w-full border-b border-slate-100 px-5 py-4 text-left last:border-0; }
-  .thread-list button.selected { @apply bg-emerald-50; }
-  .thread-list strong { @apply block text-sm; }
-  .thread-list span { @apply mt-1 block text-xs text-slate-500; }
-  .conversation { @apply overflow-hidden rounded-xl border border-slate-200 bg-white lg:col-span-2; }
-  .message-list { @apply flex max-h-96 min-h-60 flex-col gap-5 overflow-y-auto p-5; }
-  .message { @apply max-w-sm self-start; }
-  .message.own { @apply self-end; }
-  .message p { @apply whitespace-pre-wrap break-words rounded-xl bg-slate-100 px-4 py-3 text-sm leading-relaxed; }
-  .message.own p { @apply bg-emerald-50 text-emerald-950; }
-  .message small { @apply mb-1 block text-xs text-slate-500; }
-  .message.own small { @apply text-right; }
-  .message-composer { @apply border-t border-slate-100 p-4; }
-  .member-grid { @apply grid gap-5 md:grid-cols-2 xl:grid-cols-3; }
-  .member-card { @apply rounded-xl border border-slate-200 bg-white p-6; }
-  .member-card .avatar { @apply mb-4 size-12 bg-emerald-50 text-emerald-800; }
-  .member-card h2 { @apply text-lg font-semibold; }
-  .member-card p { @apply mt-3 text-sm leading-relaxed text-slate-500; }
-  .member-card small { @apply mt-1 block text-sm text-emerald-800; }
-  .view-toggle { @apply inline-flex rounded-lg border border-slate-200 bg-white p-1; }
-  .view-toggle button { @apply rounded-md px-3 py-1.5 text-sm text-slate-500; }
-  .view-toggle button.selected { @apply bg-slate-100 font-semibold text-slate-900; }
-  .settings-grid { @apply grid gap-6 xl:grid-cols-3; }
-  .settings-main { @apply space-y-6 xl:col-span-2; }
+  .brand {
+    --brand-width: 164px;
+    @apply relative inline-flex shrink-0 items-center overflow-hidden;
+    width: var(--brand-width);
+    height: calc(var(--brand-width) * 0.253);
+  }
+  .brand img {
+    @apply absolute block h-auto max-w-none;
+    width: calc(var(--brand-width) * 1.3);
+    left: calc(var(--brand-width) * -0.148);
+    top: calc(var(--brand-width) * -0.124);
+  }
+  .brand-light img {
+    filter: brightness(0) invert(1);
+  }
+  .button {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-transparent px-4 py-2.5 text-sm font-semibold;
+  }
+  .button-dark {
+    @apply bg-slate-900 text-white hover:bg-slate-700;
+  }
+  .button-green {
+    @apply bg-emerald-800 text-white hover:bg-emerald-900;
+  }
+  .button-white {
+    @apply bg-white text-emerald-950 hover:bg-slate-100;
+  }
+  .button-quiet {
+    @apply border-slate-200 bg-white text-slate-700 hover:bg-slate-50;
+  }
+  .button-small {
+    @apply min-h-9 px-3 py-1.5;
+  }
+  .text-link {
+    @apply text-sm font-semibold text-slate-700 hover:text-emerald-800;
+  }
+  .eyebrow {
+    @apply mb-4 text-xs font-semibold;
+  }
+  .muted {
+    @apply text-sm leading-relaxed text-slate-500;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600;
+  }
+  .badge-green {
+    @apply bg-emerald-50 text-emerald-800;
+  }
+  .badge-amber {
+    @apply bg-amber-50 text-amber-800;
+  }
+  .badge-blue {
+    @apply bg-blue-50 text-blue-800;
+  }
+  .badge-red {
+    @apply bg-rose-50 text-rose-800;
+  }
+  .icon-tile {
+    @apply inline-flex size-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-600;
+  }
+  .marketing-header {
+    @apply border-b border-slate-200 bg-white;
+  }
+  .marketing-nav {
+    @apply mx-auto flex max-w-7xl items-center justify-between gap-8 px-6 py-5 lg:px-10;
+  }
+  .marketing-nav nav {
+    @apply hidden gap-8 text-sm text-slate-600 md:flex;
+  }
+  .nav-actions {
+    @apply flex items-center gap-6;
+  }
+  .hero {
+    @apply bg-slate-50;
+  }
+  .hero-inner {
+    @apply mx-auto grid max-w-7xl items-center gap-16 px-6 pb-20 pt-20 lg:grid-cols-2 lg:px-10 lg:pt-24;
+  }
+  .hero .eyebrow {
+    @apply flex items-center gap-2 text-emerald-800;
+  }
+  .tiny-maple {
+    @apply text-xl;
+  }
+  .hero h1 {
+    @apply text-5xl leading-tight text-slate-950 lg:text-6xl;
+    font-family: Georgia, serif;
+  }
+  .hero-description {
+    @apply mt-6 max-w-lg text-lg leading-relaxed text-slate-600;
+  }
+  .hero-actions {
+    @apply mt-8 flex flex-wrap gap-3;
+  }
+  .hero-proof {
+    @apply mt-7 flex flex-wrap items-center gap-2 text-xs text-slate-500;
+  }
+  .divider-dot {
+    @apply mx-1;
+  }
+  .hero-product {
+    @apply overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl;
+  }
+  .mock-header {
+    @apply flex items-center gap-3 border-b border-slate-200 px-6 py-4 text-sm font-semibold;
+  }
+  .mock-header .badge {
+    @apply ml-auto;
+  }
+  .mock-mark {
+    @apply flex size-7 items-center justify-center rounded bg-emerald-900 text-white;
+  }
+  .mock-deal {
+    @apply p-7;
+  }
+  .mock-deal h2 {
+    @apply mb-2 text-3xl font-semibold;
+  }
+  .mock-metrics {
+    @apply mt-7 grid grid-cols-3 gap-3 border-t border-slate-100 pt-5;
+  }
+  .mock-metrics span {
+    @apply mb-2 block text-xs text-slate-500;
+  }
+  .mock-metrics strong {
+    @apply text-base font-semibold tabular-nums;
+  }
+  .mock-progress {
+    @apply mx-5 flex items-center gap-3 rounded-lg border border-emerald-100 bg-emerald-50 p-4 text-emerald-900;
+  }
+  .check-icon {
+    @apply flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-800 text-white;
+  }
+  .mock-progress strong {
+    @apply block text-sm;
+  }
+  .mock-progress span:not(.check-icon) {
+    @apply mt-1 block text-xs;
+  }
+  .mock-progress > svg {
+    @apply ml-auto shrink-0;
+  }
+  .mock-caption {
+    @apply px-5 py-4 text-center text-xs text-slate-500;
+  }
+  .hero-bottom {
+    @apply mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-5 border-t border-slate-200 px-6 py-6 text-sm text-slate-600 lg:px-10;
+  }
+  .hero-bottom > span:first-child {
+    @apply text-xs text-slate-500;
+  }
+  .canada-tag {
+    @apply inline-flex items-center gap-2 text-emerald-800;
+  }
+  .marketing-section {
+    @apply mx-auto max-w-7xl px-6 py-20 lg:px-10;
+  }
+  .marketing-section .eyebrow {
+    @apply text-emerald-800;
+  }
+  .marketing-section h2 {
+    @apply text-3xl leading-tight md:text-4xl;
+    font-family: Georgia, serif;
+  }
+  .section-heading {
+    @apply mb-12 flex flex-col justify-between gap-5 md:flex-row md:items-end;
+  }
+  .section-heading > p {
+    @apply max-w-md leading-relaxed text-slate-500;
+  }
+  .feature-grid {
+    @apply grid gap-8 md:grid-cols-3;
+  }
+  .feature {
+    @apply relative border-t border-slate-200 pt-7;
+  }
+  .feature > svg {
+    @apply mb-6 text-emerald-800;
+  }
+  .feature-number {
+    @apply absolute right-0 top-7 text-xs text-slate-400;
+  }
+  .feature h3 {
+    @apply mb-3 text-lg font-semibold;
+  }
+  .feature p {
+    @apply leading-relaxed text-slate-500;
+  }
+  .audiences {
+    @apply bg-slate-950 text-white;
+  }
+  .audiences .eyebrow {
+    @apply text-emerald-300;
+  }
+  .audience-grid {
+    @apply mt-12 grid gap-10 md:grid-cols-3;
+  }
+  .audience-grid article {
+    @apply border-t border-slate-700 pt-7;
+  }
+  .audience-grid svg {
+    @apply text-emerald-300;
+  }
+  .audience-grid h3 {
+    @apply my-5 text-xl font-semibold;
+  }
+  .audience-grid p {
+    @apply leading-relaxed text-slate-300;
+  }
+  .audience-grid a {
+    @apply mt-7 flex items-center justify-between gap-2 text-sm font-semibold;
+  }
+  .process-grid {
+    @apply grid gap-8 md:grid-cols-4;
+  }
+  .process-grid li > span {
+    @apply mb-5 block text-sm text-emerald-800;
+  }
+  .process-grid h3 {
+    @apply mb-3 text-lg font-semibold;
+  }
+  .process-grid p {
+    @apply text-sm leading-relaxed text-slate-500;
+  }
+  .closing-cta {
+    @apply bg-emerald-900 px-6 py-16 text-center text-white;
+  }
+  .closing-cta h2 {
+    @apply text-4xl;
+    font-family: Georgia, serif;
+  }
+  .closing-cta p:not(.eyebrow) {
+    @apply mb-8 mt-5 text-emerald-100;
+  }
+  .cta-demo {
+    @apply ml-5 inline-block text-sm font-semibold;
+  }
+  .marketing-footer {
+    @apply mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-6 px-6 py-9 text-sm text-slate-500;
+  }
+  .marketing-footer > div {
+    @apply flex gap-5;
+  }
+  .auth-page {
+    @apply min-h-dvh lg:grid lg:grid-cols-2;
+  }
+  .auth-aside {
+    @apply hidden flex-col justify-between bg-emerald-950 p-12 text-white lg:flex;
+  }
+  .auth-aside h1 {
+    @apply text-6xl leading-tight;
+    font-family: Georgia, serif;
+  }
+  .auth-aside h1 em {
+    @apply text-emerald-300;
+  }
+  .auth-aside > div > p:last-child {
+    @apply mt-8 max-w-sm leading-relaxed text-emerald-100;
+  }
+  .auth-aside-footer {
+    @apply text-sm text-emerald-200;
+  }
+  .auth-main {
+    @apply p-6 md:p-10;
+  }
+  .auth-back {
+    @apply text-sm text-slate-500;
+  }
+  .auth-card {
+    @apply mx-auto max-w-sm py-12;
+  }
+  .auth-card h2 {
+    @apply mb-3 text-3xl font-semibold;
+  }
+  .auth-card > .eyebrow {
+    @apply text-emerald-800;
+  }
+  .stack-form {
+    @apply mt-6 flex flex-col gap-4;
+  }
+  .field-hint {
+    @apply text-xs font-normal text-slate-500;
+  }
+  .auth-switch {
+    @apply mt-6 text-center text-sm text-slate-500;
+  }
+  .auth-switch a {
+    @apply font-semibold text-emerald-800;
+  }
+  .demo-entry {
+    @apply mt-9 border-t border-slate-200 pt-6;
+  }
+  .demo-entry > span {
+    @apply block text-center text-xs text-slate-500;
+  }
+  .demo-entry > div {
+    @apply mt-4 grid grid-cols-3 gap-2;
+  }
+  .demo-entry button {
+    @apply flex flex-col items-center gap-2 rounded-lg border border-slate-200 px-2 py-4 text-xs text-slate-600 hover:border-emerald-600;
+  }
+  .demo-entry p,
+  .auth-release {
+    @apply mt-4 text-center text-xs leading-relaxed text-slate-500;
+  }
+  .form-error {
+    @apply my-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800;
+  }
+  .notice {
+    @apply rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-relaxed text-amber-900;
+  }
+  .release-page {
+    @apply mx-auto max-w-3xl px-6 py-16;
+  }
+  .release-page h1 {
+    @apply mb-6 mt-12 text-4xl font-semibold;
+  }
+  .release-page h2 {
+    @apply mb-3 mt-8 text-xl font-semibold;
+  }
+  .release-page p {
+    @apply mb-5 leading-relaxed text-slate-600;
+  }
+  .app-shell {
+    @apply min-h-dvh bg-slate-50;
+  }
+  .sidebar {
+    @apply fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-slate-200 bg-white p-5 lg:flex;
+  }
+  .sidebar .brand {
+    @apply mb-8;
+  }
+  .firm-switch {
+    @apply mb-7 flex items-center gap-3 rounded-lg border border-slate-200 p-3;
+  }
+  .firm-switch strong {
+    @apply block max-w-32 truncate text-sm;
+  }
+  .firm-switch span {
+    @apply text-xs capitalize text-slate-500;
+  }
+  .firm-avatar {
+    @apply flex size-8 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-sm font-semibold text-emerald-900;
+  }
+  .nav-label {
+    @apply mb-3 px-3 text-xs text-slate-400;
+  }
+  .sidebar nav {
+    @apply flex flex-col gap-1;
+  }
+  .sidebar nav a {
+    @apply flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-500 hover:bg-slate-50;
+  }
+  .sidebar nav a.active {
+    @apply bg-emerald-50 font-semibold text-emerald-900;
+  }
+  .nav-count {
+    @apply ml-auto rounded bg-white px-1.5 py-0.5 text-xs tabular-nums;
+  }
+  .sidebar-bottom {
+    @apply mt-auto pt-8;
+  }
+  .workspace-note {
+    @apply mb-5 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-500;
+  }
+  .workspace-note strong {
+    @apply mb-1 block text-slate-700;
+  }
+  .user-summary {
+    @apply flex items-center gap-2 border-t border-slate-100 pt-4;
+  }
+  .avatar {
+    @apply flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600;
+  }
+  .user-summary strong {
+    @apply block text-sm;
+  }
+  .user-summary small {
+    @apply text-xs capitalize text-slate-500;
+  }
+  .icon-button {
+    @apply inline-flex size-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100;
+  }
+  .app-body {
+    @apply lg:ml-60;
+  }
+  .topbar {
+    @apply flex min-h-20 items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 md:px-8;
+  }
+  .breadcrumbs {
+    @apply hidden items-center gap-3 text-sm text-slate-400 sm:flex;
+  }
+  .breadcrumbs strong {
+    @apply font-medium text-slate-700;
+  }
+  .topbar-right {
+    @apply ml-auto flex items-center gap-4 text-xs text-slate-500;
+  }
+  .mobile-brand {
+    @apply lg:hidden;
+  }
+  .mobile-brand .brand img {
+    width: calc(var(--brand-width) * 1.3);
+  }
+  .mobile-nav {
+    @apply flex gap-2 overflow-x-auto border-b border-slate-200 bg-white px-4 py-2 lg:hidden;
+  }
+  .mobile-nav a {
+    @apply whitespace-nowrap rounded-md px-3 py-2 text-sm text-slate-500;
+  }
+  .mobile-nav a.active {
+    @apply bg-emerald-50 text-emerald-900;
+  }
+  .app-main {
+    @apply mx-auto max-w-7xl px-5 py-7 md:px-8 md:py-8;
+  }
+  .page-heading {
+    @apply mb-7 flex flex-wrap items-start justify-between gap-4;
+  }
+  .page-heading h1 {
+    @apply mb-2 text-3xl font-semibold text-slate-900;
+  }
+  .page-heading p {
+    @apply text-sm leading-relaxed text-slate-500;
+  }
+  .page-heading .eyebrow {
+    @apply mb-2 text-xs text-emerald-800;
+  }
+  .stats-grid {
+    @apply mb-7 grid grid-cols-2 gap-4 xl:grid-cols-4;
+  }
+  .stat {
+    @apply rounded-xl border border-slate-200 bg-white p-5;
+  }
+  .stat-label {
+    @apply flex items-center justify-between gap-2 text-sm text-slate-500;
+  }
+  .stat-value {
+    @apply mb-2 mt-4 text-3xl font-semibold tabular-nums text-slate-900;
+  }
+  .stat-note {
+    @apply text-xs text-slate-500;
+  }
+  .dashboard-grid {
+    @apply grid gap-6 xl:grid-cols-3;
+  }
+  .dashboard-primary {
+    @apply min-w-0 space-y-6 xl:col-span-2;
+  }
+  .panel {
+    @apply min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white;
+  }
+  .panel-header {
+    @apply flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4;
+  }
+  .panel-header h2 {
+    @apply text-base font-semibold;
+  }
+  .panel-header a {
+    @apply inline-flex items-center gap-1 text-xs font-semibold text-emerald-800;
+  }
+  .panel-body {
+    @apply p-5;
+  }
+  .pipeline-strip {
+    @apply grid grid-cols-3 gap-4 p-5 md:grid-cols-6;
+  }
+  .pipeline-strip > div {
+    @apply border-t-4 border-emerald-700 pt-3;
+  }
+  .pipeline-strip > div:nth-child(even) {
+    @apply border-emerald-300;
+  }
+  .pipeline-strip span {
+    @apply block text-xs text-slate-500;
+  }
+  .pipeline-strip strong {
+    @apply mt-3 block text-xl font-semibold tabular-nums;
+  }
+  .table-scroll {
+    @apply overflow-x-auto;
+  }
+  .data-table {
+    @apply w-full border-collapse text-sm;
+  }
+  .data-table th {
+    @apply whitespace-nowrap bg-slate-50 px-5 py-3 text-xs font-medium text-slate-500;
+  }
+  .data-table td {
+    @apply border-t border-slate-100 px-5 py-4 align-middle;
+  }
+  .data-table td.numeric {
+    @apply whitespace-nowrap tabular-nums;
+  }
+  .deal-cell {
+    @apply flex items-center gap-3;
+  }
+  .deal-cell strong {
+    @apply block whitespace-nowrap font-semibold text-slate-800;
+  }
+  .deal-cell small {
+    @apply mt-1 block text-xs text-slate-500;
+  }
+  .task-row {
+    @apply flex items-start gap-3 border-b border-slate-100 py-4 last:border-0;
+  }
+  .task-row button {
+    @apply mt-0.5 flex size-5 shrink-0 items-center justify-center rounded border border-slate-300 text-white;
+  }
+  .task-row button.checked {
+    @apply border-emerald-700 bg-emerald-700;
+  }
+  .task-row strong {
+    @apply block text-sm font-medium;
+  }
+  .task-row small {
+    @apply mt-1 block text-xs text-slate-500;
+  }
+  .activity-item {
+    @apply flex items-start gap-3 py-3;
+  }
+  .activity-item p {
+    @apply text-sm leading-relaxed;
+  }
+  .activity-item small {
+    @apply mt-1 block text-xs text-slate-500;
+  }
+  .activity-dot {
+    @apply mt-2 size-1.5 shrink-0 rounded-full bg-emerald-700;
+  }
+  .filters {
+    @apply mb-5 flex flex-wrap gap-3;
+  }
+  .search-field {
+    @apply relative min-w-48 flex-1;
+  }
+  .search-field svg {
+    @apply absolute left-3 top-3 text-slate-400;
+  }
+  .search-field input {
+    @apply pl-10 text-sm;
+  }
+  .filters select {
+    @apply w-auto max-w-full text-sm;
+  }
+  .deal-grid {
+    @apply grid gap-5 md:grid-cols-2 xl:grid-cols-3;
+  }
+  .deal-card {
+    @apply flex flex-col rounded-xl border border-slate-200 bg-white p-5 hover:border-emerald-700;
+  }
+  .deal-card-top {
+    @apply mb-5 flex items-center justify-between;
+  }
+  .deal-card h2 {
+    @apply mb-2 text-xl font-semibold;
+  }
+  .deal-card .description {
+    @apply mb-6 mt-4 line-clamp-3 flex-1 text-sm leading-relaxed text-slate-500;
+  }
+  .deal-card-metrics {
+    @apply mb-5 grid grid-cols-2 border-t border-slate-100 pt-4;
+  }
+  .deal-card-metrics span {
+    @apply block text-xs text-slate-500;
+  }
+  .deal-card-metrics strong {
+    @apply mt-1 block text-lg font-semibold tabular-nums;
+  }
+  .deal-card-footer {
+    @apply flex items-center justify-between border-t border-slate-100 pt-4 text-sm font-semibold text-emerald-800;
+  }
+  .project-overview {
+    @apply flex flex-wrap items-center justify-between gap-4 p-5;
+  }
+  .project-overview strong {
+    @apply block text-sm font-semibold text-slate-900;
+  }
+  .project-overview p {
+    @apply mt-2 max-w-xl text-sm leading-relaxed text-slate-500;
+  }
+  .project-grid {
+    @apply grid min-w-0 gap-5 xl:grid-cols-2;
+  }
+  .project-card {
+    @apply min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-5;
+  }
+  .project-card-header {
+    @apply flex items-start justify-between gap-4;
+  }
+  .project-card-title-row {
+    @apply flex flex-wrap items-center gap-2;
+  }
+  .project-card h2 {
+    @apply break-words text-xl font-semibold text-slate-900;
+  }
+  .project-card-header .muted {
+    @apply mt-2;
+  }
+  .project-thesis {
+    @apply mt-5 break-words whitespace-pre-wrap text-sm leading-relaxed text-slate-600;
+  }
+  .project-criteria {
+    @apply mt-5 grid gap-4 border-y border-slate-100 py-4 sm:grid-cols-2;
+  }
+  .project-criteria span,
+  .project-filters dt {
+    @apply block text-xs text-slate-500;
+  }
+  .project-criteria strong {
+    @apply mt-1 block break-words text-sm font-semibold tabular-nums text-slate-800;
+  }
+  .project-filters {
+    @apply grid gap-3 pt-1;
+  }
+  .project-filters dd {
+    @apply mt-1 break-words text-sm leading-relaxed text-slate-700;
+  }
+  .project-actions {
+    @apply mt-5 flex flex-wrap gap-2;
+  }
+  .project-actions .inline-form {
+    @apply space-y-0;
+  }
+  .project-actions .form-actions {
+    @apply m-0;
+  }
+  .project-actions .button {
+    @apply min-h-9 px-3 py-1.5;
+  }
+  .project-editor {
+    @apply mt-4;
+  }
+  .project-editor .form-actions {
+    @apply border-t border-slate-100 pt-4;
+  }
+  .project-readonly {
+    @apply mt-5 rounded-lg bg-slate-50 p-3 text-sm leading-relaxed text-slate-600;
+  }
+  .project-create-panel {
+    @apply mt-6;
+  }
+  .project-access-state {
+    @apply flex flex-col items-start gap-3 text-left;
+  }
+  .project-access-state > svg {
+    @apply text-emerald-800;
+  }
+  .project-access-state h2 {
+    @apply text-lg font-semibold text-slate-900;
+  }
+  .project-access-state p {
+    @apply max-w-xl text-sm leading-relaxed text-slate-600;
+  }
+  .board {
+    @apply grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3;
+  }
+  .board-column {
+    @apply min-h-48 rounded-xl border border-slate-200 bg-slate-100 p-3;
+  }
+  .board-column > h2 {
+    @apply mb-4 flex items-center justify-between text-sm font-semibold;
+  }
+  .board-card {
+    @apply mb-3 block rounded-lg border border-slate-200 bg-white p-4;
+  }
+  .board-card strong {
+    @apply text-sm;
+  }
+  .board-card p {
+    @apply my-2 text-xs text-slate-500;
+  }
+  .board-card span {
+    @apply text-sm tabular-nums;
+  }
+  .empty {
+    @apply flex flex-col items-center justify-center px-5 py-12 text-center;
+  }
+  .empty svg {
+    @apply mb-4 text-slate-400;
+  }
+  .empty h3 {
+    @apply mb-2 text-base font-semibold;
+  }
+  .empty p {
+    @apply max-w-sm text-sm leading-relaxed text-slate-500;
+  }
+  .empty a {
+    @apply mt-5;
+  }
+  .tabs {
+    @apply mb-6 flex gap-6 overflow-x-auto border-b border-slate-200;
+  }
+  .tabs button {
+    @apply whitespace-nowrap border-b-2 border-transparent pb-3 text-sm text-slate-500;
+  }
+  .tabs button.selected {
+    @apply border-emerald-800 font-semibold text-emerald-800;
+  }
+  .detail-grid {
+    @apply grid gap-6 xl:grid-cols-3;
+  }
+  .detail-main {
+    @apply space-y-6 xl:col-span-2;
+  }
+  .detail-sidebar {
+    @apply space-y-5;
+  }
+  .detail-metrics {
+    @apply grid grid-cols-2 gap-5 border-t border-slate-100 pt-5;
+  }
+  .detail-metrics dt {
+    @apply text-xs text-slate-500;
+  }
+  .detail-metrics dd {
+    @apply mt-1 text-lg font-semibold tabular-nums;
+  }
+  .form-grid {
+    @apply grid gap-4 md:grid-cols-2;
+  }
+  .form-grid .full {
+    @apply md:col-span-2;
+  }
+  .inline-form {
+    @apply space-y-4;
+  }
+  .form-actions {
+    @apply mt-5 flex flex-wrap items-center gap-3;
+  }
+  .feedback {
+    @apply mb-5 flex items-start justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900;
+  }
+  .feedback.error {
+    @apply border-rose-200 bg-rose-50 text-rose-800;
+  }
+  .feedback button {
+    @apply shrink-0;
+  }
+  .disclosure {
+    @apply mt-5 rounded-lg border border-slate-200 bg-white;
+  }
+  .disclosure summary {
+    @apply cursor-pointer px-5 py-4 text-sm font-semibold;
+  }
+  .disclosure > div {
+    @apply border-t border-slate-100 p-5;
+  }
+  .document-name {
+    @apply flex items-center gap-3;
+  }
+  .document-name > svg {
+    @apply shrink-0 text-emerald-700;
+  }
+  .document-name span {
+    @apply block max-w-64 truncate;
+  }
+  .document-name small {
+    @apply mt-1 block text-xs text-slate-500;
+  }
+  .access-card {
+    @apply border-b border-slate-100 p-5 last:border-0;
+  }
+  .access-card-heading {
+    @apply mb-4 flex flex-wrap items-start justify-between gap-3;
+  }
+  .access-card-heading h3 {
+    @apply text-base font-semibold;
+  }
+  .access-card-heading p {
+    @apply mt-1 text-sm text-slate-500;
+  }
+  .inline-buttons {
+    @apply flex flex-wrap gap-2;
+  }
+  .checkbox-label {
+    @apply flex-row items-start text-sm font-normal;
+  }
+  .checkbox-label input {
+    @apply mt-0.5 shrink-0;
+  }
+  .message-layout {
+    @apply grid gap-5 lg:grid-cols-3;
+  }
+  .thread-list {
+    @apply overflow-hidden rounded-xl border border-slate-200 bg-white;
+  }
+  .thread-list button {
+    @apply w-full border-b border-slate-100 px-5 py-4 text-left last:border-0;
+  }
+  .thread-list button.selected {
+    @apply bg-emerald-50;
+  }
+  .thread-list strong {
+    @apply block text-sm;
+  }
+  .thread-list span {
+    @apply mt-1 block text-xs text-slate-500;
+  }
+  .conversation {
+    @apply overflow-hidden rounded-xl border border-slate-200 bg-white lg:col-span-2;
+  }
+  .message-list {
+    @apply flex max-h-96 min-h-60 flex-col gap-5 overflow-y-auto p-5;
+  }
+  .message {
+    @apply max-w-sm self-start;
+  }
+  .message.own {
+    @apply self-end;
+  }
+  .message p {
+    @apply whitespace-pre-wrap break-words rounded-xl bg-slate-100 px-4 py-3 text-sm leading-relaxed;
+  }
+  .message.own p {
+    @apply bg-emerald-50 text-emerald-950;
+  }
+  .message small {
+    @apply mb-1 block text-xs text-slate-500;
+  }
+  .message.own small {
+    @apply text-right;
+  }
+  .message-composer {
+    @apply border-t border-slate-100 p-4;
+  }
+  .member-grid {
+    @apply grid gap-5 md:grid-cols-2 xl:grid-cols-3;
+  }
+  .member-card {
+    @apply rounded-xl border border-slate-200 bg-white p-6;
+  }
+  .member-card .avatar {
+    @apply mb-4 size-12 bg-emerald-50 text-emerald-800;
+  }
+  .member-card h2 {
+    @apply text-lg font-semibold;
+  }
+  .member-card p {
+    @apply mt-3 text-sm leading-relaxed text-slate-500;
+  }
+  .member-card small {
+    @apply mt-1 block text-sm text-emerald-800;
+  }
+  .view-toggle {
+    @apply inline-flex rounded-lg border border-slate-200 bg-white p-1;
+  }
+  .view-toggle button {
+    @apply rounded-md px-3 py-1.5 text-sm text-slate-500;
+  }
+  .view-toggle button.selected {
+    @apply bg-slate-100 font-semibold text-slate-900;
+  }
+  .settings-grid {
+    @apply grid gap-6 xl:grid-cols-3;
+  }
+  .settings-main {
+    @apply space-y-6 xl:col-span-2;
+  }
+  .firm-details {
+    @apply grid gap-4 sm:grid-cols-2;
+  }
+  .firm-details > div span,
+  .account-roles span {
+    @apply block text-xs text-slate-500;
+  }
+  .firm-details > div strong,
+  .firm-details > div a,
+  .account-roles strong {
+    @apply mt-1 block text-sm font-semibold text-slate-800;
+  }
+  .firm-details > div a {
+    @apply break-all text-emerald-800 underline;
+  }
+  .firm-details > p {
+    @apply text-sm leading-relaxed text-slate-600 sm:col-span-2;
+  }
+  .team-list {
+    @apply divide-y divide-slate-100;
+  }
+  .team-row {
+    @apply flex flex-wrap items-center gap-3 px-5 py-4;
+  }
+  .team-row > div:nth-child(2) {
+    @apply min-w-0 flex-1;
+  }
+  .team-row strong {
+    @apply block truncate text-sm font-medium;
+  }
+  .team-row small {
+    @apply mt-1 block truncate text-xs text-slate-500;
+  }
+  .team-row > div:last-child {
+    @apply flex items-center gap-2;
+  }
+  .team-note {
+    @apply border-t border-slate-100;
+  }
+  .account-roles {
+    @apply grid grid-cols-2 gap-3;
+  }
+  .account-roles > div {
+    @apply rounded-lg bg-slate-50 p-3;
+  }
 }
-@media (max-width: 480px) { .nav-actions { gap: 12px; } .marketing-nav { gap: 12px; padding: 16px; } .marketing-nav .brand img { width:128px; } .marketing-nav .text-link { display:none; } .hero h1 { font-size:42px; } .topbar-right>span:first-child { display:none; } }
+@media (max-width: 480px) {
+  .nav-actions {
+    gap: 12px;
+  }
+  .marketing-nav {
+    gap: 12px;
+    padding: 16px;
+  }
+  .marketing-nav .brand img {
+    width: calc(var(--brand-width) * 1.3);
+  }
+  .marketing-nav .brand,
+  .mobile-brand .brand {
+    --brand-width: 128px;
+  }
+  .marketing-nav .text-link {
+    display: none;
+  }
+  .hero h1 {
+    font-size: 42px;
+  }
+  .topbar-right > span:first-child {
+    display: none;
+  }
+}

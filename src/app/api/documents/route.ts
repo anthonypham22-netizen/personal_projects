@@ -17,6 +17,7 @@ export async function POST(request: Request){
     if(!(file instanceof File)||!file.size||file.size>10*1024*1024)throw new AppError("Select a non-empty file up to 10 MB.");
     const deal=getDeal(String(form.get("deal_id")||""));const managing=isManager(user,deal);
     const category=String(form.get("category")||"Other");if(!["Financials","Company overview","NDA","LOI","Legal","Other"].includes(category))throw new AppError("Invalid document category.");
+    if(user.role!=="buyer"&&!managing)throw new AppError("Read-only deal-team members cannot upload documents.",403);
     const member=membership(deal.id,user.id);
     if(!managing&&!canAccess(user,deal)&&!(category==="NDA"&&member?.status==="nda_pending"))throw new AppError("Document access has not been approved.",403);
     const ext=path.extname(file.name).toLowerCase();const mime:Record<string,string>={".pdf":"application/pdf",".docx":"application/vnd.openxmlformats-officedocument.wordprocessingml.document",".xlsx":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",".csv":"text/csv",".txt":"text/plain"};

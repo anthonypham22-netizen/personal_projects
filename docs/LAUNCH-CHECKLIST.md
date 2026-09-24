@@ -12,7 +12,7 @@ This list records concrete gaps in the implemented MVP. It is not a claim of com
 ## Identity and organizations
 
 - Add verified email, password recovery, MFA or managed authentication, session/device management, and administrator invitation controls.
-- Define firm memberships and role changes; the MVP currently has individual accounts with firm-name fields.
+- Add administrator invitations, role changes, membership removal, and recovery rules around the implemented organization membership model.
 - Define owner representation authority, advisor assignment/acceptance, member removal, and conflict-of-interest handling.
 - Add actual identity and buyer-capital verification before describing participants as verified or vetted.
 
@@ -22,7 +22,7 @@ This list records concrete gaps in the implemented MVP. It is not a claim of com
 - Review NDA and LOI templates with Canadian counsel for the intended jurisdictions. No legal templates or advice are generated in this release.
 - Add malware scanning/quarantine and a supported file-preview pipeline before accepting customer uploads.
 - Define document retention, deletion, export, watermarking, and download policies; revocation cannot recover downloaded files.
-- Add versioned schema migrations and storage migration tooling before changing deployed schemas.
+- Exercise the implemented schema migration runner against production-like database copies and add storage migration tooling before changing uploaded-file layouts.
 - Decide whether to keep a pilot document room or integrate a specialist virtual data room for complex transactions.
 
 ## Operations and commercial launch
@@ -33,4 +33,4 @@ This list records concrete gaps in the implemented MVP. It is not a claim of com
 - Publish real operator identity, terms, privacy notices, and a contact/support process; the About this release page is not a substitute.
 - Verify data locations across infrastructure, backups, monitoring, and all subprocessors.
 - Define incident response, abuse handling, audited administrator access, uptime monitoring, and restore ownership.
-- Validate the Acquire name/domain before adopting it commercially, and decide the English/French launch scope.
+- Validate the Succera name/domain before adopting it commercially, and decide the English/French launch scope.
