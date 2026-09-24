@@ -220,6 +220,42 @@ export type DealFinancial = {
   created_at: string;
   updated_at: string;
 };
+export const DEAL_MATCH_STATUSES = [
+  "recommended",
+  "selected",
+  "excluded",
+  "contacted",
+] as const;
+export type DealMatchStatus = (typeof DEAL_MATCH_STATUSES)[number];
+export type DealMatch = {
+  id: string;
+  deal_id: string;
+  buyer_project_id: string;
+  buyer_organization_id: string;
+  buyer_project_name: string;
+  buyer_project_thesis: string;
+  buyer_organization_name: string;
+  buyer_organization_type: OrganizationType;
+  buyer_organization_province: string;
+  buyer_organization_verification_status: string;
+  buyer_organization_website: string;
+  buyer_organization_description: string;
+  relevant_acquisitions: number;
+  score: number;
+  eligible: number;
+  status: DealMatchStatus;
+  score_breakdown: {
+    reasons: Array<{
+      dimension: string;
+      score: number;
+      maximum: number;
+      explanation: string;
+    }>;
+    hard_exclusions: string[];
+  };
+  created_at: string;
+  updated_at: string;
+};
 export type Access = {
   id: string;
   deal_id: string;
@@ -298,6 +334,7 @@ export type WorkspaceData = {
   buyer_projects: BuyerProject[];
   can_manage_buyer_projects: boolean;
   deals: Deal[];
+  deal_matches?: DealMatch[];
   deal_financials: DealFinancial[];
   access: Access[];
   documents: Document[];

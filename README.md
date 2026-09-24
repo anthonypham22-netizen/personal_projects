@@ -4,7 +4,7 @@ A standalone website and SaaS MVP for Canadian M&A, targeting businesses with ap
 
 ## Current delivery status
 
-The local MVP now installs and builds successfully. TypeScript checking, all 31 backend tests, and all 12 Chromium browser checks pass. `package-lock.json` is present. The local preview is available while `npm run dev` is running. This is not a publicly deployed or production-ready release; Docker deployment, broader security review, and live-launch requirements remain outstanding. See [validation status](docs/VALIDATION.md).
+The local MVP now installs and builds successfully. TypeScript checking, all 41 backend tests, and all 13 Chromium browser checks pass. `package-lock.json` is present. The local preview is available while `npm run dev` is running. This is not a publicly deployed or production-ready release; Docker deployment, broader security review, and live-launch requirements remain outstanding. See [validation status](docs/VALIDATION.md).
 
 ## Start locally
 
@@ -71,10 +71,13 @@ After the initial successful `npm install`, keep and commit the generated `packa
 - The visible product is branded Succera. Legacy internal identifiers (`northlane.sqlite`, `northlane_session`, package name, and Docker volume) are intentionally retained so the rebrand does not reset existing data, deployments, or sessions. Previously seeded demo files are not rewritten; newly generated examples use Succera.
 - Versioned SQLite migrations run automatically at startup from `src/lib/migrations/`. Applied versions are recorded in `schema_migrations`, so fresh and existing databases follow the same upgrade path and migration history remains directly inspectable.
 - Sell-side mandates capture transaction type, ownership available, rollover and financing flexibility, transition context, expected value, and one of three controlled distribution modes. Annual, year-to-date, and trailing-twelve-month financial periods are stored separately in `deal_financials`.
+- A deterministic buyer-project matching engine scores industry, revenue, EBITDA, geography, transaction type, enterprise value, ownership, and keyword/thesis fit with centrally defined weights totalling 100. Every stored result includes its per-dimension explanation and hard-exclusion reasons.
+- Match results are persisted in `deal_matches`, backfilled once for upgraded databases, and recalculated only for the affected deal, buyer project, buyer organization, or access decision. Demo and registered-account marketplaces remain isolated.
+- Authorized sell-side deal managers can review those matches in a ranked Recommended Buyers workbench, filter and inspect the rationale, select buyers individually or in batches, and exclude or restore recommendations. Recommendation status never grants deal access; access and NDA review remain separate human-controlled steps.
 - Database-backed rate limits are basic per-account protection, not a complete anti-abuse system.
-- Matching is a transparent three-factor comparison: industry, province, and revenue range. A percentage is criteria fit, not investment suitability or a statistical probability.
+- Existing buyer opportunity cards still show the earlier account-profile criteria fit. Project-level matches remain private sell-side recommendations and are never exposed in buyer workspace responses. A score is criteria fit, not investment suitability or a statistical probability.
 
-Each account belongs to an organization with an `owner`, `admin`, `member`, or read-only `viewer` membership. Existing and demo accounts are migrated into one-person organizations without merging firms that happen to share a name. Owner and advisor mandates are organization-scoped while retaining their original user creator/representative fields for compatibility and audit context. Firm owners and administrators can edit the firm profile; membership invitations and role administration are intentionally not included yet. Buyer organizations can create multiple private acquisition projects with normalized filters and draft/active/paused/archived lifecycle states. Buyer deal access remains individual. Phase 3 adds structured sell-side mandates and historical financial periods; project-to-opportunity matching is intentionally deferred to a later phase.
+Each account belongs to an organization with an `owner`, `admin`, `member`, or read-only `viewer` membership. Existing and demo accounts are migrated into one-person organizations without merging firms that happen to share a name. Owner and advisor mandates are organization-scoped while retaining their original user creator/representative fields for compatibility and audit context. Firm owners and administrators can edit the firm profile; membership invitations and role administration are intentionally not included yet. Buyer organizations can create multiple private acquisition projects with normalized filters and draft/active/paused/archived lifecycle states. Buyer deal access remains individual. Phase 3 adds structured sell-side mandates and historical financial periods. Phase 4 adds the private, explainable matching engine and persistence layer. Phase 5 adds the private Recommended Buyers workflow for authorized sell-side deal managers; it does not add buyer discovery, outreach, or automatic access.
 
 ## Verification
 
@@ -87,7 +90,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-`test:core` uses only Node and can run without npm dependencies. The broader service tests cover redaction, document permissions, buyer isolation, NDA approval, revocation, shared mandates, session expiry, and safe preview boundaries. Browser tests exercise navigation, buyer previews, tasks, downloads, origin checks, and a mobile viewport. Stop any development server on port 3000 before the browser suite; it starts an isolated instance with its own test data.
+`test:core` uses only Node and can run without npm dependencies. The broader service tests cover migration backfill, matching scores and explanations, hard exclusions, recommendation curation, targeted recalculation, authorization, redaction, document permissions, buyer isolation, NDA approval, revocation, shared mandates, sessions, and safe preview boundaries. Browser tests exercise navigation, the Recommended Buyers workbench, private match boundaries, buyer previews, tasks, downloads, origin checks, and a mobile viewport. Stop any development server on port 3000 before the browser suite; it starts an isolated instance with its own test data.
 
 Use `npm run format` after dependencies are installed to format the source with Prettier.
 

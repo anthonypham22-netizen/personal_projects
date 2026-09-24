@@ -14,6 +14,7 @@ import {
   register,
   login,
   isManager,
+  dealMatchesForUser,
 } from "../src/lib/service";
 import type { User, Document } from "../src/lib/types";
 
@@ -1188,5 +1189,234 @@ test("buyer projects are normalized and scoped to eligible organization members"
         },
       }),
     /Invalid option/,
+  );
+});
+
+test("matching records recalculate on relevant changes and remain seller-authorized", () => {
+  const buyerToken = register({
+    name: "Matching Buyer",
+    company: "Matching Capital",
+    email: "matching-buyer@example.test",
+    role: "buyer",
+    password: "matching-password-2026",
+  });
+  const matchingBuyer = sessionUser(buyerToken)!;
+  const projectResult = mutate(matchingBuyer, {
+    action: "createBuyerProject",
+    data: {
+      name: "Project Match",
+      status: "active",
+      thesis: "Ontario technology businesses with recurring revenue.",
+      min_revenue: 4_000_000,
+      max_revenue: 12_000_000,
+      min_ebitda: 500_000,
+      max_ebitda: 3_000_000,
+      min_enterprise_value: 6_000_000,
+      max_enterprise_value: 20_000_000,
+      ownership_preference: "majority",
+      transaction_type: "majority_acquisition",
+      sectors: ["Technology"],
+      provinces: ["Ontario"],
+      keywords: ["recurring revenue"],
+    },
+  });
+
+  const sellerToken = register({
+    name: "Matching Seller",
+    company: "Matching Software Inc.",
+    email: "matching-seller@example.test",
+    role: "owner",
+    password: "matching-password-2026",
+  });
+  const matchingSeller = sessionUser(sellerToken)!;
+  const dealResult = mutate(matchingSeller, {
+    action: "createDeal",
+    data: {
+      title: "Project Match Signal",
+      company_name: "Matching Software Inc.",
+      sector: "Technology",
+      province: "Ontario",
+      city: "Toronto",
+      revenue: 8_000_000,
+      ebitda: 1_600_000,
+      asking_price: 12_000_000,
+      employees: 30,
+      founded: 2012,
+      description:
+        "A vertical software platform with recurring revenue and durable contracts.",
+      confidential_summary: "Founder-owned and consistently profitable.",
+      transaction_type: "majority_acquisition",
+      ownership_percentage_available: 80,
+      seller_rollover_possible: true,
+      seller_financing_possible: false,
+      management_transition: "Founder available for transition.",
+      reason_for_transaction: "Planned succession.",
+      min_expected_value: 10_000_000,
+      max_expected_value: 14_000_000,
+      distribution_mode: "private_outreach",
+      financial_year: 2025,
+      gross_profit: 5_000_000,
+      financial_is_projected: false,
+    },
+  });
+
+  const persisted = one<{
+    score: number;
+    eligible: number;
+    score_breakdown_json: string;
+  }>(
+    "SELECT score,eligible,score_breakdown_json FROM deal_matches WHERE deal_id=? AND buyer_project_id=?",
+    dealResult.id!,
+    projectResult.id!,
+  )!;
+  assert.equal(persisted.score, 100);
+  assert.equal(persisted.eligible, 1);
+  assert.equal(JSON.parse(persisted.score_breakdown_json).reasons.length, 8);
+
+  const visible = dealMatchesForUser(matchingSeller, dealResult.id!);
+  assert.equal(
+    visible.some((match) => match.buyer_project_id === projectResult.id),
+    true,
+  );
+  assert.throws(
+    () => dealMatchesForUser(matchingBuyer, dealResult.id!),
+    /authorized deal-team member/,
+  );
+
+  mutate(matchingSeller, {
+    action: "updateDeal",
+    data: {
+      deal_id: dealResult.id,
+      stage: "Closed",
+      published: false,
+      distribution_mode: "private_outreach",
+    },
+  });
+  assert.equal(
+    one<{ eligible: number }>(
+      "SELECT eligible FROM deal_matches WHERE deal_id=? AND buyer_project_id=?",
+      dealResult.id!,
+      projectResult.id!,
+    )?.eligible,
+    0,
+  );
+
+  mutate(matchingBuyer, {
+    action: "setBuyerProjectStatus",
+    data: { buyer_project_id: projectResult.id, status: "paused" },
+  });
+  const exclusions = JSON.parse(
+    one<{ score_breakdown_json: string }>(
+      "SELECT score_breakdown_json FROM deal_matches WHERE deal_id=? AND buyer_project_id=?",
+      dealResult.id!,
+      projectResult.id!,
+    )!.score_breakdown_json,
+  ).hard_exclusions as string[];
+  assert.ok(exclusions.some((exclusion) => /not active/i.test(exclusion)));
+  assert.ok(exclusions.some((exclusion) => /closed/i.test(exclusion)));
+});
+
+test("deal managers can curate recommended buyers without granting access", () => {
+  const ownerState = workspace(owner);
+  const ownerMatches = ownerState.deal_matches?.filter(
+    (match) => match.deal_id === "cedar",
+  );
+  assert.ok(ownerMatches && ownerMatches.length >= 2);
+  assert.ok(
+    ownerMatches.every(
+      (match) =>
+        match.buyer_project_thesis &&
+        match.buyer_organization_type &&
+        typeof match.relevant_acquisitions === "number",
+    ),
+  );
+  assert.ok(
+    workspace(advisor).deal_matches?.some((match) => match.deal_id === "cedar"),
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(workspace(buyer), "deal_matches"),
+    false,
+  );
+
+  const matchIds = ownerMatches.slice(0, 2).map((match) => match.id);
+  const accessBefore = one<{ count: number }>(
+    "SELECT COUNT(*) count FROM access WHERE deal_id='cedar'",
+  )!.count;
+  mutate(owner, {
+    action: "updateDealMatchStatus",
+    data: { deal_id: "cedar", match_ids: matchIds, status: "selected" },
+  });
+  assert.equal(
+    one<{ count: number }>(
+      "SELECT COUNT(*) count FROM deal_matches WHERE deal_id='cedar' AND status='selected'",
+    )!.count,
+    2,
+  );
+  assert.equal(
+    one<{ count: number }>(
+      "SELECT COUNT(*) count FROM access WHERE deal_id='cedar'",
+    )!.count,
+    accessBefore,
+    "selecting recommendations must not grant buyer access",
+  );
+
+  mutate(owner, {
+    action: "updateDealMatchStatus",
+    data: { deal_id: "cedar", match_ids: [matchIds[0]], status: "excluded" },
+  });
+  const excluded = one<{
+    status: string;
+    eligible: number;
+    score_breakdown_json: string;
+  }>(
+    "SELECT status,eligible,score_breakdown_json FROM deal_matches WHERE id=?",
+    matchIds[0],
+  )!;
+  assert.equal(excluded.status, "excluded");
+  assert.equal(excluded.eligible, 0);
+  assert.match(excluded.score_breakdown_json, /excluded/i);
+
+  mutate(owner, {
+    action: "updateDealMatchStatus",
+    data: { deal_id: "cedar", match_ids: [matchIds[0]], status: "recommended" },
+  });
+  assert.equal(
+    one<{ status: string }>(
+      "SELECT status FROM deal_matches WHERE id=?",
+      matchIds[0],
+    )?.status,
+    "recommended",
+  );
+  mutate(advisor, {
+    action: "updateDealMatchStatus",
+    data: { deal_id: "cedar", match_ids: [matchIds[1]], status: "recommended" },
+  });
+
+  const otherDealMatch = one<{ id: string }>(
+    "SELECT id FROM deal_matches WHERE deal_id='summit' LIMIT 1",
+  )!;
+  assert.throws(
+    () =>
+      mutate(owner, {
+        action: "updateDealMatchStatus",
+        data: {
+          deal_id: "cedar",
+          match_ids: [otherDealMatch.id],
+          status: "selected",
+        },
+      }),
+    /not available for this mandate/i,
+  );
+  assert.throws(
+    () =>
+      mutate(buyer, {
+        action: "updateDealMatchStatus",
+        data: {
+          deal_id: "cedar",
+          match_ids: [matchIds[0]],
+          status: "selected",
+        },
+      }),
+    /authorized deal-team member/i,
   );
 });

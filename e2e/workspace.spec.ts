@@ -68,6 +68,36 @@ test("owner can review financial history and choose a distribution strategy", as
   await expect(distribution).toHaveValue("invite_only");
 });
 
+test("owner can inspect and curate recommended buyers", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Owner demo" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Welcome back, Jamie." }),
+  ).toBeVisible();
+  await page.goto("/app/deals/cedar");
+  await page.getByRole("button", { name: "Recommended buyers" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Recommended buyers" }),
+  ).toBeVisible();
+  const recommendation = page
+    .getByRole("article")
+    .filter({ hasText: "Project Maple" });
+  await expect(recommendation).toContainText("Evergreen Capital");
+  await expect(recommendation).toContainText(/\d+% match/);
+  await recommendation.getByText("Inspect match reasoning").click();
+  await expect(recommendation).toContainText("Industry");
+  await recommendation
+    .getByRole("checkbox", { name: /Select Evergreen Capital.*Project Maple/ })
+    .check();
+  await page.getByRole("button", { name: "Select chosen (1)" }).click();
+  await expect(recommendation).toContainText("Selected");
+  await recommendation.getByRole("button", { name: "Exclude buyer" }).click();
+  await expect(recommendation).toContainText("Excluded");
+  await recommendation.getByRole("button", { name: "Restore buyer" }).click();
+  await expect(recommendation).toContainText("Recommended");
+});
+
 test("buyer sees approved documents but cannot download seller-only files", async ({
   page,
 }) => {
@@ -179,7 +209,7 @@ test("buyer demo previews a published owner listing without confidential actions
   ).toHaveCount(0);
 });
 
-test("buyer demo sees acquisition projects without a matching claim", async ({
+test("buyer projects do not expose private matching records", async ({
   page,
 }) => {
   await page.goto("/login");
@@ -198,7 +228,10 @@ test("buyer demo sees acquisition projects without a matching claim", async ({
     page.getByRole("article").filter({ hasText: "Project Northern Lights" }),
   ).toContainText("Project Northern Lights");
   await expect(page.getByText(/criteria fit|match score/i)).toHaveCount(0);
-  await expect(page.getByText(/matching will be introduced/i)).toBeVisible();
+  await expect(page.getByText(/match results remain private/i)).toBeVisible();
+  const workspaceResponse = await page.request.get("/api/workspace");
+  const workspaceData = await workspaceResponse.json();
+  expect(workspaceData).not.toHaveProperty("deal_matches");
 });
 
 test("registered buyer can create, edit, and manage an acquisition project", async ({

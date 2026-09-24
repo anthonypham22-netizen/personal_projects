@@ -2,11 +2,19 @@
 
 Date: 2026-09-23
 
-## Phase 3 — structured sell-side mandates
+## Phase 4 — deterministic matching engine
 
-Phase 3 adds transaction objectives, controlled distribution strategy, and normalized financial history without changing the existing authentication, organization, NDA, document, message, task, or offer workflows. Migration `004_sell_side_mandates` upgrades existing databases in place, retains every deal, and maps previously published teasers to `qualified_discovery` so existing discovery behavior is preserved. New mandates default to `private_outreach`.
+Phase 4 adds a pure, deterministic project-to-deal matcher and migration `005_matching_engine`. Industry, revenue, EBITDA, geography, transaction type, enterprise value, ownership, and keyword/thesis fit use centrally defined weights totalling 100. Every persisted result contains a JSON explanation for all eight dimensions and any hard-exclusion reasons.
 
-Seller identity, organization identifiers, city, employee count, founding year, confidential summary, reason for transaction, management transition, and detailed financial history remain unavailable to buyers until access is approved. Only published `qualified_discovery` teasers appear in buyer discovery; buyers with a direct invitation can still reach the appropriate private workflow.
+Fresh databases create and seed the matching tables. Existing Phase 3 databases retain their users, deals, projects, and financial records, then receive a one-time match backfill. Subsequent deal, buyer-project, and access-block changes recalculate only affected match pairs. A buyer-organization recalculation hook is available for the later verification workflow. Matching never combines shared demo data with registered-account data.
+
+Phase 4 did not expose a recommendation interface. Persisted matches remained available only through a seller-authorized service boundary and were not included in buyer workspace responses.
+
+## Phase 5 — Recommended Buyers
+
+Migration `006_recommended_buyers` narrows recommendation lifecycle values to `recommended`, `selected`, `excluded`, and `contacted`, safely translating older `shortlisted` and `dismissed` records. Existing excluded records remain ineligible and keep an inspectable exclusion reason.
+
+Authorized owner and advisor deal managers now receive ranked buyer-project recommendations inside each mandate. The workbench supports score sorting; buyer-type, geography, verification, experience, and status filters; firm and acquisition-mandate profiles; an eight-dimension reasoning ledger; single and batch selection; and exclude/restore controls. Read-only deal-team viewers and buyers receive no recommendation records. Selecting a recommendation does not create a buyer-access record or bypass NDA approval. Existing authentication, document, message, task, offer, and teaser-redaction behavior remains unchanged.
 
 ## Resolved environment blocker
 
@@ -25,11 +33,11 @@ Dependencies and `package-lock.json` are present. TypeScript, backend tests, pro
 
 - `npm install`: succeeded; npm reported zero known vulnerabilities at installation time (not a security certification).
 - `npm run typecheck`: passed.
-- `npm test`: **31 passed, 0 failed**. Coverage includes migration upgrades and idempotency, mandate constraints, distribution privacy, detailed-financial gating, document authorization, buyer isolation, NDA review, revocation, organizations, buyer projects, sessions, password hashing, and backups.
+- `npm test`: **41 passed, 0 failed**. Coverage includes deterministic scoring, explanations, hard exclusions, match persistence and constraints, Phase 3 and Phase 4 upgrade safety, idempotency, targeted recalculation, seller-only recommendation curation, proof that selection does not grant access, distribution privacy, documents, buyer isolation, NDA review, revocation, organizations, buyer projects, sessions, password hashing, and backups.
 - `npm run build`: passed using Next.js 16's documented Webpack build mode. Turbopack's PostCSS evaluator attempted to bind a local worker port that this execution host prohibits, so the production script is pinned to `next build --webpack`; application compilation, type checking, prerendering, and build tracing completed successfully.
-- `npm run test:e2e`: **12 passed, 0 failed** in Chromium. This includes the Phase 3 owner journey for reviewing financial history and changing distribution strategy, alongside the existing website, organization, buyer-project, authorization, task, download, preview, and mobile checks.
+- `npm run test:e2e`: **13 passed, 0 failed** in Chromium. This includes the Recommended Buyers curation flow and a boundary check proving persisted project matches are not exposed in the buyer workspace response, alongside the existing website, organization, buyer-project, authorization, task, download, preview, and mobile checks.
 - The test runner's IPC socket initially required permissions outside the sandbox. Running the same check through the approval mechanism succeeded.
-- `npm run test:core`: **15 passed, 0 failed**. Covers salted password hashes, exact-password verification, malformed-hash rejection, session digests, migration ordering and rollback, fresh/existing database upgrades, database constraints, demo initialization, successful backup contents, and rejection of backups with missing referenced uploads.
+- `npm run test:core`: **18 passed, 0 failed**. Covers salted password hashes, exact-password verification, malformed-hash rejection, session digests, migration ordering and rollback, fresh/existing database upgrades through Phase 5, recommendation-status translation, matching persistence constraints, database constraints, demo initialization, successful backup contents, and rejection of backups with missing referenced uploads.
 - `package.json` and `tsconfig.json`: valid JSON.
 - Git ignore checks confirm `.env.local`, the SQLite data path, and uploaded-file paths are ignored.
 

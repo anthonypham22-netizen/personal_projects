@@ -14,6 +14,7 @@ import {
   DEAL_TRANSACTION_TYPES,
   DEAL_DISTRIBUTION_MODES,
   DEAL_FINANCIAL_PERIOD_TYPES,
+  DEAL_MATCH_STATUSES,
   type User,
   type Deal,
   type Access,
@@ -29,8 +30,15 @@ import {
   type OrganizationType,
   type BuyerProject,
   type DealFinancial,
+  type DealMatch,
 } from "./types";
 import { inImmediateTransaction } from "./sqlite-transaction";
+import {
+  recalculateDealMatch,
+  recalculateBuyerOrganizationDealMatches,
+  recalculateBuyerProjectMatches,
+  recalculateDealMatches,
+} from "./match-store";
 
 export class AppError extends Error {
   constructor(
@@ -65,6 +73,13 @@ const parse = <T>(schema: z.ZodType<T>, input: unknown): T => {
     );
   return result.data;
 };
+const statusTextForAudit = (status: DealMatch["status"]) =>
+  ({
+    recommended: "Restored",
+    selected: "Selected",
+    excluded: "Excluded",
+    contacted: "Contacted",
+  })[status];
 const organizationTypeFor = (role: User["role"]): OrganizationType =>
   role === "advisor" ? "advisor" : role === "owner" ? "business" : "buyer";
 const slugPart = (value: string) =>
@@ -135,6 +150,57 @@ export const getDeal = (id: string) => {
   if (!deal) throw new AppError("This deal is not available.", 404);
   return deal;
 };
+export function dealMatchesForUser(user: User, dealId: string): DealMatch[] {
+  const deal = getDeal(dealId);
+  requireManager(user, deal);
+  return dealMatchesForDeals([dealId]);
+}
+
+function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
+  if (!dealIds.length) return [];
+  const placeholders = dealIds.map(() => "?").join(",");
+  const rows = all<
+    Omit<DealMatch, "score_breakdown"> & { score_breakdown_json: string }
+  >(
+    `SELECT dm.*,
+       bp.name buyer_project_name,
+       bp.thesis buyer_project_thesis,
+       o.name buyer_organization_name,
+       o.organization_type buyer_organization_type,
+       o.province buyer_organization_province,
+       o.verification_status buyer_organization_verification_status,
+       o.website buyer_organization_website,
+       o.description buyer_organization_description,
+       (
+         SELECT COUNT(DISTINCT previous.id)
+         FROM deals previous
+         WHERE previous.stage='Closed'
+           AND previous.sector=d.sector
+           AND EXISTS (
+             SELECT 1 FROM offers completed_offer
+             JOIN organization_members offer_member
+               ON offer_member.user_id=completed_offer.buyer_id
+              AND offer_member.status='active'
+             WHERE completed_offer.deal_id=previous.id
+               AND completed_offer.status='Shortlisted'
+               AND offer_member.organization_id=o.id
+           )
+       ) relevant_acquisitions
+     FROM deal_matches dm
+     JOIN buyer_projects bp ON bp.id=dm.buyer_project_id
+     JOIN organizations o ON o.id=dm.buyer_organization_id
+     JOIN deals d ON d.id=dm.deal_id
+     WHERE dm.deal_id IN (${placeholders})
+     ORDER BY dm.eligible DESC,dm.score DESC,bp.name`,
+    ...dealIds,
+  );
+  return rows.map(({ score_breakdown_json, ...row }) => ({
+    ...row,
+    score_breakdown: JSON.parse(
+      score_breakdown_json,
+    ) as DealMatch["score_breakdown"],
+  }));
+}
 export const membership = (dealId: string, userId: string) =>
   one<Access>(
     "SELECT * FROM access WHERE deal_id=? AND buyer_id=?",
@@ -620,6 +686,7 @@ export function createBuyerProject(user: User, input: unknown) {
       )
       .run(id, organization.id, user.id, ...projectValues(project));
     replaceBuyerProjectFilters(database, id, project);
+    recalculateBuyerProjectMatches(database, id);
   });
   return { id, message: "Acquisition project created." };
 }
@@ -652,6 +719,7 @@ export function updateBuyerProject(user: User, input: unknown) {
       )
       .run(...projectValues(merged), update.buyer_project_id, organization.id);
     replaceBuyerProjectFilters(database, update.buyer_project_id, merged);
+    recalculateBuyerProjectMatches(database, update.buyer_project_id);
   });
   return {
     id: update.buyer_project_id,
@@ -669,12 +737,15 @@ export function setBuyerProjectStatus(user: User, input: unknown) {
   );
   if (!projectRow(project.buyer_project_id, organization.id))
     throw new AppError("This buyer project is not available.", 404);
-  run(
-    "UPDATE buyer_projects SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND organization_id=?",
-    project.status,
-    project.buyer_project_id,
-    organization.id,
-  );
+  const database = db();
+  inImmediateTransaction(database, () => {
+    database
+      .prepare(
+        "UPDATE buyer_projects SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND organization_id=?",
+      )
+      .run(project.status, project.buyer_project_id, organization.id);
+    recalculateBuyerProjectMatches(database, project.buyer_project_id);
+  });
   return {
     id: project.buyer_project_id,
     message: "Acquisition project status updated.",
@@ -944,6 +1015,11 @@ export function workspace(user: User): WorkspaceData {
   const buyerProjectsEnabled = isEligibleBuyerOrganization(organization);
   const canManageBuyerProjects =
     buyerProjectsEnabled && organization.membership_role !== "viewer";
+  const managedDealIds = rawDeals
+    .filter((deal) => canManageDeal(deal))
+    .map((deal) => deal.id);
+  const dealMatches =
+    user.role === "buyer" ? undefined : dealMatchesForDeals(managedDealIds);
   return {
     user,
     organization,
@@ -953,6 +1029,7 @@ export function workspace(user: User): WorkspaceData {
       : [],
     can_manage_buyer_projects: canManageBuyerProjects,
     deals,
+    ...(dealMatches ? { deal_matches: dealMatches } : {}),
     deal_financials: dealFinancials,
     access,
     documents,
@@ -1103,6 +1180,59 @@ export function mutate(
   if (action === "updateBuyerProject") return updateBuyerProject(user, data);
   if (action === "setBuyerProjectStatus")
     return setBuyerProjectStatus(user, data);
+  if (action === "updateDealMatchStatus") {
+    const p = parse(
+      z.object({
+        deal_id: idSchema,
+        match_ids: z.array(idSchema).min(1).max(100),
+        status: z.enum(DEAL_MATCH_STATUSES),
+      }),
+      data,
+    );
+    const deal = getDeal(p.deal_id);
+    requireManager(user, deal);
+    const matchIds = [...new Set(p.match_ids)];
+    const placeholders = matchIds.map(() => "?").join(",");
+    const database = db();
+    inImmediateTransaction(database, () => {
+      const available = database
+        .prepare(
+          `SELECT id,buyer_project_id,eligible FROM deal_matches
+           WHERE deal_id=? AND id IN (${placeholders})`,
+        )
+        .all(p.deal_id, ...matchIds) as {
+        id: string;
+        buyer_project_id: string;
+        eligible: number;
+      }[];
+      if (available.length !== matchIds.length)
+        throw new AppError(
+          "One or more recommendations are not available for this mandate.",
+          404,
+        );
+      if (p.status === "selected" && available.some((match) => !match.eligible))
+        throw new AppError(
+          "Only eligible buyer recommendations can be selected.",
+          409,
+        );
+      database
+        .prepare(
+          `UPDATE deal_matches SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now')
+           WHERE deal_id=? AND id IN (${placeholders})`,
+        )
+        .run(p.status, p.deal_id, ...matchIds);
+      for (const match of available)
+        recalculateDealMatch(database, p.deal_id, match.buyer_project_id);
+      audit(
+        user,
+        p.deal_id,
+        `${statusTextForAudit(p.status)} ${matchIds.length} buyer recommendation${matchIds.length === 1 ? "" : "s"}`,
+      );
+    });
+    return {
+      message: `${matchIds.length} buyer recommendation${matchIds.length === 1 ? "" : "s"} updated.`,
+    };
+  }
   if (action === "createDeal") {
     if (user.role === "buyer")
       throw new AppError("Only owners and advisors can create mandates.", 403);
@@ -1178,6 +1308,7 @@ export function mutate(
           p.gross_profit,
           p.financial_is_projected ? 1 : 0,
         );
+      recalculateDealMatches(database, id);
     });
     audit(user, id, "Created a private mandate");
     return {
@@ -1224,13 +1355,20 @@ export function mutate(
       }),
       data,
     );
-    run(
-      "UPDATE deals SET stage=?,published=?,distribution_mode=? WHERE id=?",
-      p.stage,
-      p.published ? 1 : 0,
-      p.distribution_mode ?? deal.distribution_mode,
-      deal.id,
-    );
+    const database = db();
+    inImmediateTransaction(database, () => {
+      database
+        .prepare(
+          "UPDATE deals SET stage=?,published=?,distribution_mode=? WHERE id=?",
+        )
+        .run(
+          p.stage,
+          p.published ? 1 : 0,
+          p.distribution_mode ?? deal.distribution_mode,
+          deal.id,
+        );
+      recalculateDealMatches(database, deal.id);
+    });
     audit(
       user,
       deal.id,
@@ -1252,36 +1390,43 @@ export function mutate(
         Boolean(deal.seller_financing_possible),
     });
     validateExpectedValueRange(p);
-    run(
-      `UPDATE deals SET
+    const database = db();
+    inImmediateTransaction(database, () => {
+      database
+        .prepare(
+          `UPDATE deals SET
         title=?,company_name=?,sector=?,province=?,city=?,revenue=?,ebitda=?,asking_price=?,
         employees=?,founded=?,description=?,confidential_summary=?,transaction_type=?,
         ownership_percentage_available=?,seller_rollover_possible=?,seller_financing_possible=?,
         management_transition=?,reason_for_transaction=?,min_expected_value=?,max_expected_value=?,
         distribution_mode=? WHERE id=?`,
-      p.title,
-      p.company_name,
-      p.sector,
-      p.province,
-      p.city,
-      p.revenue,
-      p.ebitda,
-      p.asking_price,
-      p.employees,
-      p.founded,
-      p.description,
-      p.confidential_summary,
-      p.transaction_type,
-      p.ownership_percentage_available,
-      p.seller_rollover_possible ? 1 : 0,
-      p.seller_financing_possible ? 1 : 0,
-      p.management_transition,
-      p.reason_for_transaction,
-      p.min_expected_value,
-      p.max_expected_value,
-      p.distribution_mode,
-      deal.id,
-    );
+        )
+        .run(
+          p.title,
+          p.company_name,
+          p.sector,
+          p.province,
+          p.city,
+          p.revenue,
+          p.ebitda,
+          p.asking_price,
+          p.employees,
+          p.founded,
+          p.description,
+          p.confidential_summary,
+          p.transaction_type,
+          p.ownership_percentage_available,
+          p.seller_rollover_possible ? 1 : 0,
+          p.seller_financing_possible ? 1 : 0,
+          p.management_transition,
+          p.reason_for_transaction,
+          p.min_expected_value,
+          p.max_expected_value,
+          p.distribution_mode,
+          deal.id,
+        );
+      recalculateDealMatches(database, deal.id);
+    });
     audit(user, deal.id, "Updated the confidential sell-side mandate");
     return { message: "Mandate details saved." };
   }
@@ -1295,34 +1440,44 @@ export function mutate(
       p.period_type,
     );
     const id = existing?.id ?? randomUUID();
-    run(
-      `INSERT INTO deal_financials(
+    const database = db();
+    inImmediateTransaction(database, () => {
+      database
+        .prepare(
+          `INSERT INTO deal_financials(
         id,deal_id,fiscal_year,period_type,revenue,ebitda,gross_profit,is_projected
       ) VALUES(?,?,?,?,?,?,?,?)
       ON CONFLICT(deal_id,fiscal_year,period_type) DO UPDATE SET
         revenue=excluded.revenue,ebitda=excluded.ebitda,gross_profit=excluded.gross_profit,
         is_projected=excluded.is_projected,updated_at=CURRENT_TIMESTAMP`,
-      id,
-      deal.id,
-      p.fiscal_year,
-      p.period_type,
-      p.revenue,
-      p.ebitda,
-      p.gross_profit,
-      p.is_projected ? 1 : 0,
-    );
+        )
+        .run(
+          id,
+          deal.id,
+          p.fiscal_year,
+          p.period_type,
+          p.revenue,
+          p.ebitda,
+          p.gross_profit,
+          p.is_projected ? 1 : 0,
+        );
+      recalculateDealMatches(database, deal.id);
+    });
     audit(user, deal.id, `Updated ${p.fiscal_year} financial history`);
     return { id, message: "Financial period saved." };
   }
   if (action === "deleteDealFinancial") {
     requireManager(user, deal);
     const financialId = parse(idSchema, data.financial_id);
-    const result = run(
-      "DELETE FROM deal_financials WHERE id=? AND deal_id=?",
-      financialId,
-      deal.id,
-    );
-    if (!result.changes) throw new AppError("Financial period not found.", 404);
+    const database = db();
+    inImmediateTransaction(database, () => {
+      const result = database
+        .prepare("DELETE FROM deal_financials WHERE id=? AND deal_id=?")
+        .run(financialId, deal.id);
+      if (!result.changes)
+        throw new AppError("Financial period not found.", 404);
+      recalculateDealMatches(database, deal.id);
+    });
     audit(user, deal.id, "Removed a financial history period");
     return { message: "Financial period removed." };
   }
@@ -1342,12 +1497,15 @@ export function mutate(
     const advisorOrganization = organizationFor(advisor.id);
     if (!advisorOrganization)
       throw new AppError("The advisor is not connected to an organization.");
-    run(
-      "UPDATE deals SET advisor_id=?,advisor_organization_id=? WHERE id=?",
-      advisor.id,
-      advisorOrganization.id,
-      deal.id,
-    );
+    const database = db();
+    inImmediateTransaction(database, () => {
+      database
+        .prepare(
+          "UPDATE deals SET advisor_id=?,advisor_organization_id=? WHERE id=?",
+        )
+        .run(advisor.id, advisorOrganization.id, deal.id);
+      recalculateDealMatches(database, deal.id);
+    });
     audit(user, deal.id, `Appointed ${advisor.company} as advisor`);
     return { message: "Advisor appointed and granted firm access." };
   }
@@ -1378,12 +1536,15 @@ export function mutate(
     const ownerOrganization = organizationFor(owner.id);
     if (!ownerOrganization)
       throw new AppError("The owner is not connected to an organization.");
-    run(
-      "UPDATE deals SET owner_id=?,owner_organization_id=? WHERE id=?",
-      owner.id,
-      ownerOrganization.id,
-      deal.id,
-    );
+    const database = db();
+    inImmediateTransaction(database, () => {
+      database
+        .prepare(
+          "UPDATE deals SET owner_id=?,owner_organization_id=? WHERE id=?",
+        )
+        .run(owner.id, ownerOrganization.id, deal.id);
+      recalculateDealMatches(database, deal.id);
+    });
     audit(user, deal.id, "Connected the business owner to the mandate");
     return {
       message:
@@ -1427,6 +1588,8 @@ export function mutate(
     );
     const member = membership(deal.id, p.buyer_id);
     if (!member) throw new AppError("Request not found.", 404);
+    const buyerOrganization = organizationFor(p.buyer_id);
+    const database = db();
     if (p.status === "approved") {
       const doc = one<Document>(
         "SELECT * FROM documents WHERE id=? AND deal_id=? AND category='NDA' AND audience='buyer' AND buyer_id=?",
@@ -1440,18 +1603,36 @@ export function mutate(
         );
       if (data.confirm_reviewed !== true)
         throw new AppError("Confirm you reviewed the externally executed NDA.");
-      run(
-        "UPDATE access SET status='approved',nda_status='verified',nda_document_id=? WHERE id=?",
-        doc.id,
-        member.id,
-      );
-    } else
-      run(
-        "UPDATE access SET status=?,nda_status=? WHERE id=?",
-        p.status,
-        p.status === "nda_pending" ? "requested" : member.nda_status,
-        member.id,
-      );
+      inImmediateTransaction(database, () => {
+        database
+          .prepare(
+            "UPDATE access SET status='approved',nda_status='verified',nda_document_id=? WHERE id=?",
+          )
+          .run(doc.id, member.id);
+        if (buyerOrganization)
+          recalculateBuyerOrganizationDealMatches(
+            database,
+            buyerOrganization.id,
+            deal.id,
+          );
+      });
+    } else {
+      inImmediateTransaction(database, () => {
+        database
+          .prepare("UPDATE access SET status=?,nda_status=? WHERE id=?")
+          .run(
+            p.status,
+            p.status === "nda_pending" ? "requested" : member.nda_status,
+            member.id,
+          );
+        if (buyerOrganization)
+          recalculateBuyerOrganizationDealMatches(
+            database,
+            buyerOrganization.id,
+            deal.id,
+          );
+      });
+    }
     audit(
       user,
       deal.id,

@@ -3,8 +3,10 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { seed } from "./seed";
 import { runMigrations } from "./migrations";
+import { ensureInitialMatchBackfill } from "./match-store";
 
-export const dataDirectory = () => path.resolve(process.env.DATA_DIR || "./data");
+export const dataDirectory = () =>
+  path.resolve(process.env.DATA_DIR || "./data");
 const globalDb = globalThis as unknown as { northlaneDb?: DatabaseSync };
 export function db() {
   if (globalDb.northlaneDb) return globalDb.northlaneDb;
@@ -16,6 +18,7 @@ export function db() {
     );
     runMigrations(d);
     if (process.env.ALLOW_DEMO === "true") seed(d, dataDirectory());
+    ensureInitialMatchBackfill(d);
     globalDb.northlaneDb = d;
     return d;
   } catch (error) {
@@ -23,6 +26,26 @@ export function db() {
     throw error;
   }
 }
-export function all<T>(sql: string, ...params: (string | number | null)[]): T[] { return db().prepare(sql).all(...params).map(row=>({...row})) as unknown as T[]; }
-export function one<T>(sql: string, ...params: (string | number | null)[]): T | undefined { const row=db().prepare(sql).get(...params);return row?({...row} as T):undefined; }
-export function run(sql: string, ...params: (string | number | null)[]) { return db().prepare(sql).run(...params); }
+export function all<T>(
+  sql: string,
+  ...params: (string | number | null)[]
+): T[] {
+  return db()
+    .prepare(sql)
+    .all(...params)
+    .map((row) => ({ ...row })) as unknown as T[];
+}
+export function one<T>(
+  sql: string,
+  ...params: (string | number | null)[]
+): T | undefined {
+  const row = db()
+    .prepare(sql)
+    .get(...params);
+  return row ? ({ ...row } as T) : undefined;
+}
+export function run(sql: string, ...params: (string | number | null)[]) {
+  return db()
+    .prepare(sql)
+    .run(...params);
+}

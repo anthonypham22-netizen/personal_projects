@@ -14,6 +14,9 @@ import { initialUpgrade } from "../src/lib/migrations/001_initial_upgrade.ts";
 import { organizationsMigration } from "../src/lib/migrations/002_organizations.ts";
 import { buyerProjectsMigration } from "../src/lib/migrations/003_buyer_projects.ts";
 import { sellSideMandatesMigration } from "../src/lib/migrations/004_sell_side_mandates.ts";
+import { matchingEngineMigration } from "../src/lib/migrations/005_matching_engine.ts";
+import { recommendedBuyersMigration } from "../src/lib/migrations/006_recommended_buyers.ts";
+import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
 
 const legacySchemaSql = readFileSync(
   new URL("./fixtures/legacy-schema-v0.sql", import.meta.url),
@@ -48,9 +51,12 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 2, name: "organizations" },
       { version: 3, name: "buyer_projects" },
       { version: 4, name: "sell_side_mandates" },
+      { version: 5, name: "matching_engine" },
+      { version: 6, name: "recommended_buyers" },
     ]);
 
     seed(database, directory);
+    ensureInitialMatchBackfill(database);
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM deals").get().count,
       6,
@@ -75,6 +81,10 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       database.prepare("SELECT COUNT(*) count FROM deal_financials").get()
         .count,
       18,
+    );
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_matches").get().count,
+      12,
     );
     assert.ok(
       database.prepare("SELECT COUNT(*) count FROM buyer_project_sectors").get()
@@ -285,12 +295,14 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 4);
+    assert.equal(history.length, 6);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
       { version: 3, name: "buyer_projects" },
       { version: 4, name: "sell_side_mandates" },
+      { version: 5, name: "matching_engine" },
+      { version: 6, name: "recommended_buyers" },
     ]);
     assert.equal(
       database
@@ -334,6 +346,7 @@ test("an existing Phase 2 database upgrades sell-side mandates without losing de
       organizationsMigration,
       buyerProjectsMigration,
       sellSideMandatesMigration,
+      matchingEngineMigration,
     ]);
 
     assert.equal(
@@ -360,6 +373,7 @@ test("an existing Phase 2 database upgrades sell-side mandates without losing de
       0,
     );
     seed(database, directory);
+    ensureInitialMatchBackfill(database);
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM deal_financials").get()
         .count,
@@ -370,7 +384,145 @@ test("an existing Phase 2 database upgrades sell-side mandates without losing de
       { version: 2, name: "organizations" },
       { version: 3, name: "buyer_projects" },
       { version: 4, name: "sell_side_mandates" },
+      { version: 5, name: "matching_engine" },
     ]);
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an existing Phase 3 database backfills matching history without losing marketplace data", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase4-"));
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    applyMigrations(database, [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+    ]);
+    seed(database, directory);
+    const before = {
+      users: database.prepare("SELECT COUNT(*) count FROM users").get().count,
+      deals: database.prepare("SELECT COUNT(*) count FROM deals").get().count,
+      projects: database
+        .prepare("SELECT COUNT(*) count FROM buyer_projects")
+        .get().count,
+      financials: database
+        .prepare("SELECT COUNT(*) count FROM deal_financials")
+        .get().count,
+    };
+
+    applyMigrations(database, [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+    ]);
+    ensureInitialMatchBackfill(database);
+
+    assert.deepEqual(
+      {
+        users: database.prepare("SELECT COUNT(*) count FROM users").get().count,
+        deals: database.prepare("SELECT COUNT(*) count FROM deals").get().count,
+        projects: database
+          .prepare("SELECT COUNT(*) count FROM buyer_projects")
+          .get().count,
+        financials: database
+          .prepare("SELECT COUNT(*) count FROM deal_financials")
+          .get().count,
+      },
+      before,
+    );
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_matches").get().count,
+      before.deals * before.projects,
+    );
+    const changes = database
+      .prepare("SELECT total_changes() value")
+      .get().value;
+    ensureInitialMatchBackfill(database);
+    assert.equal(
+      database.prepare("SELECT total_changes() value").get().value,
+      changes,
+      "the initial backfill must run only once",
+    );
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an existing Phase 4 database upgrades recommendation statuses without losing matches", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase5-"));
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    applyMigrations(database, [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+    ]);
+    seed(database, directory);
+    ensureInitialMatchBackfill(database);
+    const matches = database
+      .prepare("SELECT id FROM deal_matches ORDER BY id LIMIT 2")
+      .all();
+    database
+      .prepare("UPDATE deal_matches SET status='shortlisted' WHERE id=?")
+      .run(matches[0].id);
+    database
+      .prepare("UPDATE deal_matches SET status='dismissed' WHERE id=?")
+      .run(matches[1].id);
+    const countBefore = database
+      .prepare("SELECT COUNT(*) count FROM deal_matches")
+      .get().count;
+
+    applyMigrations(database, [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+      recommendedBuyersMigration,
+    ]);
+
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_matches").get().count,
+      countBefore,
+    );
+    assert.equal(
+      database
+        .prepare("SELECT status FROM deal_matches WHERE id=?")
+        .get(matches[0].id).status,
+      "selected",
+    );
+    const excluded = database
+      .prepare(
+        "SELECT status,eligible,score_breakdown_json FROM deal_matches WHERE id=?",
+      )
+      .get(matches[1].id);
+    assert.deepEqual(
+      { status: excluded.status, eligible: excluded.eligible },
+      { status: "excluded", eligible: 0 },
+    );
+    assert.match(excluded.score_breakdown_json, /seller excluded/i);
+    assert.throws(
+      () =>
+        database
+          .prepare("UPDATE deal_matches SET status='shortlisted' WHERE id=?")
+          .run(matches[0].id),
+      /CHECK constraint/,
+    );
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 6,
+      name: "recommended_buyers",
+    });
   } finally {
     database.close();
     rmSync(directory, { recursive: true, force: true });
@@ -439,6 +591,54 @@ test("sell-side mandate constraints reject unsafe distribution and financial dat
     );
   } finally {
     database.close();
+  }
+});
+
+test("matching records enforce uniqueness, valid scores, and valid explanations", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-matches-"));
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    runMigrations(database);
+    seed(database, directory);
+    ensureInitialMatchBackfill(database);
+    const existing = database
+      .prepare("SELECT * FROM deal_matches LIMIT 1")
+      .get();
+    assert.ok(existing);
+    assert.throws(() =>
+      database
+        .prepare(
+          `INSERT INTO deal_matches(
+            id,deal_id,buyer_project_id,buyer_organization_id,score,eligible,
+            score_breakdown_json,status
+          ) VALUES('duplicate',?,?,?,?,?,?,?)`,
+        )
+        .run(
+          existing.deal_id,
+          existing.buyer_project_id,
+          existing.buyer_organization_id,
+          50,
+          1,
+          '{"reasons":[]}',
+          "recommended",
+        ),
+    );
+    assert.throws(() =>
+      database
+        .prepare("UPDATE deal_matches SET score=101 WHERE id=?")
+        .run(existing.id),
+    );
+    assert.throws(() =>
+      database
+        .prepare(
+          "UPDATE deal_matches SET score_breakdown_json='nope' WHERE id=?",
+        )
+        .run(existing.id),
+    );
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

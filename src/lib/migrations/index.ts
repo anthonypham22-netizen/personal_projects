@@ -4,6 +4,8 @@ import { initialUpgrade } from "./001_initial_upgrade.ts";
 import { organizationsMigration } from "./002_organizations.ts";
 import { buyerProjectsMigration } from "./003_buyer_projects.ts";
 import { sellSideMandatesMigration } from "./004_sell_side_mandates.ts";
+import { matchingEngineMigration } from "./005_matching_engine.ts";
+import { recommendedBuyersMigration } from "./006_recommended_buyers.ts";
 
 export type Migration = {
   version: number;
@@ -22,6 +24,8 @@ const migrations: readonly Migration[] = [
   organizationsMigration,
   buyerProjectsMigration,
   sellSideMandatesMigration,
+  matchingEngineMigration,
+  recommendedBuyersMigration,
 ];
 
 const migrationTableSql = `

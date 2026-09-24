@@ -39,6 +39,7 @@ import {
   SlidersHorizontal,
   Handshake,
   LoaderCircle,
+  RotateCcw,
 } from "lucide-react";
 import { Brand } from "./brand";
 import { cn } from "@/lib/utils";
@@ -61,6 +62,7 @@ import {
   type Task,
   type Document,
   type Access,
+  type DealMatch,
 } from "@/lib/types";
 
 const buyerOrganizationTypes = new Set<string>(BUYER_ORGANIZATION_TYPES);
@@ -91,6 +93,17 @@ const financialPeriodLabel = (value: string) =>
     annual: "Fiscal year",
     trailing_twelve_months: "Trailing 12 months",
     year_to_date: "Year to date",
+  })[value] || statusText(value);
+const matchDimensionLabel = (value: string) =>
+  ({
+    industry: "Industry",
+    revenue: "Revenue",
+    ebitda: "EBITDA",
+    geography: "Geography",
+    transaction: "Transaction type",
+    enterprise_value: "Enterprise value",
+    ownership: "Ownership",
+    keywords: "Thesis signals",
   })[value] || statusText(value);
 const expectedValueLabel = (deal: Deal) => {
   if (deal.min_expected_value === null && deal.max_expected_value === null)
@@ -147,13 +160,17 @@ function Status({ value }: { value: string }) {
           "Closed",
           "Due diligence",
           "Shortlisted",
+          "selected",
+          "contacted",
         ].includes(value)
           ? "badge-green"
           : ["requested", "nda_pending", "LOI review", "Under review"].includes(
                 value,
               )
             ? "badge-amber"
-            : ["revoked", "denied", "Not proceeding"].includes(value)
+            : ["revoked", "denied", "Not proceeding", "excluded"].includes(
+                  value,
+                )
               ? "badge-red"
               : "badge-blue",
       )}
@@ -1282,7 +1299,7 @@ function AcquisitionProjects() {
     <>
       <Heading
         title="Acquisition projects"
-        description="Keep each acquisition thesis and its search criteria in one private workspace. Matching will be introduced in a later phase."
+        description="Keep each acquisition thesis and its search criteria in one private workspace. Match results remain private until the recommended-buyer workflow is introduced."
         eyebrow="BUYER WORKSPACE"
       >
         {data.can_manage_buyer_projects && (
@@ -2147,6 +2164,7 @@ function DealDetail({ deal }: { deal: Deal }) {
     ? [
         "Overview",
         ...(deal.can_manage ? ["Mandate settings"] : []),
+        ...(deal.can_manage ? ["Recommended buyers"] : []),
         "Data room",
         "Messages",
         "Tasks",
@@ -2428,6 +2446,8 @@ function DealDetail({ deal }: { deal: Deal }) {
         </div>
       ) : tab === "Mandate settings" ? (
         <MandateSettings deal={deal} />
+      ) : tab === "Recommended buyers" ? (
+        <RecommendedBuyers deal={deal} />
       ) : tab === "Data room" ? (
         <>
           <DocumentTable
@@ -2730,6 +2750,384 @@ function DocumentsPage() {
         To upload a document, open its deal room and select Data room.
       </p>
     </>
+  );
+}
+
+function RecommendedBuyers({ deal }: { deal: Deal }) {
+  const { data, act, busy } = useWorkspace();
+  const [organizationType, setOrganizationType] = useState("");
+  const [province, setProvince] = useState("");
+  const [verifiedOnly, setVerifiedOnly] = useState(false);
+  const [experiencedOnly, setExperiencedOnly] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [sort, setSort] = useState("score-desc");
+  const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const matches = (data.deal_matches || []).filter(
+    (match) => match.deal_id === deal.id,
+  );
+  const organizationTypes = Array.from(
+    new Set(matches.map((match) => match.buyer_organization_type)),
+  ).sort();
+  const provinces = Array.from(
+    new Set(
+      matches.map((match) => match.buyer_organization_province).filter(Boolean),
+    ),
+  ).sort();
+  const recommendations = matches
+    .filter(
+      (match) =>
+        (!organizationType ||
+          match.buyer_organization_type === organizationType) &&
+        (!province || match.buyer_organization_province === province) &&
+        (!verifiedOnly ||
+          match.buyer_organization_verification_status === "verified") &&
+        (!experiencedOnly || match.relevant_acquisitions > 0) &&
+        (statusFilter === "all" ||
+          (statusFilter === "active"
+            ? match.status !== "excluded"
+            : match.status === statusFilter)),
+    )
+    .sort((left, right) => {
+      if (sort === "score-asc") return left.score - right.score;
+      if (sort === "name")
+        return left.buyer_organization_name.localeCompare(
+          right.buyer_organization_name,
+        );
+      return right.score - left.score;
+    });
+  const activeCount = matches.filter(
+    (match) => match.eligible && match.status !== "excluded",
+  ).length;
+  const selectedCount = matches.filter(
+    (match) => match.status === "selected",
+  ).length;
+  const updateStatus = async (
+    matchIds: string[],
+    status: DealMatch["status"],
+  ) => {
+    const result = await act("updateDealMatchStatus", {
+      deal_id: deal.id,
+      match_ids: matchIds,
+      status,
+    });
+    if (result)
+      setChosen((current) => {
+        const next = new Set(current);
+        matchIds.forEach((id) => next.delete(id));
+        return next;
+      });
+  };
+  const toggleChosen = (id: string) =>
+    setChosen((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  if (!deal.can_manage) return null;
+  return (
+    <section className="recommendations" aria-labelledby="recommended-title">
+      <div className="recommendations-heading">
+        <div>
+          <p className="eyebrow">SELL-SIDE WORKBENCH</p>
+          <h2 id="recommended-title">Recommended buyers</h2>
+          <p>
+            Ranked acquisition mandates for {deal.title}. Selecting a buyer does
+            not grant access or reveal confidential deal information.
+          </p>
+        </div>
+        <dl className="recommendation-counts">
+          <div>
+            <dt>Active</dt>
+            <dd>{activeCount}</dd>
+          </div>
+          <div>
+            <dt>Selected</dt>
+            <dd>{selectedCount}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div className="recommendation-controls">
+        <label>
+          Buyer type
+          <select
+            value={organizationType}
+            onChange={(event) => setOrganizationType(event.target.value)}
+          >
+            <option value="">All buyer types</option>
+            {organizationTypes.map((type) => (
+              <option value={type} key={type}>
+                {ORGANIZATION_TYPE_LABELS[type]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Geography
+          <select
+            value={province}
+            onChange={(event) => setProvince(event.target.value)}
+          >
+            <option value="">All provinces</option>
+            {provinces.map((value) => (
+              <option value={value} key={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Status
+          <select
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+          >
+            <option value="all">All statuses</option>
+            <option value="active">Active recommendations</option>
+            <option value="selected">Selected</option>
+            <option value="excluded">Excluded</option>
+            <option value="contacted">Contacted</option>
+          </select>
+        </label>
+        <label>
+          Sort
+          <select
+            value={sort}
+            onChange={(event) => setSort(event.target.value)}
+          >
+            <option value="score-desc">Match score: high to low</option>
+            <option value="score-asc">Match score: low to high</option>
+            <option value="name">Buyer name</option>
+          </select>
+        </label>
+        <div className="recommendation-toggles">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={verifiedOnly}
+              onChange={(event) => setVerifiedOnly(event.target.checked)}
+            />
+            Verified only
+          </label>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={experiencedOnly}
+              onChange={(event) => setExperiencedOnly(event.target.checked)}
+            />
+            Relevant experience
+          </label>
+        </div>
+      </div>
+
+      <div className="recommendation-batchbar">
+        <p>
+          <strong>{recommendations.length}</strong> shown · {chosen.size} chosen
+        </p>
+        <button
+          type="button"
+          className="button button-green button-small"
+          disabled={busy || chosen.size === 0}
+          onClick={() => updateStatus(Array.from(chosen), "selected")}
+        >
+          <Check size={15} /> Select chosen ({chosen.size})
+        </button>
+      </div>
+
+      <div className="recommendation-list">
+        {recommendations.map((match, index) => (
+          <BuyerRecommendation
+            key={match.id}
+            match={match}
+            rank={index + 1}
+            checked={chosen.has(match.id)}
+            busy={busy}
+            onToggle={() => toggleChosen(match.id)}
+            onStatus={(status) => updateStatus([match.id], status)}
+          />
+        ))}
+        {!recommendations.length && (
+          <div className="panel">
+            <Empty
+              title="No buyers match these filters"
+              body="Clear a filter to return to the complete recommendation set."
+            />
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function BuyerRecommendation({
+  match,
+  rank,
+  checked,
+  busy,
+  onToggle,
+  onStatus,
+}: {
+  match: DealMatch;
+  rank: number;
+  checked: boolean;
+  busy: boolean;
+  onToggle: () => void;
+  onStatus: (status: DealMatch["status"]) => void;
+}) {
+  const selectable = match.status !== "excluded" && !!match.eligible;
+  const positiveReasons = match.score_breakdown.reasons.filter(
+    (reason) => reason.score > 0,
+  );
+  return (
+    <article
+      className={cn(
+        "recommendation-card",
+        match.status === "excluded" && "recommendation-card-excluded",
+      )}
+    >
+      <div className="recommendation-rank" aria-label={`Rank ${rank}`}>
+        {rank.toString().padStart(2, "0")}
+      </div>
+      <div className="recommendation-content">
+        <div className="recommendation-card-head">
+          <label className="recommendation-select">
+            <input
+              type="checkbox"
+              checked={checked}
+              disabled={!selectable || busy}
+              onChange={onToggle}
+              aria-label={`Select ${match.buyer_organization_name} — ${match.buyer_project_name}`}
+            />
+            <span className="firm-avatar">
+              {initials(match.buyer_organization_name)}
+            </span>
+            <span>
+              <strong>{match.buyer_organization_name}</strong>
+              <small>{match.buyer_project_name}</small>
+            </span>
+          </label>
+          <div className="recommendation-score">
+            <strong>{match.score}% match</strong>
+            <Status value={match.status} />
+          </div>
+        </div>
+
+        <div className="recommendation-meta">
+          <span>
+            <Building2 size={14} />
+            {ORGANIZATION_TYPE_LABELS[match.buyer_organization_type]}
+          </span>
+          <span>
+            <MapPin size={14} />
+            {match.buyer_organization_province || "Canada"}
+          </span>
+          {match.buyer_organization_verification_status === "verified" && (
+            <span>
+              <ShieldCheck size={14} /> Verified
+            </span>
+          )}
+          <span>
+            <Handshake size={14} /> {match.relevant_acquisitions} relevant
+            acquisition{match.relevant_acquisitions === 1 ? "" : "s"}
+          </span>
+        </div>
+
+        <div className="recommendation-fit">
+          {positiveReasons.slice(0, 6).map((reason) => (
+            <span key={reason.dimension}>
+              <Check size={14} /> {matchDimensionLabel(reason.dimension)}
+            </span>
+          ))}
+        </div>
+
+        {!match.eligible &&
+          match.score_breakdown.hard_exclusions.length > 0 && (
+            <div className="recommendation-warning">
+              {match.score_breakdown.hard_exclusions.join(" ")}
+            </div>
+          )}
+
+        <div className="recommendation-disclosures">
+          <details>
+            <summary>View profile</summary>
+            <div>
+              <p>
+                {match.buyer_organization_description ||
+                  "No firm description has been added."}
+              </p>
+              <strong>Acquisition mandate</strong>
+              <p>{match.buyer_project_thesis || "No thesis provided."}</p>
+              {match.buyer_organization_website && (
+                <a href={match.buyer_organization_website} rel="noreferrer">
+                  Visit firm website <ArrowUpRight size={14} />
+                </a>
+              )}
+            </div>
+          </details>
+          <details>
+            <summary>Inspect match reasoning</summary>
+            <div className="match-ledger">
+              {match.score_breakdown.reasons.map((reason) => (
+                <div key={reason.dimension}>
+                  <span>
+                    <strong>{matchDimensionLabel(reason.dimension)}</strong>
+                    <small>{reason.explanation}</small>
+                  </span>
+                  <b>
+                    {reason.score}/{reason.maximum}
+                  </b>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+
+        <div className="recommendation-actions">
+          {match.status === "excluded" ? (
+            <button
+              type="button"
+              className="button button-quiet button-small"
+              disabled={busy}
+              onClick={() => onStatus("recommended")}
+            >
+              <RotateCcw size={15} /> Restore buyer
+            </button>
+          ) : (
+            <>
+              {match.status === "selected" ? (
+                <button
+                  type="button"
+                  className="button button-quiet button-small"
+                  disabled={busy}
+                  onClick={() => onStatus("recommended")}
+                >
+                  Return to recommended
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="button button-green button-small"
+                  disabled={busy || !match.eligible}
+                  onClick={() => onStatus("selected")}
+                >
+                  <Check size={15} /> Select buyer
+                </button>
+              )}
+              <button
+                type="button"
+                className="button button-quiet button-small"
+                disabled={busy}
+                onClick={() => onStatus("excluded")}
+              >
+                <X size={15} /> Exclude buyer
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </article>
   );
 }
 
