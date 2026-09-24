@@ -17,6 +17,7 @@ import { sellSideMandatesMigration } from "../src/lib/migrations/004_sell_side_m
 import { matchingEngineMigration } from "../src/lib/migrations/005_matching_engine.ts";
 import { recommendedBuyersMigration } from "../src/lib/migrations/006_recommended_buyers.ts";
 import { privateTeaserDistributionMigration } from "../src/lib/migrations/007_private_teaser_distribution.ts";
+import { qualifiedDiscoveryMigration } from "../src/lib/migrations/008_qualified_discovery.ts";
 import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
 
 const legacySchemaSql = readFileSync(
@@ -55,6 +56,7 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 5, name: "matching_engine" },
       { version: 6, name: "recommended_buyers" },
       { version: 7, name: "private_teaser_distribution" },
+      { version: 8, name: "qualified_discovery" },
     ]);
 
     seed(database, directory);
@@ -297,7 +299,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 7);
+    assert.equal(history.length, 8);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
@@ -306,6 +308,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       { version: 5, name: "matching_engine" },
       { version: 6, name: "recommended_buyers" },
       { version: 7, name: "private_teaser_distribution" },
+      { version: 8, name: "qualified_discovery" },
     ]);
     assert.equal(
       database
@@ -326,6 +329,84 @@ test("an existing database upgrades to organizations without losing data", () =>
     assert.match(history[1].applied_at, /^\d{4}-\d{2}-\d{2} /);
   } finally {
     database.close();
+  }
+});
+
+test("an existing Phase 6 database adds controlled introduction requests without losing outreach", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase7-"));
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    const phaseSix = [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+      recommendedBuyersMigration,
+      privateTeaserDistributionMigration,
+    ];
+    applyMigrations(database, phaseSix);
+    seed(database, directory);
+    ensureInitialMatchBackfill(database);
+    const outreachBefore = database
+      .prepare("SELECT COUNT(*) count FROM deal_outreach")
+      .get().count;
+
+    applyMigrations(database, [...phaseSix, qualifiedDiscoveryMigration]);
+
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_outreach").get().count,
+      outreachBefore,
+    );
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 8,
+      name: "qualified_discovery",
+    });
+    const project = database
+      .prepare(
+        "SELECT id,organization_id,created_by_user_id FROM buyer_projects ORDER BY id LIMIT 1",
+      )
+      .get();
+    database
+      .prepare(
+        `INSERT INTO introduction_requests(
+          id,deal_id,buyer_organization_id,buyer_project_id,requested_by_user_id,message
+        ) VALUES('intro','cedar',?,?,?,'We are a credible acquirer with relevant operating experience.')`,
+      )
+      .run(project.organization_id, project.id, project.created_by_user_id);
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            `INSERT INTO introduction_requests(
+              id,deal_id,buyer_organization_id,buyer_project_id,requested_by_user_id,message
+            ) VALUES('duplicate','cedar',?,?,?,'A second project cannot bypass the existing firm decision.')`,
+          )
+          .run(project.organization_id, project.id, project.created_by_user_id),
+      /UNIQUE constraint/,
+    );
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            "UPDATE introduction_requests SET status='accepted' WHERE id='intro'",
+          )
+          .run(),
+      /CHECK constraint/,
+    );
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            "UPDATE introduction_requests SET message='Too short' WHERE id='intro'",
+          )
+          .run(),
+      /CHECK constraint/,
+    );
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

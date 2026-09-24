@@ -32,6 +32,7 @@ import {
   type DealFinancial,
   type DealMatch,
   type DealOutreachRecipient,
+  type IntroductionRequest,
 } from "./types";
 import { inImmediateTransaction } from "./sqlite-transaction";
 import {
@@ -40,6 +41,7 @@ import {
   recalculateBuyerProjectMatches,
   recalculateDealMatches,
 } from "./match-store";
+import { qualifiedDiscoveryMinimumScore } from "./discovery";
 
 export class AppError extends Error {
   constructor(
@@ -235,6 +237,115 @@ function dealOutreachFor(
          : "dor.buyer_organization_id=?"
      }
      ORDER BY o.created_at DESC,dor.rowid DESC`,
+    ...(managerView ? managedDealIds : [organizationId]),
+  );
+  return rows.map(({ score_breakdown_json, ...row }) => ({
+    ...row,
+    match_reasons: (
+      JSON.parse(score_breakdown_json) as DealMatch["score_breakdown"]
+    ).reasons
+      .filter((reason) => reason.score > 0)
+      .map((reason) => reason.dimension),
+  }));
+}
+
+type QualifiedDiscoveryMatch = {
+  deal_id: string;
+  buyer_project_id: string;
+  buyer_project_name: string;
+  score: number;
+  match_reasons: string[];
+};
+
+function qualifiedDiscoveryMatchesFor(
+  organizationId: string,
+  minimumScore: number,
+) {
+  const rows = all<{
+    deal_id: string;
+    buyer_project_id: string;
+    buyer_project_name: string;
+    score: number;
+    score_breakdown_json: string;
+  }>(
+    `SELECT dm.deal_id,dm.buyer_project_id,bp.name buyer_project_name,
+       dm.score,dm.score_breakdown_json
+     FROM deal_matches dm
+     JOIN buyer_projects bp
+       ON bp.id=dm.buyer_project_id
+      AND bp.organization_id=dm.buyer_organization_id
+     JOIN deals d ON d.id=dm.deal_id
+     WHERE dm.buyer_organization_id=? AND dm.eligible=1 AND dm.score>=?
+       AND bp.status='active' AND d.published=1
+       AND d.distribution_mode='qualified_discovery'
+     ORDER BY dm.deal_id,dm.score DESC,bp.name,bp.id`,
+    organizationId,
+    minimumScore,
+  );
+  const bestByDeal = new Map<string, QualifiedDiscoveryMatch>();
+  for (const row of rows) {
+    if (bestByDeal.has(row.deal_id)) continue;
+    const breakdown = JSON.parse(
+      row.score_breakdown_json,
+    ) as DealMatch["score_breakdown"];
+    bestByDeal.set(row.deal_id, {
+      deal_id: row.deal_id,
+      buyer_project_id: row.buyer_project_id,
+      buyer_project_name: row.buyer_project_name,
+      score: row.score,
+      match_reasons: breakdown.reasons
+        .filter((reason) => reason.score > 0)
+        .map((reason) => reason.dimension),
+    });
+  }
+  return bestByDeal;
+}
+
+function introductionRequestsFor(
+  user: User,
+  organizationId: string,
+  managedDealIds: string[],
+): IntroductionRequest[] {
+  const managerView = user.role !== "buyer";
+  if (managerView && !managedDealIds.length) return [];
+  const placeholders = managedDealIds.map(() => "?").join(",");
+  const rows = all<
+    Omit<IntroductionRequest, "match_reasons"> & {
+      score_breakdown_json: string;
+    }
+  >(
+    `SELECT ir.*,d.title deal_title,organization.name buyer_organization_name,
+       organization.verification_status buyer_organization_verification_status,
+       project.name buyer_project_name,requester.name requested_by_user_name,
+       dm.score match_score,dm.score_breakdown_json,
+       (
+         SELECT COUNT(DISTINCT previous.id)
+         FROM deals previous
+         WHERE previous.stage='Closed' AND previous.sector=d.sector
+           AND EXISTS (
+             SELECT 1 FROM offers completed_offer
+             JOIN organization_members offer_member
+               ON offer_member.user_id=completed_offer.buyer_id
+              AND offer_member.status='active'
+             WHERE completed_offer.deal_id=previous.id
+               AND completed_offer.status='Shortlisted'
+               AND offer_member.organization_id=organization.id
+           )
+       ) relevant_acquisitions
+     FROM introduction_requests ir
+     JOIN deals d ON d.id=ir.deal_id
+     JOIN organizations organization ON organization.id=ir.buyer_organization_id
+     JOIN buyer_projects project ON project.id=ir.buyer_project_id
+     JOIN users requester ON requester.id=ir.requested_by_user_id
+     JOIN deal_matches dm
+       ON dm.deal_id=ir.deal_id AND dm.buyer_project_id=ir.buyer_project_id
+     WHERE ${
+       managerView
+         ? `ir.deal_id IN (${placeholders})`
+         : "ir.buyer_organization_id=?"
+     }
+     ORDER BY CASE ir.status WHEN 'pending' THEN 1 WHEN 'approved' THEN 2 WHEN 'declined' THEN 3 ELSE 4 END,
+       ir.created_at DESC,ir.id`,
     ...(managerView ? managedDealIds : [organizationId]),
   );
   return rows.map(({ score_breakdown_json, ...row }) => ({
@@ -893,12 +1004,28 @@ export function workspace(user: User): WorkspaceData {
         (!deal.owner_organization_id && deal.owner_id === user.id))
     );
   };
+  const qualifiedDiscoveryMinScore = qualifiedDiscoveryMinimumScore();
+  const qualifiedDiscoveryMatches =
+    user.role === "buyer"
+      ? qualifiedDiscoveryMatchesFor(
+          organization.id,
+          qualifiedDiscoveryMinScore,
+        )
+      : new Map<string, QualifiedDiscoveryMatch>();
   const rawDeals = all<Deal & { owner_is_demo: number }>(
     `SELECT d.*,owner.is_demo owner_is_demo FROM deals d JOIN users owner ON owner.id=d.owner_id
-    WHERE (owner.is_demo=? OR (?='buyer' AND ?=1 AND owner.is_demo=0 AND d.published=1 AND d.distribution_mode='qualified_discovery'))
+    WHERE owner.is_demo=?
     AND ((d.owner_id=? AND d.owner_organization_id IS NULL) OR (d.advisor_id=? AND d.advisor_organization_id IS NULL)
       OR (?<>'buyer' AND EXISTS (SELECT 1 FROM organization_members om WHERE om.user_id=? AND om.status='active' AND om.organization_id IN (d.owner_organization_id,d.advisor_organization_id)))
-      OR (?='buyer' AND ((d.published=1 AND d.distribution_mode='qualified_discovery')
+      OR (?='buyer' AND ((d.published=1 AND d.distribution_mode='qualified_discovery'
+          AND EXISTS (
+            SELECT 1 FROM deal_matches dm
+            JOIN buyer_projects bp
+              ON bp.id=dm.buyer_project_id
+             AND bp.organization_id=dm.buyer_organization_id
+            WHERE dm.deal_id=d.id AND dm.buyer_organization_id=?
+              AND dm.eligible=1 AND dm.score>=? AND bp.status='active'
+          ))
         OR d.id IN (SELECT deal_id FROM access WHERE buyer_id=?)
         OR EXISTS (
           SELECT 1 FROM deal_outreach o
@@ -908,63 +1035,23 @@ export function workspace(user: User): WorkspaceData {
         ))))
     ORDER BY d.created_at DESC,d.title`,
     user.is_demo,
-    user.role,
-    user.is_demo,
     user.id,
     user.id,
     user.role,
     user.id,
     user.role,
+    organization.id,
+    qualifiedDiscoveryMinScore,
     user.id,
     organization.id,
   );
   const deals = rawDeals.map((d) => {
-    const previewOnly =
-      user.role === "buyer" && !!user.is_demo && !d.owner_is_demo;
     const { owner_is_demo: _, ...deal } = d;
-    if (previewOnly)
-      return {
-        id: d.id,
-        title: d.title,
-        company_name: "Confidential company",
-        sector: d.sector,
-        province: d.province,
-        city: "",
-        revenue: d.revenue,
-        ebitda: d.ebitda,
-        asking_price: d.asking_price,
-        employees: 0,
-        founded: 0,
-        description: d.description,
-        confidential_summary: "",
-        transaction_type: d.transaction_type,
-        ownership_percentage_available: d.ownership_percentage_available,
-        seller_rollover_possible: d.seller_rollover_possible,
-        seller_financing_possible: d.seller_financing_possible,
-        management_transition: "",
-        reason_for_transaction: "",
-        min_expected_value: d.min_expected_value,
-        max_expected_value: d.max_expected_value,
-        distribution_mode: d.distribution_mode,
-        owner_id: "",
-        advisor_id: null,
-        owner_organization_id: null,
-        advisor_organization_id: null,
-        created_by_user_id: null,
-        stage: d.stage,
-        published: d.published,
-        created_at: d.created_at,
-        can_manage: false,
-        can_manage_owner_side: false,
-        has_access: false,
-        preview_only: true,
-        access_status: "none",
-        ...match(user, d),
-      };
     const member = membershipByDeal.get(d.id),
       managing = canManageDeal(d),
       teamMember = teamMemberForDeal(d),
-      allowed = teamMember || member?.status === "approved";
+      allowed = teamMember || member?.status === "approved",
+      discoveryMatch = qualifiedDiscoveryMatches.get(d.id);
     return {
       ...deal,
       company_name: allowed ? d.company_name : "Confidential company",
@@ -984,7 +1071,14 @@ export function workspace(user: User): WorkspaceData {
       has_access: allowed,
       preview_only: false,
       access_status: member?.status || "none",
-      ...match(user, d),
+      ...(discoveryMatch
+        ? {
+            match_score: discoveryMatch.score,
+            match_reasons: discoveryMatch.match_reasons,
+            matched_project_id: discoveryMatch.buyer_project_id,
+            matched_project_name: discoveryMatch.buyer_project_name,
+          }
+        : match(user, d)),
     };
   });
   const ids = new Set(deals.map((d) => d.id));
@@ -1074,6 +1168,11 @@ export function workspace(user: User): WorkspaceData {
   const dealMatches =
     user.role === "buyer" ? undefined : dealMatchesForDeals(managedDealIds);
   const dealOutreach = dealOutreachFor(user, organization.id, managedDealIds);
+  const introductionRequests = introductionRequestsFor(
+    user,
+    organization.id,
+    managedDealIds,
+  );
   return {
     user,
     organization,
@@ -1085,6 +1184,8 @@ export function workspace(user: User): WorkspaceData {
     deals,
     ...(dealMatches ? { deal_matches: dealMatches } : {}),
     deal_outreach: dealOutreach,
+    introduction_requests: introductionRequests,
+    qualified_discovery_min_score: qualifiedDiscoveryMinScore,
     deal_financials: dealFinancials,
     access,
     documents,
@@ -1599,26 +1700,192 @@ export function mutate(
           : "Opportunity passed.",
     };
   }
-  if (action === "requestAccess") {
+  if (action === "requestIntroduction") {
     if (
       user.role !== "buyer" ||
       !deal.published ||
       deal.distribution_mode !== "qualified_discovery"
     )
-      throw new AppError("This opportunity is not accepting requests.", 403);
-    const existing = membership(deal.id, user.id);
-    if (existing)
-      throw new AppError("You already have an access request for this deal.");
-    const notes = parse(text(0, 2000), data.notes || "");
-    run(
-      "INSERT INTO access(id,deal_id,buyer_id,notes) VALUES(?,?,?,?)",
-      randomUUID(),
-      deal.id,
-      user.id,
-      notes,
+      throw new AppError(
+        "This opportunity is not available for Qualified Discovery.",
+        403,
+      );
+    const organization = organizationFor(user.id);
+    if (!organization || !isEligibleBuyerOrganization(organization))
+      throw new AppError("A buyer organization is required.", 403);
+    if (organization.membership_role === "viewer")
+      throw new AppError(
+        "Read-only organization members cannot request introductions.",
+        403,
+      );
+    const p = parse(
+      z.object({
+        buyer_project_id: idSchema,
+        message: text(20, 3000),
+      }),
+      data,
     );
-    audit(user, deal.id, "Requested confidential access");
-    return { message: "Request sent to the deal team." };
+    const projectMatch = one<{
+      buyer_project_id: string;
+      organization_id: string;
+      project_status: string;
+      score: number;
+      eligible: number;
+    }>(
+      `SELECT dm.buyer_project_id,bp.organization_id,bp.status project_status,
+         dm.score,dm.eligible
+       FROM deal_matches dm
+       JOIN buyer_projects bp ON bp.id=dm.buyer_project_id
+       WHERE dm.deal_id=? AND dm.buyer_project_id=?`,
+      deal.id,
+      p.buyer_project_id,
+    );
+    if (
+      !projectMatch ||
+      projectMatch.organization_id !== organization.id ||
+      projectMatch.project_status !== "active" ||
+      !projectMatch.eligible ||
+      projectMatch.score < qualifiedDiscoveryMinimumScore()
+    )
+      throw new AppError(
+        "This acquisition project is not eligible for the opportunity.",
+        403,
+      );
+    const prior = one<{ status: string }>(
+      `SELECT status FROM introduction_requests
+       WHERE deal_id=? AND buyer_organization_id=? AND status<>'withdrawn'
+       ORDER BY created_at DESC,id DESC LIMIT 1`,
+      deal.id,
+      organization.id,
+    );
+    if (prior)
+      throw new AppError(
+        prior.status === "declined"
+          ? "The deal team declined this organization’s introduction request."
+          : `Your organization already has a ${prior.status} introduction request.`,
+        409,
+      );
+    const id = randomUUID();
+    run(
+      `INSERT INTO introduction_requests(
+        id,deal_id,buyer_organization_id,buyer_project_id,requested_by_user_id,message
+      ) VALUES(?,?,?,?,?,?)`,
+      id,
+      deal.id,
+      organization.id,
+      p.buyer_project_id,
+      user.id,
+      p.message,
+    );
+    audit(user, deal.id, "Requested a Qualified Discovery introduction");
+    return { id, message: "Introduction request sent to the deal team." };
+  }
+  if (action === "withdrawIntroduction") {
+    if (user.role !== "buyer")
+      throw new AppError(
+        "Only buyer organizations can withdraw requests.",
+        403,
+      );
+    const organization = organizationFor(user.id);
+    if (!organization || organization.membership_role === "viewer")
+      throw new AppError("You cannot withdraw this request.", 403);
+    const requestId = parse(idSchema, data.introduction_request_id);
+    const request = one<{ id: string; status: string }>(
+      `SELECT id,status FROM introduction_requests
+       WHERE id=? AND deal_id=? AND buyer_organization_id=?`,
+      requestId,
+      deal.id,
+      organization.id,
+    );
+    if (!request) throw new AppError("Introduction request not found.", 404);
+    if (request.status !== "pending")
+      throw new AppError("Only pending requests can be withdrawn.", 409);
+    run(
+      "UPDATE introduction_requests SET status='withdrawn' WHERE id=? AND status='pending'",
+      request.id,
+    );
+    audit(user, deal.id, "Withdrew a Qualified Discovery introduction");
+    return { message: "Introduction request withdrawn." };
+  }
+  if (action === "reviewIntroduction") {
+    requireManager(user, deal);
+    const p = parse(
+      z.object({
+        introduction_request_id: idSchema,
+        status: z.enum(["approved", "declined"]),
+      }),
+      data,
+    );
+    const request = one<{
+      id: string;
+      status: string;
+      requested_by_user_id: string;
+      buyer_organization_id: string;
+    }>(
+      `SELECT id,status,requested_by_user_id,buyer_organization_id
+       FROM introduction_requests WHERE id=? AND deal_id=?`,
+      p.introduction_request_id,
+      deal.id,
+    );
+    if (!request) throw new AppError("Introduction request not found.", 404);
+    if (request.status !== "pending")
+      throw new AppError(
+        "This introduction request was already reviewed.",
+        409,
+      );
+    const existingAccess = membership(deal.id, request.requested_by_user_id);
+    if (
+      p.status === "approved" &&
+      existingAccess &&
+      ["denied", "revoked"].includes(existingAccess.status)
+    )
+      throw new AppError(
+        "This buyer is currently blocked in the deal access workflow.",
+        409,
+      );
+    const database = db();
+    inImmediateTransaction(database, () => {
+      const updated = database
+        .prepare(
+          `UPDATE introduction_requests SET status=?,reviewed_at=CURRENT_TIMESTAMP,
+             reviewed_by_user_id=? WHERE id=? AND status='pending'`,
+        )
+        .run(p.status, user.id, request.id);
+      if (!updated.changes)
+        throw new AppError(
+          "This introduction request was already reviewed.",
+          409,
+        );
+      if (p.status === "approved" && !existingAccess)
+        database
+          .prepare(
+            `INSERT INTO access(id,deal_id,buyer_id,status,nda_status,notes)
+             VALUES(?,?,?,'requested','not_requested','Approved Qualified Discovery introduction')`,
+          )
+          .run(randomUUID(), deal.id, request.requested_by_user_id);
+      recalculateBuyerOrganizationDealMatches(
+        database,
+        request.buyer_organization_id,
+        deal.id,
+      );
+      audit(
+        user,
+        deal.id,
+        `${p.status === "approved" ? "Approved" : "Declined"} a Qualified Discovery introduction`,
+      );
+    });
+    return {
+      message:
+        p.status === "approved"
+          ? "Introduction approved and moved to Buyer access."
+          : "Introduction declined.",
+    };
+  }
+  if (action === "requestAccess") {
+    throw new AppError(
+      "Qualified Discovery access starts with a matched introduction request.",
+      403,
+    );
   }
   if (action === "updateDeal") {
     requireManager(user, deal);

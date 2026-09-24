@@ -15,6 +15,7 @@ import {
   login,
   isManager,
   dealMatchesForUser,
+  membership,
 } from "../src/lib/service";
 import type { User, Document } from "../src/lib/types";
 
@@ -59,7 +60,7 @@ test("distribution strategy controls discovery and redacts seller identity", () 
     data: {
       title: "Project Distribution",
       company_name: "Distribution Test Company",
-      sector: "Manufacturing",
+      sector: "Business services",
       province: "Ontario",
       city: "Toronto",
       revenue: 7_500_000,
@@ -68,7 +69,7 @@ test("distribution strategy controls discovery and redacts seller identity", () 
       employees: 32,
       founded: 2008,
       description:
-        "A fictional Ontario manufacturer used to verify private distribution controls.",
+        "An Ontario HVAC field-services platform with contracted maintenance and recurring contracts.",
       confidential_summary: "Confidential seller information.",
       transaction_type: "majority_acquisition",
       ownership_percentage_available: 80,
@@ -752,7 +753,7 @@ test("real accounts cannot discover or mutate demonstration deals", () => {
   );
 });
 
-test("demo buyers can preview a published real teaser without crossing the confidential boundary", () => {
+test("demo buyers cannot enumerate registered Qualified Discovery inventory", () => {
   const token = register({
     name: "Preview Owner",
     company: "Preview Owner Inc.",
@@ -863,20 +864,11 @@ test("demo buyers can preview a published real teaser without crossing the confi
 
   const state = workspace(buyer);
   const preview = state.deals.find((deal) => deal.id === dealId);
-  assert.ok(
+  assert.equal(
     preview,
-    "the published real teaser should appear for the demo buyer",
+    undefined,
+    "a shared demo account must not enumerate registered marketplace inventory",
   );
-  assert.equal(preview.preview_only, true);
-  assert.equal(preview.has_access, false);
-  assert.equal(preview.access_status, "none");
-  assert.equal(preview.company_name, "Confidential company");
-  assert.equal(preview.city, "");
-  assert.equal(preview.employees, 0);
-  assert.equal(preview.founded, 0);
-  assert.equal(preview.confidential_summary, "");
-  assert.equal(preview.owner_id, "");
-  assert.equal(preview.advisor_id, null);
   assert.equal(
     state.advisors.some((advisor) => advisor.id === realAdvisor.id),
     true,
@@ -1637,5 +1629,255 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
     workspace(buyerB).access.some((item) => item.deal_id === deal.id),
     false,
     "passing must not create a transaction access relationship",
+  );
+});
+
+test("Qualified Discovery requires an eligible project and seller-approved introduction", () => {
+  const suffix = Date.now();
+  const password = "qualified-discovery-password-2026";
+  const buyerToken = register({
+    name: "Qualified Buyer",
+    company: `Qualified Capital ${suffix}`,
+    email: `qualified-buyer-${suffix}@example.test`,
+    role: "buyer",
+    password,
+  });
+  const qualifiedBuyer = sessionUser(buyerToken)!;
+  const project = mutate(qualifiedBuyer, {
+    action: "createBuyerProject",
+    data: {
+      name: `Project Discovery ${suffix}`,
+      status: "active",
+      thesis:
+        "Acquire majority positions in profitable Ontario technology platforms with recurring revenue.",
+      min_revenue: 4_000_000,
+      max_revenue: 12_000_000,
+      min_ebitda: 750_000,
+      max_ebitda: 3_000_000,
+      min_enterprise_value: 7_000_000,
+      max_enterprise_value: 18_000_000,
+      ownership_preference: "majority",
+      transaction_type: "majority_acquisition",
+      sectors: ["Technology"],
+      provinces: ["Ontario"],
+      keywords: ["recurring revenue"],
+    },
+  });
+  const lowMatchToken = register({
+    name: "Unmatched Buyer",
+    company: `Unmatched Capital ${suffix}`,
+    email: `unmatched-buyer-${suffix}@example.test`,
+    role: "buyer",
+    password,
+  });
+  const unmatchedBuyer = sessionUser(lowMatchToken)!;
+  mutate(unmatchedBuyer, {
+    action: "createBuyerProject",
+    data: {
+      name: `Project Pacific ${suffix}`,
+      status: "active",
+      thesis: "Minority investments in small British Columbia retailers.",
+      min_revenue: 100_000,
+      max_revenue: 500_000,
+      min_ebitda: 0,
+      max_ebitda: 50_000,
+      min_enterprise_value: 100_000,
+      max_enterprise_value: 600_000,
+      ownership_preference: "minority",
+      transaction_type: "minority_investment",
+      sectors: ["Consumer & retail"],
+      provinces: ["British Columbia"],
+      keywords: ["retail"],
+    },
+  });
+  const sellerToken = register({
+    name: "Discovery Seller",
+    company: `Discovery Software ${suffix}`,
+    email: `discovery-seller-${suffix}@example.test`,
+    role: "owner",
+    password,
+  });
+  const seller = sessionUser(sellerToken)!;
+  const createDiscoveryDeal = (title: string) => {
+    const result = mutate(seller, {
+      action: "createDeal",
+      data: {
+        title,
+        company_name: `Discovery Software ${suffix}`,
+        sector: "Technology",
+        province: "Ontario",
+        city: "Toronto",
+        revenue: 8_000_000,
+        ebitda: 1_600_000,
+        asking_price: 12_000_000,
+        employees: 34,
+        founded: 2012,
+        description:
+          "A profitable vertical software platform with recurring revenue and durable Canadian customers.",
+        confidential_summary:
+          "The company name, customer list, and owner identity are confidential.",
+        transaction_type: "majority_acquisition",
+        ownership_percentage_available: 80,
+        seller_rollover_possible: true,
+        seller_financing_possible: false,
+        management_transition: "Founder available for a transition period.",
+        reason_for_transaction: "Planned succession.",
+        min_expected_value: 10_000_000,
+        max_expected_value: 14_000_000,
+        distribution_mode: "qualified_discovery",
+        financial_year: 2025,
+        gross_profit: 5_000_000,
+        financial_is_projected: false,
+      },
+    });
+    mutate(seller, {
+      action: "updateDeal",
+      data: {
+        deal_id: result.id,
+        stage: "On market",
+        published: true,
+        distribution_mode: "qualified_discovery",
+      },
+    });
+    return result.id!;
+  };
+
+  const declinedDealId = createDiscoveryDeal(
+    `Project Qualified Discovery ${suffix}`,
+  );
+  const discovery = workspace(qualifiedBuyer).deals.find(
+    (deal) => deal.id === declinedDealId,
+  );
+  assert.ok(discovery);
+  assert.equal(discovery.matched_project_id, project.id);
+  assert.equal(discovery.matched_project_name, `Project Discovery ${suffix}`);
+  assert.ok((discovery.match_score || 0) >= 70);
+  assert.ok(discovery.match_reasons?.includes("industry"));
+  assert.equal(discovery.company_name, "Confidential company");
+  assert.equal(discovery.owner_id, "");
+  assert.equal(
+    workspace(unmatchedBuyer).deals.some((deal) => deal.id === declinedDealId),
+    false,
+    "buyers below the configured threshold cannot enumerate the deal",
+  );
+  assert.throws(
+    () =>
+      mutate(qualifiedBuyer, {
+        action: "requestAccess",
+        data: { deal_id: declinedDealId },
+      }),
+    /matched introduction request/,
+  );
+
+  const message =
+    "We operate two Canadian software platforms and have committed equity for a majority acquisition.";
+  let request = mutate(qualifiedBuyer, {
+    action: "requestIntroduction",
+    data: {
+      deal_id: declinedDealId,
+      buyer_project_id: project.id,
+      message,
+    },
+  });
+  let sellerRequest = workspace(seller).introduction_requests.find(
+    (candidate) => candidate.id === request.id,
+  );
+  assert.ok(sellerRequest);
+  assert.equal(sellerRequest.message, message);
+  assert.equal(sellerRequest.status, "pending");
+  assert.equal(sellerRequest.match_score, discovery.match_score);
+  assert.equal(
+    workspace(unmatchedBuyer).introduction_requests.some(
+      (candidate) => candidate.id === request.id,
+    ),
+    false,
+  );
+  mutate(qualifiedBuyer, {
+    action: "withdrawIntroduction",
+    data: {
+      deal_id: declinedDealId,
+      introduction_request_id: request.id,
+    },
+  });
+  assert.equal(
+    workspace(qualifiedBuyer).introduction_requests.find(
+      (candidate) => candidate.id === request.id,
+    )?.status,
+    "withdrawn",
+  );
+  request = mutate(qualifiedBuyer, {
+    action: "requestIntroduction",
+    data: {
+      deal_id: declinedDealId,
+      buyer_project_id: project.id,
+      message,
+    },
+  });
+  sellerRequest = workspace(seller).introduction_requests.find(
+    (candidate) => candidate.id === request.id,
+  );
+  assert.equal(sellerRequest?.status, "pending");
+  mutate(seller, {
+    action: "reviewIntroduction",
+    data: {
+      deal_id: declinedDealId,
+      introduction_request_id: request.id,
+      status: "declined",
+    },
+  });
+  assert.equal(
+    workspace(qualifiedBuyer).introduction_requests.find(
+      (candidate) => candidate.id === request.id,
+    )?.status,
+    "declined",
+  );
+  assert.throws(
+    () =>
+      mutate(qualifiedBuyer, {
+        action: "requestIntroduction",
+        data: {
+          deal_id: declinedDealId,
+          buyer_project_id: project.id,
+          message,
+        },
+      }),
+    /declined/,
+    "a declined organization cannot retry around the seller decision",
+  );
+  assert.equal(membership(declinedDealId, qualifiedBuyer.id), undefined);
+
+  const approvedDealId = createDiscoveryDeal(
+    `Project Approved Discovery ${suffix}`,
+  );
+  const approvedRequest = mutate(qualifiedBuyer, {
+    action: "requestIntroduction",
+    data: {
+      deal_id: approvedDealId,
+      buyer_project_id: project.id,
+      message,
+    },
+  });
+  mutate(seller, {
+    action: "reviewIntroduction",
+    data: {
+      deal_id: approvedDealId,
+      introduction_request_id: approvedRequest.id,
+      status: "approved",
+    },
+  });
+  assert.equal(
+    membership(approvedDealId, qualifiedBuyer.id)?.status,
+    "requested",
+  );
+  const approvedTeaser = workspace(qualifiedBuyer).deals.find(
+    (deal) => deal.id === approvedDealId,
+  )!;
+  assert.equal(approvedTeaser.company_name, "Confidential company");
+  assert.equal(approvedTeaser.has_access, false);
+  assert.equal(
+    workspace(qualifiedBuyer).introduction_requests.find(
+      (candidate) => candidate.id === approvedRequest.id,
+    )?.status,
+    "approved",
   );
 });

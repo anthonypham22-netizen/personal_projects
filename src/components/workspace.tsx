@@ -66,6 +66,7 @@ import {
   type Access,
   type DealMatch,
   type DealOutreachRecipient,
+  type IntroductionRequest,
 } from "@/lib/types";
 
 const buyerOrganizationTypes = new Set<string>(BUYER_ORGANIZATION_TYPES);
@@ -167,9 +168,13 @@ function Status({ value }: { value: string }) {
           "contacted",
         ].includes(value)
           ? "badge-green"
-          : ["requested", "nda_pending", "LOI review", "Under review"].includes(
-                value,
-              )
+          : [
+                "requested",
+                "pending",
+                "nda_pending",
+                "LOI review",
+                "Under review",
+              ].includes(value)
             ? "badge-amber"
             : ["revoked", "denied", "Not proceeding", "excluded"].includes(
                   value,
@@ -508,7 +513,7 @@ export function Workspace({
   };
   const nav = [
     { id: "overview", label: "Overview", Icon: LayoutDashboard },
-    { id: "opportunities", label: "Opportunities", Icon: Compass },
+    { id: "opportunities", label: "Discover", Icon: Compass },
     ...(buyerOrganizationTypes.has(data.organization.organization_type)
       ? [
           {
@@ -1405,6 +1410,91 @@ function DealTable({ deals }: { deals: Deal[] }) {
     </div>
   );
 }
+function IntroductionRequestControl({
+  deal,
+  request,
+}: {
+  deal: Deal;
+  request?: IntroductionRequest;
+}) {
+  const { data, act, busy } = useWorkspace();
+  const [open, setOpen] = useState(false);
+  if (request) {
+    return (
+      <div className="introduction-state">
+        <div>
+          <Status value={request.status} />
+          <p>
+            {request.status === "pending"
+              ? "The deal team is reviewing your introduction."
+              : request.status === "approved"
+                ? request.requested_by_user_id === data.user.id
+                  ? "Approved. Continue in My pipeline to begin the access workflow."
+                  : `Approved for ${request.requested_by_user_name}, who can continue in My pipeline.`
+                : request.status === "declined"
+                  ? "The deal team is not proceeding with your organization."
+                  : "Your organization withdrew this request."}
+          </p>
+        </div>
+        {request.status === "pending" && (
+          <button
+            className="button button-quiet button-small"
+            disabled={busy}
+            onClick={() =>
+              void act("withdrawIntroduction", {
+                deal_id: deal.id,
+                introduction_request_id: request.id,
+              })
+            }
+          >
+            Withdraw
+          </button>
+        )}
+      </div>
+    );
+  }
+  if (!deal.matched_project_id) return null;
+  return open ? (
+    <div className="introduction-form">
+      <MutationForm
+        action="requestIntroduction"
+        extra={{
+          deal_id: deal.id,
+          buyer_project_id: deal.matched_project_id,
+        }}
+        label="Send request"
+        onSuccess={() => setOpen(false)}
+      >
+        <label>
+          Why are you interested, and why are you a credible acquirer?
+          <textarea
+            name="message"
+            minLength={20}
+            maxLength={3000}
+            required
+            placeholder="Share your relevant acquisition or operating experience and capital readiness."
+          />
+        </label>
+        <button
+          className="text-link request-cancel"
+          type="button"
+          onClick={() => setOpen(false)}
+        >
+          Cancel
+        </button>
+      </MutationForm>
+    </div>
+  ) : (
+    <button
+      className="button button-green w-full"
+      onClick={() => setOpen(true)}
+    >
+      Request introduction
+      <Handshake size={16} />
+    </button>
+  );
+}
+
 function Opportunities() {
   const { data } = useWorkspace();
   const [q, setQ] = useState(""),
@@ -1414,10 +1504,18 @@ function Opportunities() {
   for (const recipient of data.deal_outreach)
     if (!privateOutreachByDeal.has(recipient.deal_id))
       privateOutreachByDeal.set(recipient.deal_id, recipient);
+  const introductionByDeal = new Map(
+    data.introduction_requests.map((request) => [request.deal_id, request]),
+  );
   const deals = data.deals
     .filter(
       (d) =>
-        (d.published || privateOutreachByDeal.has(d.id)) &&
+        (data.user.role !== "buyer"
+          ? !!d.published
+          : privateOutreachByDeal.has(d.id) ||
+            (d.published &&
+              d.distribution_mode === "qualified_discovery" &&
+              !!d.matched_project_id)) &&
         (!q ||
           `${d.title} ${d.description} ${d.sector}`
             .toLowerCase()
@@ -1426,18 +1524,108 @@ function Opportunities() {
         (!sector || d.sector === sector),
     )
     .sort((a, b) => (b.match_score || 0) - (a.match_score || 0));
+  const privateDeals =
+    data.user.role === "buyer"
+      ? deals.filter((deal) => privateOutreachByDeal.has(deal.id))
+      : [];
+  const discoveryDeals =
+    data.user.role === "buyer"
+      ? deals.filter((deal) => !privateOutreachByDeal.has(deal.id))
+      : deals;
+  const cards = (items: Deal[]) => (
+    <div className="deal-grid">
+      {items.map((d) => {
+        const privateOutreach = privateOutreachByDeal.get(d.id);
+        const introduction = introductionByDeal.get(d.id);
+        return (
+          <article className="deal-card" key={d.id}>
+            <Link className="deal-card-link" href={`/app/deals/${d.id}`}>
+              <div className="deal-card-top">
+                <span className="icon-tile">
+                  <Building2 size={23} />
+                </span>
+                {data.user.role === "buyer" ? (
+                  privateOutreach ? (
+                    ["pursued", "passed"].includes(privateOutreach.status) ? (
+                      <Status value={privateOutreach.status} />
+                    ) : (
+                      <span className="badge badge-green">
+                        Private invitation
+                      </span>
+                    )
+                  ) : (
+                    <span className="match-badge">
+                      <strong>{d.match_score}%</strong>
+                      <span>match</span>
+                    </span>
+                  )
+                ) : (
+                  <Status value={d.stage} />
+                )}
+              </div>
+              {d.matched_project_name && (
+                <p className="project-kicker">{d.matched_project_name}</p>
+              )}
+              <h2>{d.title}</h2>
+              <p className="muted flex items-center gap-1">
+                <MapPin size={13} />
+                {d.province} · {d.sector}
+              </p>
+              <p className="description">{d.description}</p>
+              <div className="deal-card-metrics">
+                <div>
+                  <span>Annual revenue</span>
+                  <strong>{money(d.revenue)}</strong>
+                </div>
+                <div>
+                  <span>EBITDA</span>
+                  <strong>{money(d.ebitda)}</strong>
+                </div>
+              </div>
+              {d.matched_project_id && d.match_reasons?.length ? (
+                <div className="match-ledger">
+                  <strong>Why this matches you</strong>
+                  <div>
+                    {d.match_reasons.slice(0, 4).map((reason) => (
+                      <span key={reason}>
+                        <Check size={13} />
+                        {matchDimensionLabel(reason)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <div className="deal-card-footer">
+                <span>
+                  {d.has_access
+                    ? "Open deal room"
+                    : privateOutreach
+                      ? "Review private invitation"
+                      : "Review anonymized teaser"}
+                </span>
+                <ArrowUpRight size={18} />
+              </div>
+            </Link>
+            {!privateOutreach && data.user.role === "buyer" && (
+              <IntroductionRequestControl deal={d} request={introduction} />
+            )}
+          </article>
+        );
+      })}
+    </div>
+  );
   return (
     <>
       <Heading
-        title="Find your next opportunity."
+        title="Discover qualified opportunities."
         description={
           data.user.role === "buyer"
-            ? "Confidential Canadian businesses, ranked against your acquisition criteria."
+            ? `Only anonymized Canadian mandates matched to an active acquisition project at ${data.qualified_discovery_min_score}% or higher.`
             : "Published teasers from your mandates. Buyer discovery is available in the buyer portal."
         }
         eyebrow="PRIVATE DEAL NETWORK"
       >
-        <Link className="button button-quiet" href="/app/settings">
+        <Link className="button button-quiet" href="/app/projects">
           <SlidersHorizontal size={16} />
           Acquisition criteria
         </Link>
@@ -1477,72 +1665,47 @@ function Opportunities() {
         {deals.length} {deals.length === 1 ? "opportunity" : "opportunities"} ·
         All financial figures in CAD
       </p>
-      <div className="deal-grid">
-        {deals.map((d) => {
-          const privateOutreach = privateOutreachByDeal.get(d.id);
-          return (
-            <Link className="deal-card" key={d.id} href={`/app/deals/${d.id}`}>
-              <div className="deal-card-top">
-                <span className="icon-tile">
-                  <Building2 size={23} />
-                </span>
-                {data.user.role === "buyer" ? (
-                  privateOutreach ? (
-                    ["pursued", "passed"].includes(privateOutreach.status) ? (
-                      <Status value={privateOutreach.status} />
-                    ) : (
-                      <span className="badge badge-green">New opportunity</span>
-                    )
-                  ) : d.preview_only ? (
-                    <span className="badge badge-amber">Preview only</span>
-                  ) : (
-                    <span
-                      className="badge badge-green"
-                      title={d.match_reasons?.join(",")}
-                    >
-                      {d.match_score}% criteria fit
-                    </span>
-                  )
-                ) : (
-                  <Status value={d.stage} />
-                )}
-              </div>
-              <h2>{d.title}</h2>
-              <p className="muted flex items-center gap-1">
-                <MapPin size={13} />
-                {d.province} · {d.sector}
+      {privateDeals.length > 0 && (
+        <section className="discovery-section" aria-labelledby="private-title">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">SELLER SELECTED</p>
+              <h2 id="private-title">Private invitations</h2>
+            </div>
+            <span>{privateDeals.length}</span>
+          </div>
+          {cards(privateDeals)}
+        </section>
+      )}
+      {discoveryDeals.length > 0 && (
+        <section
+          className="discovery-section"
+          aria-labelledby="discovery-title"
+        >
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">
+                {data.user.role === "buyer"
+                  ? "QUALIFIED DISCOVERY"
+                  : "PUBLISHED TEASERS"}
               </p>
-              <p className="description">{d.description}</p>
-              <div className="deal-card-metrics">
-                <div>
-                  <span>Annual revenue</span>
-                  <strong>{money(d.revenue)}</strong>
-                </div>
-                <div>
-                  <span>EBITDA</span>
-                  <strong>{money(d.ebitda)}</strong>
-                </div>
-              </div>
-              <div className="deal-card-footer">
-                <span>
-                  {d.has_access
-                    ? "Open deal room"
-                    : privateOutreach
-                      ? "Review private invitation"
-                      : d.preview_only
-                        ? "Preview teaser"
-                        : "View opportunity"}
-                </span>
-                <ArrowUpRight size={18} />
-              </div>
-            </Link>
-          );
-        })}
-      </div>
+              <h2 id="discovery-title">
+                {data.user.role === "buyer"
+                  ? "Matched to your mandates"
+                  : "Your published mandates"}
+              </h2>
+            </div>
+            <span>{discoveryDeals.length}</span>
+          </div>
+          {cards(discoveryDeals)}
+        </section>
+      )}
       {!deals.length && (
         <Empty
-          title="No opportunities match yet"
-          body="Try another industry, province, or search term."
+          title="No qualified matches yet"
+          body="Activate an acquisition project or refine its criteria. New opportunities appear only when they meet the discovery threshold."
+          href={data.user.role === "buyer" ? "/app/projects" : undefined}
+          label="Review acquisition projects"
         />
       )}
     </>
@@ -1969,40 +2132,25 @@ function BuyerNextStep({
   access?: Access;
   onOpenDataRoom: () => void;
 }) {
+  const { data } = useWorkspace();
+  const introduction = data.introduction_requests.find(
+    (request) => request.deal_id === deal.id,
+  );
   let content: ReactNode;
   if (!access) {
-    content = deal.preview_only ? (
+    content = deal.matched_project_id ? (
       <>
-        <span className="badge badge-amber">Preview only</span>
-        <p className="mt-4 text-sm leading-relaxed text-slate-600">
-          This shared preview account can view published teasers but cannot
-          contact active deal teams. Create or sign in with your own buyer
-          account to request confidential access.
+        <p className="muted mb-4">
+          Introductions are reviewed by the seller before the NDA and deal-room
+          workflow begins.
         </p>
-        <Link
-          href="/register?role=buyer"
-          className="button button-green mt-5 w-full"
-        >
-          Create a buyer account
-          <ArrowRight size={16} />
-        </Link>
+        <IntroductionRequestControl deal={deal} request={introduction} />
       </>
     ) : (
-      <MutationForm
-        action="requestAccess"
-        extra={{ deal_id: deal.id }}
-        label="Request confidential access"
-      >
-        <p className="muted">Introduce yourself to the deal team.</p>
-        <label>
-          Your interest
-          <textarea
-            name="notes"
-            maxLength={2000}
-            placeholder="Tell the owner or advisor why this opportunity fits."
-          />
-        </label>
-      </MutationForm>
+      <p className="muted">
+        This opportunity is not currently eligible for your active acquisition
+        projects.
+      </p>
     );
   } else {
     content = (
@@ -2204,6 +2352,7 @@ function DealDetail({ deal }: { deal: Deal }) {
         "Messages",
         "Tasks",
         "LOIs",
+        ...(deal.can_manage ? ["Introduction requests"] : []),
         ...(deal.can_manage ? ["Buyer access"] : []),
       ]
     : [
@@ -2477,7 +2626,9 @@ function DealDetail({ deal }: { deal: Deal }) {
                   <p className="muted mb-4">
                     {primaryOutreach
                       ? `Matched to ${primaryOutreach.buyer_project_name}`
-                      : "Rules-based criteria match"}
+                      : deal.matched_project_name
+                        ? `Matched to ${deal.matched_project_name}`
+                        : "Rules-based criteria match"}
                   </p>
                   {(primaryOutreach?.match_reasons ?? deal.match_reasons)?.map(
                     (r) => (
@@ -2486,12 +2637,14 @@ function DealDetail({ deal }: { deal: Deal }) {
                         key={r}
                       >
                         <Check size={15} className="text-emerald-700" />
-                        {primaryOutreach ? matchDimensionLabel(r) : r}
+                        {primaryOutreach || deal.matched_project_id
+                          ? matchDimensionLabel(r)
+                          : r}
                       </p>
                     ),
                   )}
                   <Link
-                    href="/app/settings"
+                    href="/app/projects"
                     className="mt-4 inline-block text-sm text-emerald-800 underline"
                   >
                     Edit your criteria
@@ -2505,6 +2658,8 @@ function DealDetail({ deal }: { deal: Deal }) {
         <MandateSettings deal={deal} />
       ) : tab === "Recommended buyers" ? (
         <RecommendedBuyers deal={deal} />
+      ) : tab === "Introduction requests" ? (
+        <IntroductionRequests deal={deal} />
       ) : tab === "Data room" ? (
         <>
           <DocumentTable
@@ -2570,6 +2725,125 @@ function DealDetail({ deal }: { deal: Deal }) {
           </details>
         )}
     </>
+  );
+}
+
+function IntroductionRequests({ deal }: { deal: Deal }) {
+  const { data, act, busy } = useWorkspace();
+  const requests = data.introduction_requests.filter(
+    (request) => request.deal_id === deal.id,
+  );
+  return (
+    <section
+      className="introduction-workbench"
+      aria-labelledby="introduction-requests-title"
+    >
+      <div className="recommendation-header">
+        <div>
+          <p className="eyebrow">SELLER CONTROLLED</p>
+          <h2 id="introduction-requests-title">Introduction requests</h2>
+          <p>
+            Review the buyer’s matched mandate and credibility statement before
+            moving them into NDA and deal access.
+          </p>
+        </div>
+        <span className="recommendation-count">
+          {requests.filter((request) => request.status === "pending").length}{" "}
+          pending
+        </span>
+      </div>
+      {requests.length ? (
+        <div className="introduction-list">
+          {requests.map((request) => (
+            <article className="introduction-card" key={request.id}>
+              <div className="introduction-card-header">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3>{request.buyer_organization_name}</h3>
+                    <Status value={request.status} />
+                    <Status
+                      value={request.buyer_organization_verification_status}
+                    />
+                  </div>
+                  <p>
+                    {request.buyer_project_name} · Requested by{" "}
+                    {request.requested_by_user_name}
+                  </p>
+                </div>
+                <div className="introduction-score">
+                  <strong>{request.match_score}%</strong>
+                  <span>match</span>
+                </div>
+              </div>
+              <div className="introduction-proof">
+                <span>
+                  <ShieldCheck size={15} />
+                  {request.buyer_organization_verification_status === "verified"
+                    ? "Verified firm"
+                    : "Verification pending"}
+                </span>
+                <span>
+                  <Handshake size={15} />
+                  {request.relevant_acquisitions} relevant previous{" "}
+                  {request.relevant_acquisitions === 1
+                    ? "acquisition"
+                    : "acquisitions"}
+                </span>
+              </div>
+              <blockquote>{request.message}</blockquote>
+              <div className="match-ledger seller-match-ledger">
+                <strong>Why this buyer matched</strong>
+                <div>
+                  {request.match_reasons.map((reason) => (
+                    <span key={reason}>
+                      <Check size={13} />
+                      {matchDimensionLabel(reason)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              {request.status === "pending" && (
+                <div className="introduction-actions">
+                  <button
+                    className="button button-green"
+                    disabled={busy}
+                    onClick={() =>
+                      void act("reviewIntroduction", {
+                        deal_id: deal.id,
+                        introduction_request_id: request.id,
+                        status: "approved",
+                      })
+                    }
+                  >
+                    <Check size={16} />
+                    Approve introduction
+                  </button>
+                  <button
+                    className="button button-quiet"
+                    disabled={busy}
+                    onClick={() =>
+                      void act("reviewIntroduction", {
+                        deal_id: deal.id,
+                        introduction_request_id: request.id,
+                        status: "declined",
+                      })
+                    }
+                  >
+                    <X size={16} />
+                    Decline
+                  </button>
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <Empty
+          title="No introduction requests yet"
+          body="Eligible buyers can request an introduction only after this mandate is published in Qualified Discovery."
+        />
+      )}
+    </section>
   );
 }
 

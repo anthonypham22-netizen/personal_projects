@@ -232,7 +232,7 @@ test("seller shares a private teaser and sees the buyer response", async ({
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/opportunities");
   const invitation = page.getByRole("link", { name: new RegExp(dealTitle) });
-  await expect(invitation).toContainText("New opportunity");
+  await expect(invitation).toContainText("Private invitation");
   await invitation.click();
   const privatePanel = page.locator(".private-invitation");
   await expect(privatePanel).toContainText(projectName);
@@ -257,6 +257,205 @@ test("seller shares a private teaser and sees the buyer response", async ({
   await expect(page.getByText("Pursued", { exact: true })).toBeVisible();
 });
 
+test("matched buyer requests a seller-controlled Qualified Discovery introduction", async ({
+  page,
+}) => {
+  const suffix = Date.now();
+  const headers = { Origin: "http://localhost:3000" };
+  const password = "qualified-discovery-password-2026";
+  const buyerEmail = `discovery-buyer-${suffix}@example.test`;
+  const sellerEmail = `discovery-seller-${suffix}@example.test`;
+  const buyerFirm = `Maple Ridge Capital ${suffix}`;
+  const projectName = `Project Discovery ${suffix}`;
+  const dealTitle = `Project Northstar ${suffix}`;
+
+  expect(
+    (
+      await page.request.post("/api/auth", {
+        headers,
+        data: {
+          action: "register",
+          name: "Discovery Buyer",
+          company: buyerFirm,
+          email: buyerEmail,
+          password,
+          role: "buyer",
+        },
+      })
+    ).status(),
+  ).toBe(200);
+  const projectResponse = await page.request.post("/api/workspace", {
+    headers,
+    data: {
+      action: "createBuyerProject",
+      data: {
+        name: projectName,
+        status: "active",
+        thesis:
+          "Acquire majority positions in profitable Ontario technology platforms with recurring revenue.",
+        min_revenue: 4_000_000,
+        max_revenue: 12_000_000,
+        min_ebitda: 750_000,
+        max_ebitda: 3_000_000,
+        min_enterprise_value: 7_000_000,
+        max_enterprise_value: 18_000_000,
+        ownership_preference: "majority",
+        transaction_type: "majority_acquisition",
+        sectors: ["Technology"],
+        provinces: ["Ontario"],
+        keywords: ["recurring revenue"],
+      },
+    },
+  });
+  expect(projectResponse.status()).toBe(200);
+  await page.request.post("/api/auth", {
+    headers,
+    data: { action: "logout" },
+  });
+
+  expect(
+    (
+      await page.request.post("/api/auth", {
+        headers,
+        data: {
+          action: "register",
+          name: "Discovery Seller",
+          company: `Northstar Software ${suffix}`,
+          email: sellerEmail,
+          password,
+          role: "owner",
+        },
+      })
+    ).status(),
+  ).toBe(200);
+  const dealResponse = await page.request.post("/api/workspace", {
+    headers,
+    data: {
+      action: "createDeal",
+      data: {
+        title: dealTitle,
+        company_name: `Northstar Software ${suffix}`,
+        sector: "Technology",
+        province: "Ontario",
+        city: "Toronto",
+        revenue: 8_000_000,
+        ebitda: 1_600_000,
+        asking_price: 12_000_000,
+        employees: 34,
+        founded: 2012,
+        description:
+          "A profitable vertical software platform with recurring revenue and durable Canadian customers.",
+        confidential_summary:
+          "Confidential owner, customer, and product information.",
+        transaction_type: "majority_acquisition",
+        ownership_percentage_available: 80,
+        seller_rollover_possible: true,
+        management_transition: "Founder available for transition.",
+        reason_for_transaction: "Planned succession.",
+        min_expected_value: 10_000_000,
+        max_expected_value: 14_000_000,
+        distribution_mode: "qualified_discovery",
+        financial_year: 2025,
+      },
+    },
+  });
+  expect(dealResponse.status()).toBe(200);
+  const dealId = (await dealResponse.json()).id;
+  expect(
+    (
+      await page.request.post("/api/workspace", {
+        headers,
+        data: {
+          action: "updateDeal",
+          data: {
+            deal_id: dealId,
+            stage: "On market",
+            published: true,
+            distribution_mode: "qualified_discovery",
+          },
+        },
+      })
+    ).status(),
+  ).toBe(200);
+  await page.request.post("/api/auth", {
+    headers,
+    data: { action: "logout" },
+  });
+
+  await page.goto("/login");
+  await page.getByLabel("Email address").fill(buyerEmail);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goto("/app/opportunities");
+  await expect(
+    page.getByRole("heading", { name: "Discover qualified opportunities." }),
+  ).toBeVisible();
+  const discoveryCard = page
+    .getByRole("article")
+    .filter({ hasText: dealTitle });
+  await expect(discoveryCard).toContainText(projectName);
+  await expect(discoveryCard).toContainText("Why this matches you");
+  await expect(discoveryCard).toContainText("Industry");
+  await expect(
+    page.getByText(`Northstar Software ${suffix}`, { exact: true }),
+  ).toHaveCount(0);
+  await discoveryCard
+    .getByRole("button", { name: "Request introduction" })
+    .click();
+  await discoveryCard
+    .getByLabel("Why are you interested, and why are you a credible acquirer?")
+    .fill(
+      "We operate two Canadian software companies and have committed equity for this majority acquisition.",
+    );
+  await discoveryCard.getByRole("button", { name: "Send request" }).click();
+  await expect(discoveryCard).toContainText("Pending");
+
+  await page.request.post("/api/auth", {
+    headers,
+    data: { action: "logout" },
+  });
+  await page.goto("/login");
+  await page.getByLabel("Email address").fill(sellerEmail);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goto(`/app/deals/${dealId}`);
+  await page
+    .getByRole("button", { name: "Introduction requests", exact: true })
+    .click();
+  const requestCard = page.getByRole("article").filter({ hasText: buyerFirm });
+  await expect(requestCard).toContainText(projectName);
+  await expect(requestCard).toContainText(/\d+%/);
+  await requestCard
+    .getByRole("button", { name: "Approve introduction" })
+    .click();
+  await expect(requestCard).toContainText("Approved");
+
+  await page.request.post("/api/auth", {
+    headers,
+    data: { action: "logout" },
+  });
+  await page.goto("/login");
+  await page.getByLabel("Email address").fill(buyerEmail);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  const buyerWorkspace = await (
+    await page.request.get("/api/workspace")
+  ).json();
+  expect(
+    buyerWorkspace.access.find(
+      (candidate: { deal_id: string }) => candidate.deal_id === dealId,
+    )?.status,
+  ).toBe("requested");
+  expect(
+    buyerWorkspace.deals.find(
+      (candidate: { id: string }) => candidate.id === dealId,
+    ).company_name,
+  ).toBe("Confidential company");
+});
+
 test("buyer sees approved documents but cannot download seller-only files", async ({
   page,
 }) => {
@@ -279,7 +478,7 @@ test("buyer sees approved documents but cannot download seller-only files", asyn
   ).toBeVisible();
 });
 
-test("buyer demo previews a published owner listing without confidential actions", async ({
+test("buyer demo cannot enumerate registered Qualified Discovery inventory", async ({
   page,
 }) => {
   const suffix = Date.now();
@@ -353,16 +552,7 @@ test("buyer demo previews a published owner listing without confidential actions
   ).toBeVisible();
   await page.goto("/app/opportunities");
   const card = page.getByRole("link", { name: new RegExp(project) });
-  await expect(card).toContainText("Preview only");
-  await card.click();
-  await expect(
-    page.getByText("This shared preview account can view published teasers", {
-      exact: false,
-    }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Request confidential access" }),
-  ).toHaveCount(0);
+  await expect(card).toHaveCount(0);
   await expect(
     page.getByText("Preview Owner Inc.", { exact: true }),
   ).toHaveCount(0);

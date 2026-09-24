@@ -207,6 +207,8 @@ export type Deal = {
   preview_only?: boolean;
   match_score?: number;
   match_reasons?: string[];
+  matched_project_id?: string;
+  matched_project_name?: string;
 };
 export type DealFinancial = {
   id: string;
@@ -286,6 +288,34 @@ export type DealOutreachRecipient = {
   passed_at: string | null;
   match_score: number;
   match_reasons: string[];
+};
+export const INTRODUCTION_REQUEST_STATUSES = [
+  "pending",
+  "approved",
+  "declined",
+  "withdrawn",
+] as const;
+export type IntroductionRequestStatus =
+  (typeof INTRODUCTION_REQUEST_STATUSES)[number];
+export type IntroductionRequest = {
+  id: string;
+  deal_id: string;
+  deal_title: string;
+  buyer_organization_id: string;
+  buyer_organization_name: string;
+  buyer_organization_verification_status: string;
+  buyer_project_id: string;
+  buyer_project_name: string;
+  requested_by_user_id: string;
+  requested_by_user_name: string;
+  message: string;
+  status: IntroductionRequestStatus;
+  created_at: string;
+  reviewed_at: string | null;
+  reviewed_by_user_id: string | null;
+  match_score: number;
+  match_reasons: string[];
+  relevant_acquisitions: number;
 };
 export type Access = {
   id: string;
@@ -367,6 +397,8 @@ export type WorkspaceData = {
   deals: Deal[];
   deal_matches?: DealMatch[];
   deal_outreach: DealOutreachRecipient[];
+  introduction_requests: IntroductionRequest[];
+  qualified_discovery_min_score: number;
   deal_financials: DealFinancial[];
   access: Access[];
   documents: Document[];
