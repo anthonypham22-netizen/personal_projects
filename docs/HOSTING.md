@@ -36,15 +36,15 @@ Canadian-region infrastructure is a hosting choice, not a claim of legal complia
 
 Use two deployments before inviting real users. GitHub Environments are recommended once GitHub Actions performs deployments, but they do not host the application themselves; each environment still needs its own server, domain, persistent storage, and secrets.
 
-| Boundary | Staging | Production |
-| --- | --- | --- |
-| Purpose | Test releases and complete fictional transaction walkthroughs | Real customer accounts and approved live data |
-| Example domain | `staging.your-domain.ca` | `app.your-domain.ca` |
-| `ALLOW_DEMO` | `true` | `false` |
-| Registration | Controlled test accounts | Invitation-only initially is recommended |
-| Data | Fictional only | Live data under approved operating controls |
-| Storage | Dedicated staging volume and backups | Dedicated production volume and backups |
-| GitHub protection | Automatic deployment is acceptable | Required reviewer approval before deployment |
+| Boundary          | Staging                                                       | Production                                    |
+| ----------------- | ------------------------------------------------------------- | --------------------------------------------- |
+| Purpose           | Test releases and complete fictional transaction walkthroughs | Real customer accounts and approved live data |
+| Example domain    | `staging.your-domain.ca`                                      | `app.your-domain.ca`                          |
+| `ALLOW_DEMO`      | `true`                                                        | `false`                                       |
+| Registration      | Controlled test accounts                                      | Invitation-only initially is recommended      |
+| Data              | Fictional only                                                | Live data under approved operating controls   |
+| Storage           | Dedicated staging volume and backups                          | Dedicated production volume and backups       |
+| GitHub protection | Automatic deployment is acceptable                            | Required reviewer approval before deployment  |
 
 Never share a database, upload directory, encryption secret, session secret, or backup destination between staging and production. Promote the same reviewed commit or container image from staging to production; do not copy the staging database into production.
 
@@ -129,7 +129,7 @@ docker compose ps
 docker compose logs --tail=100 app
 ```
 
-Keep the previous known-good commit and backup. A code rollback alone may not be compatible with later database migrations. This release initializes tables but does not include a versioned migration framework yet.
+Keep the previous known-good commit and backup. A code rollback alone may not be compatible with later database migrations. The application runs versioned migrations automatically at startup and records completed versions in `schema_migrations`; always test upgrades and restores against a production-like database copy before deployment.
 
 ## What changes for a larger launch
 

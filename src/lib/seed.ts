@@ -265,10 +265,171 @@ function syncDemoBuyerProjects(d: DatabaseSync) {
   }
 }
 
+const demoMandates = [
+  {
+    id: "cedar",
+    transactionType: "full_acquisition",
+    ownership: 100,
+    rollover: 1,
+    financing: 0,
+    transition:
+      "The founder is available for a six-to-twelve-month transition, with timing to be agreed with the successful buyer.",
+    reason:
+      "The shareholder is planning an orderly succession and wants a partner that will retain the team and customer relationships.",
+    minValue: 8_500_000,
+    maxValue: 10_500_000,
+    financials: [
+      [2024, 7_760_000, 1_630_000, 3_280_000, 0],
+      [2025, 8_400_000, 1_800_000, 3_690_000, 0],
+      [2026, 9_050_000, 1_980_000, 4_030_000, 1],
+    ],
+  },
+  {
+    id: "summit",
+    transactionType: "full_acquisition",
+    ownership: 100,
+    rollover: 1,
+    financing: 1,
+    transition:
+      "The shareholder will support customer and supplier introductions for up to six months after closing.",
+    reason:
+      "The owner is pursuing retirement and is seeking a well-capitalized operator to support the next stage of growth.",
+    minValue: 12_000_000,
+    maxValue: 15_000_000,
+    financials: [
+      [2024, 11_370_000, 2_010_000, 3_590_000, 0],
+      [2025, 12_600_000, 2_400_000, 4_095_000, 0],
+      [2026, 13_350_000, 2_620_000, 4_430_000, 1],
+    ],
+  },
+  {
+    id: "harbour",
+    transactionType: "majority_acquisition",
+    ownership: 80,
+    rollover: 1,
+    financing: 0,
+    transition:
+      "The clinical leadership team intends to remain. The founder is open to a continuing board role.",
+    reason:
+      "The group is looking for a growth partner to fund new clinics and broaden practitioner recruitment.",
+    minValue: 4_500_000,
+    maxValue: 5_750_000,
+    financials: [
+      [2024, 3_610_000, 690_000, 2_210_000, 0],
+      [2025, 4_200_000, 820_000, 2_600_000, 0],
+      [2026, 4_760_000, 960_000, 2_970_000, 1],
+    ],
+  },
+  {
+    id: "maple",
+    transactionType: "full_acquisition",
+    ownership: 100,
+    rollover: 1,
+    financing: 0,
+    transition:
+      "The founder is willing to remain in a commercial leadership role for up to eighteen months.",
+    reason:
+      "The shareholder wants a strategic partner with the resources to expand the managed-services platform nationally.",
+    minValue: 4_000_000,
+    maxValue: 5_250_000,
+    financials: [
+      [2024, 2_580_000, 485_000, 1_410_000, 0],
+      [2025, 3_100_000, 620_000, 1_740_000, 0],
+      [2026, 3_620_000, 755_000, 2_060_000, 1],
+    ],
+  },
+  {
+    id: "atlas",
+    transactionType: "recapitalization",
+    ownership: 65,
+    rollover: 1,
+    financing: 1,
+    transition:
+      "The operating management team will remain and the founder is open to retaining a meaningful minority interest.",
+    reason:
+      "The company is evaluating a recapitalization to fund fleet renewal and expansion into adjacent corridors.",
+    minValue: 10_000_000,
+    maxValue: 13_500_000,
+    financials: [
+      [2024, 15_900_000, 1_780_000, 4_420_000, 0],
+      [2025, 17_800_000, 2_100_000, 5_050_000, 0],
+      [2026, 19_200_000, 2_360_000, 5_510_000, 1],
+    ],
+  },
+  {
+    id: "birch",
+    transactionType: "full_acquisition",
+    ownership: 100,
+    rollover: 0,
+    financing: 1,
+    transition:
+      "The family will provide a structured handover while the existing plant manager continues to lead operations.",
+    reason:
+      "The family shareholders are planning succession and prefer a buyer that will maintain the Halifax production base.",
+    minValue: 5_500_000,
+    maxValue: 7_000_000,
+    financials: [
+      [2024, 4_940_000, 790_000, 1_920_000, 0],
+      [2025, 5_600_000, 940_000, 2_230_000, 0],
+      [2026, 6_250_000, 1_080_000, 2_510_000, 1],
+    ],
+  },
+] as const;
+
+function syncDemoMandates(d: DatabaseSync) {
+  const tableExists = d
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='deal_financials'",
+    )
+    .get();
+  if (!tableExists) return;
+
+  const update = d.prepare(`UPDATE deals SET
+    transaction_type=?,ownership_percentage_available=?,seller_rollover_possible=?,
+    seller_financing_possible=?,management_transition=?,reason_for_transaction=?,
+    min_expected_value=COALESCE(min_expected_value,?),
+    max_expected_value=COALESCE(max_expected_value,?)
+    WHERE id=?`);
+  const insertFinancial = d.prepare(`INSERT OR IGNORE INTO deal_financials(
+    id,deal_id,fiscal_year,period_type,revenue,ebitda,gross_profit,is_projected
+  ) VALUES(?,?,?,'annual',?,?,?,?)`);
+
+  for (const mandate of demoMandates) {
+    update.run(
+      mandate.transactionType,
+      mandate.ownership,
+      mandate.rollover,
+      mandate.financing,
+      mandate.transition,
+      mandate.reason,
+      mandate.minValue,
+      mandate.maxValue,
+      mandate.id,
+    );
+    for (const [
+      year,
+      revenue,
+      ebitda,
+      grossProfit,
+      projected,
+    ] of mandate.financials)
+      insertFinancial.run(
+        `${mandate.id}-financial-${year}`,
+        mandate.id,
+        year,
+        revenue,
+        ebitda,
+        grossProfit,
+        projected,
+      );
+  }
+}
+
 export function seed(d: DatabaseSync, directory: string) {
   if (d.prepare("SELECT id FROM users WHERE id='demo-advisor'").get()) {
     syncDemoDocuments(d, directory);
     syncDemoBuyerProjects(d);
+    syncDemoMandates(d);
     return;
   }
   d.exec("BEGIN IMMEDIATE");
@@ -463,10 +624,27 @@ export function seed(d: DatabaseSync, directory: string) {
         "On market",
       ],
     ];
-    for (const row of deals)
-      d.prepare(
-        "INSERT INTO deals(id,title,company_name,sector,province,city,revenue,ebitda,asking_price,employees,founded,description,confidential_summary,stage,owner_id,advisor_id,published,owner_organization_id,advisor_organization_id,created_by_user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'demo-owner','demo-advisor',?,'org-demo-owner','org-demo-advisor','demo-owner')",
-      ).run(...row, row[13] === "Preparation" ? 0 : 1);
+    const hasDistributionMode = d
+      .prepare("PRAGMA table_info(deals)")
+      .all()
+      .some(
+        (column) => (column as { name?: string }).name === "distribution_mode",
+      );
+    const insertDeal = d.prepare(
+      hasDistributionMode
+        ? "INSERT INTO deals(id,title,company_name,sector,province,city,revenue,ebitda,asking_price,employees,founded,description,confidential_summary,stage,owner_id,advisor_id,published,owner_organization_id,advisor_organization_id,created_by_user_id,distribution_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'demo-owner','demo-advisor',?,'org-demo-owner','org-demo-advisor','demo-owner',?)"
+        : "INSERT INTO deals(id,title,company_name,sector,province,city,revenue,ebitda,asking_price,employees,founded,description,confidential_summary,stage,owner_id,advisor_id,published,owner_organization_id,advisor_organization_id,created_by_user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'demo-owner','demo-advisor',?,'org-demo-owner','org-demo-advisor','demo-owner')",
+    );
+    for (const row of deals) {
+      const published = row[13] === "Preparation" ? 0 : 1;
+      if (hasDistributionMode)
+        insertDeal.run(
+          ...row,
+          published,
+          published ? "qualified_discovery" : "private_outreach",
+        );
+      else insertDeal.run(...row, published);
+    }
     for (const [id, deal, buyer, status, nda] of [
       ["access-cedar", "cedar", "demo-buyer", "approved", "verified"],
       ["access-summit", "summit", "demo-buyer", "approved", "verified"],
@@ -519,6 +697,7 @@ export function seed(d: DatabaseSync, directory: string) {
       "INSERT INTO activity(id,deal_id,actor_id,action) VALUES('activity-1','cedar','demo-advisor','Opened the demonstration deal room'),('activity-2','summit','demo-buyer','Submitted an indicative LOI'),('activity-3','harbour','demo-buyer','Requested confidential access')",
     ).run();
     syncDemoBuyerProjects(d);
+    syncDemoMandates(d);
     d.exec("COMMIT");
   } catch (e) {
     d.exec("ROLLBACK");

@@ -4,7 +4,7 @@ A standalone website and SaaS MVP for Canadian M&A, targeting businesses with ap
 
 ## Current delivery status
 
-The local MVP now installs and builds successfully. TypeScript checking, all 17 backend tests, and all 6 Chromium browser checks pass. The initial installation approval error did not recur on the approved retry; `package-lock.json` is now present. The local preview is available while `npm run dev` is running. This is not a publicly deployed or production-ready release; Docker deployment, broader security review, and live-launch requirements remain outstanding. See [validation status](docs/VALIDATION.md).
+The local MVP now installs and builds successfully. TypeScript checking, all 31 backend tests, and all 12 Chromium browser checks pass. `package-lock.json` is present. The local preview is available while `npm run dev` is running. This is not a publicly deployed or production-ready release; Docker deployment, broader security review, and live-launch requirements remain outstanding. See [validation status](docs/VALIDATION.md).
 
 ## Start locally
 
@@ -38,8 +38,8 @@ After the initial successful `npm install`, keep and commit the generated `packa
 | `/app/opportunities`  | Anonymous teasers; search and industry/province filters; explained criteria matching         |
 | `/app/projects`       | Buyer acquisition projects with normalized sector, province, keyword, and financial criteria |
 | `/app/deals`          | List and board views of mandates or acquisition pipeline                                     |
-| `/app/new`            | Private mandate creation by owners or advisors                                               |
-| `/app/deals/:id`      | Deal overview, confidential information, documents, conversations, tasks, LOIs, buyer access |
+| `/app/new`            | Grouped private sell-side mandate creation by owners or advisors                             |
+| `/app/deals/:id`      | Mandate settings, financial history, documents, conversations, tasks, LOIs, and buyer access |
 | `/app/documents`      | Permission-filtered document library with search and download                                |
 | `/app/messages`       | Buyer-specific conversations with the seller's deal team                                     |
 | `/app/tasks`          | Open/completed diligence tasks                                                               |
@@ -51,7 +51,7 @@ After the initial successful `npm install`, keep and commit the generated `packa
 
 1. Register an **owner** and create a private mandate. Use a code name in its teaser; company name and confidential summary remain gated.
 2. Register an **advisor** in another browser profile. The owner can appoint that advisor from the mandate's Overview tab. An advisor may instead create the mandate and use **Connect the business owner** after the owner registers.
-3. Review the anonymous teaser and publish it. Signed-in buyers see its province, industry, financial summary, and description. Avoid identifying details in these public-to-members fields.
+3. Choose the mandate's distribution strategy. `invite_only` and `private_outreach` remain outside buyer discovery; `qualified_discovery` allows signed-in buyers to see the anonymized teaser and request access once it is published. Avoid identifying details in teaser fields.
 4. Register a **buyer**, set criteria, and request access. Alternatively, the owner/advisor can invite an existing buyer account by email from Buyer access. Invitations are in-app only.
 5. As owner/advisor, choose **Proceed to NDA**. Exchange and sign the agreement outside the app. Either participant can upload the externally executed NDA for the specific buyer.
 6. The seller's team selects the uploaded NDA, explicitly confirms their review, and grants confidential access. Uploading alone never grants access or represents a signature.
@@ -70,10 +70,11 @@ After the initial successful `npm install`, keep and commit the generated `packa
 - `data/northlane.sqlite` and `data/uploads/` contain application records and files. Never commit these paths.
 - The visible product is branded Succera. Legacy internal identifiers (`northlane.sqlite`, `northlane_session`, package name, and Docker volume) are intentionally retained so the rebrand does not reset existing data, deployments, or sessions. Previously seeded demo files are not rewritten; newly generated examples use Succera.
 - Versioned SQLite migrations run automatically at startup from `src/lib/migrations/`. Applied versions are recorded in `schema_migrations`, so fresh and existing databases follow the same upgrade path and migration history remains directly inspectable.
+- Sell-side mandates capture transaction type, ownership available, rollover and financing flexibility, transition context, expected value, and one of three controlled distribution modes. Annual, year-to-date, and trailing-twelve-month financial periods are stored separately in `deal_financials`.
 - Database-backed rate limits are basic per-account protection, not a complete anti-abuse system.
 - Matching is a transparent three-factor comparison: industry, province, and revenue range. A percentage is criteria fit, not investment suitability or a statistical probability.
 
-Each account now belongs to an organization with an `owner`, `admin`, `member`, or read-only `viewer` membership. Existing and demo accounts are migrated into one-person organizations without merging firms that happen to share a name. Owner and advisor mandates are organization-scoped while retaining their original user creator/representative fields for compatibility and audit context. Firm owners and administrators can edit the firm profile; membership invitations and role administration are intentionally not included yet. Buyer organizations can create multiple private acquisition projects with normalized filters and draft/active/paused/archived lifecycle states. Buyer deal access remains individual, and project-to-opportunity matching is intentionally deferred to a later phase.
+Each account belongs to an organization with an `owner`, `admin`, `member`, or read-only `viewer` membership. Existing and demo accounts are migrated into one-person organizations without merging firms that happen to share a name. Owner and advisor mandates are organization-scoped while retaining their original user creator/representative fields for compatibility and audit context. Firm owners and administrators can edit the firm profile; membership invitations and role administration are intentionally not included yet. Buyer organizations can create multiple private acquisition projects with normalized filters and draft/active/paused/archived lifecycle states. Buyer deal access remains individual. Phase 3 adds structured sell-side mandates and historical financial periods; project-to-opportunity matching is intentionally deferred to a later phase.
 
 ## Verification
 

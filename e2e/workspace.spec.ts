@@ -44,6 +44,30 @@ test("advisor can navigate mandates and record a shared diligence task", async (
   ).toBeVisible();
 });
 
+test("owner can review financial history and choose a distribution strategy", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Owner demo" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Welcome back, Jamie." }),
+  ).toBeVisible();
+  await page.goto("/app/deals/cedar");
+  await expect(
+    page.getByRole("heading", { name: "Historical financials" }),
+  ).toBeVisible();
+  await expect(page.getByText("FY2025", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Mandate settings" }).click();
+  const distribution = page.getByLabel("Distribution strategy");
+  await expect(distribution).toHaveValue("qualified_discovery");
+  await distribution.selectOption("invite_only");
+  await page
+    .getByRole("button", { name: "Save mandate details", exact: true })
+    .click();
+  await expect(distribution).toHaveValue("invite_only");
+});
+
 test("buyer sees approved documents but cannot download seller-only files", async ({
   page,
 }) => {
@@ -114,7 +138,12 @@ test("buyer demo previews a published owner listing without confidential actions
         headers,
         data: {
           action: "updateDeal",
-          data: { deal_id: id, stage: "On market", published: true },
+          data: {
+            deal_id: id,
+            stage: "On market",
+            published: true,
+            distribution_mode: "qualified_discovery",
+          },
         },
       })
     ).status(),

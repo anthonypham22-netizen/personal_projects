@@ -55,6 +55,21 @@ export const BUYER_PROJECT_OWNERSHIP_PREFERENCES = [
 ] as const;
 export type BuyerProjectOwnershipPreference =
   (typeof BUYER_PROJECT_OWNERSHIP_PREFERENCES)[number];
+export const DEAL_TRANSACTION_TYPES = BUYER_PROJECT_TRANSACTION_TYPES;
+export type DealTransactionType = (typeof DEAL_TRANSACTION_TYPES)[number];
+export const DEAL_DISTRIBUTION_MODES = [
+  "invite_only",
+  "private_outreach",
+  "qualified_discovery",
+] as const;
+export type DealDistributionMode = (typeof DEAL_DISTRIBUTION_MODES)[number];
+export const DEAL_FINANCIAL_PERIOD_TYPES = [
+  "annual",
+  "trailing_twelve_months",
+  "year_to_date",
+] as const;
+export type DealFinancialPeriodType =
+  (typeof DEAL_FINANCIAL_PERIOD_TYPES)[number];
 export type BuyerProject = {
   id: string;
   organization_id: string;
@@ -168,6 +183,15 @@ export type Deal = {
   founded: number;
   description: string;
   confidential_summary: string;
+  transaction_type: DealTransactionType;
+  ownership_percentage_available: number;
+  seller_rollover_possible: number;
+  seller_financing_possible: number;
+  management_transition: string;
+  reason_for_transaction: string;
+  min_expected_value: number | null;
+  max_expected_value: number | null;
+  distribution_mode: DealDistributionMode;
   owner_id: string;
   advisor_id: string | null;
   owner_organization_id: string | null;
@@ -183,6 +207,18 @@ export type Deal = {
   preview_only?: boolean;
   match_score?: number;
   match_reasons?: string[];
+};
+export type DealFinancial = {
+  id: string;
+  deal_id: string;
+  fiscal_year: number;
+  period_type: DealFinancialPeriodType;
+  revenue: number;
+  ebitda: number;
+  gross_profit: number | null;
+  is_projected: number;
+  created_at: string;
+  updated_at: string;
 };
 export type Access = {
   id: string;
@@ -262,6 +298,7 @@ export type WorkspaceData = {
   buyer_projects: BuyerProject[];
   can_manage_buyer_projects: boolean;
   deals: Deal[];
+  deal_financials: DealFinancial[];
   access: Access[];
   documents: Document[];
   messages: Message[];

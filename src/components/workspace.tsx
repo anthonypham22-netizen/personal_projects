@@ -52,6 +52,9 @@ import {
   BUYER_PROJECT_STATUSES,
   BUYER_PROJECT_TRANSACTION_TYPES,
   BUYER_PROJECT_OWNERSHIP_PREFERENCES,
+  DEAL_TRANSACTION_TYPES,
+  DEAL_DISTRIBUTION_MODES,
+  DEAL_FINANCIAL_PERIOD_TYPES,
   type WorkspaceData,
   type Deal,
   type BuyerProject,
@@ -77,6 +80,27 @@ const projectOwnershipLabel = (value: string) =>
     minority: "Minority ownership",
     flexible: "Flexible ownership",
   })[value] || statusText(value);
+const distributionModeLabel = (value: string) =>
+  ({
+    invite_only: "Invite only",
+    private_outreach: "Private outreach",
+    qualified_discovery: "Qualified Discovery",
+  })[value] || statusText(value);
+const financialPeriodLabel = (value: string) =>
+  ({
+    annual: "Fiscal year",
+    trailing_twelve_months: "Trailing 12 months",
+    year_to_date: "Year to date",
+  })[value] || statusText(value);
+const expectedValueLabel = (deal: Deal) => {
+  if (deal.min_expected_value === null && deal.max_expected_value === null)
+    return "Not specified";
+  if (deal.min_expected_value === null)
+    return `Up to ${money(deal.max_expected_value!, false)}`;
+  if (deal.max_expected_value === null)
+    return `${money(deal.min_expected_value, false)}+`;
+  return `${money(deal.min_expected_value, false)} – ${money(deal.max_expected_value, false)}`;
+};
 
 type Result = { id?: string; message: string };
 type ContextValue = {
@@ -274,6 +298,33 @@ function SelectField({
           <option key={o}>{o}</option>
         ))}
       </select>
+    </label>
+  );
+}
+function OptionSelectField({
+  label,
+  name,
+  options,
+  value,
+  help,
+}: {
+  label: string;
+  name: string;
+  options: readonly { value: string; label: string }[];
+  value?: string;
+  help?: string;
+}) {
+  return (
+    <label>
+      {label}
+      <select name={name} defaultValue={value || options[0]?.value} required>
+        {options.map((option) => (
+          <option value={option.value} key={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      {help && <span className="field-hint">{help}</span>}
     </label>
   );
 }
@@ -1557,6 +1608,276 @@ function Pipeline() {
     </>
   );
 }
+
+const transactionOptions = DEAL_TRANSACTION_TYPES.map((value) => ({
+  value,
+  label: projectTransactionLabel(value),
+}));
+const distributionOptions = DEAL_DISTRIBUTION_MODES.map((value) => ({
+  value,
+  label: distributionModeLabel(value),
+}));
+const financialPeriodOptions = DEAL_FINANCIAL_PERIOD_TYPES.map((value) => ({
+  value,
+  label: financialPeriodLabel(value),
+}));
+
+function MandateDetailFields({
+  deal,
+  includeInitialFinancial = false,
+}: {
+  deal?: Deal;
+  includeInitialFinancial?: boolean;
+}) {
+  return (
+    <div className="mandate-form">
+      <fieldset className="mandate-section">
+        <legend>Company profile</legend>
+        <p>
+          Identity details remain restricted to the deal team and approved
+          buyers.
+        </p>
+        <div className="form-grid">
+          <Field
+            label="Project name (shown in teaser)"
+            name="title"
+            value={deal?.title}
+            help="Use a code name, e.g. Project Cedar."
+          />
+          <Field
+            label="Legal company name (confidential)"
+            name="company_name"
+            value={deal?.company_name}
+          />
+          <Field
+            label="Year founded"
+            name="founded"
+            type="number"
+            value={deal?.founded ?? 2010}
+            min={1800}
+            max={new Date().getFullYear()}
+          />
+          <Field
+            label="Employees (confidential)"
+            name="employees"
+            type="number"
+            value={deal?.employees}
+            min={0}
+          />
+        </div>
+      </fieldset>
+
+      <fieldset className="mandate-section">
+        <legend>Financials</legend>
+        <p>
+          Enter Canadian-dollar amounts. A historical period is created with
+          every new mandate.
+        </p>
+        <div className="form-grid">
+          <Field
+            label="Annual revenue (CAD)"
+            name="revenue"
+            type="number"
+            value={deal?.revenue}
+            min={0}
+          />
+          <Field
+            label="EBITDA (CAD)"
+            name="ebitda"
+            type="number"
+            value={deal?.ebitda}
+            min={0}
+          />
+          <Field
+            label="Indicative asking price (CAD)"
+            name="asking_price"
+            type="number"
+            value={deal?.asking_price}
+            min={0}
+          />
+          {includeInitialFinancial && (
+            <>
+              <Field
+                label="Gross profit (CAD, optional)"
+                name="gross_profit"
+                type="number"
+                required={false}
+              />
+              <Field
+                label="Financial year"
+                name="financial_year"
+                type="number"
+                value={new Date().getFullYear() - 1}
+                min={1800}
+                max={2200}
+              />
+              <label className="checkbox-label financial-projection">
+                <input type="checkbox" name="financial_is_projected" />
+                This period is projected
+              </label>
+            </>
+          )}
+        </div>
+      </fieldset>
+
+      <fieldset className="mandate-section">
+        <legend>Transaction objectives</legend>
+        <p>
+          Capture the structure and outcomes the seller is prepared to consider.
+        </p>
+        <div className="form-grid">
+          <OptionSelectField
+            label="Transaction type"
+            name="transaction_type"
+            options={transactionOptions}
+            value={deal?.transaction_type ?? "full_acquisition"}
+          />
+          <Field
+            label="Ownership available (%)"
+            name="ownership_percentage_available"
+            type="number"
+            value={deal?.ownership_percentage_available ?? 100}
+            min={0}
+            max={100}
+          />
+          <Field
+            label="Minimum expected value (CAD, optional)"
+            name="min_expected_value"
+            type="number"
+            value={deal?.min_expected_value ?? ""}
+            min={0}
+            required={false}
+          />
+          <Field
+            label="Maximum expected value (CAD, optional)"
+            name="max_expected_value"
+            type="number"
+            value={deal?.max_expected_value ?? ""}
+            min={0}
+            required={false}
+          />
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              name="seller_rollover_possible"
+              defaultChecked={Boolean(deal?.seller_rollover_possible)}
+            />
+            Seller rollover may be considered
+          </label>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              name="seller_financing_possible"
+              defaultChecked={Boolean(deal?.seller_financing_possible)}
+            />
+            Seller financing may be considered
+          </label>
+          <label className="full">
+            Management transition
+            <textarea
+              name="management_transition"
+              maxLength={2000}
+              defaultValue={deal?.management_transition}
+              placeholder="Describe the founder and management team's expected role after closing."
+            />
+          </label>
+          <label className="full">
+            Reason for transaction
+            <textarea
+              name="reason_for_transaction"
+              maxLength={2000}
+              defaultValue={deal?.reason_for_transaction}
+              placeholder="Summarize the seller's objectives without exposing identifying details."
+            />
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset className="mandate-section">
+        <legend>Geography and industry</legend>
+        <div className="form-grid">
+          <SelectField
+            label="Industry"
+            name="sector"
+            options={SECTORS}
+            value={deal?.sector ?? SECTORS[0]}
+          />
+          <SelectField
+            label="Province or territory"
+            name="province"
+            options={PROVINCES}
+            value={deal?.province ?? "Ontario"}
+          />
+          <Field label="City (confidential)" name="city" value={deal?.city} />
+        </div>
+      </fieldset>
+
+      <fieldset className="mandate-section">
+        <legend>Confidential teaser</legend>
+        <p>
+          The anonymous teaser can be shared only according to the distribution
+          strategy below.
+        </p>
+        <div className="form-grid">
+          <label className="full">
+            Anonymous teaser
+            <textarea
+              name="description"
+              minLength={30}
+              maxLength={1200}
+              required
+              defaultValue={deal?.description}
+              placeholder="Describe the opportunity without identifying the company, its customers, or its employees."
+            />
+            <span className="field-hint">
+              Never include the company name, website, owner identity, customer
+              names, or employee names.
+            </span>
+          </label>
+          <label className="full">
+            Confidential business summary
+            <textarea
+              name="confidential_summary"
+              maxLength={5000}
+              defaultValue={deal?.confidential_summary}
+              placeholder="Details available only to the deal team and approved buyers."
+            />
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset className="mandate-section distribution-section">
+        <legend>Distribution strategy</legend>
+        <OptionSelectField
+          label="Distribution strategy"
+          name="distribution_mode"
+          options={distributionOptions}
+          value={deal?.distribution_mode ?? "private_outreach"}
+        />
+        <div className="distribution-guide">
+          <p>
+            <strong>Invite only</strong>
+            <span>Only buyers explicitly invited by the deal team.</span>
+          </p>
+          <p>
+            <strong>Private outreach</strong>
+            <span>
+              Controlled outreach managed by the seller or advisor. This is the
+              default.
+            </span>
+          </p>
+          <p>
+            <strong>Qualified Discovery</strong>
+            <span>
+              Signed-in buyers may see the anonymous teaser and request access.
+            </span>
+          </p>
+        </div>
+      </fieldset>
+    </div>
+  );
+}
+
 function NewDeal({ onCreated }: { onCreated: (id: string) => void }) {
   const { data } = useWorkspace();
   if (data.user.role === "buyer")
@@ -1582,86 +1903,14 @@ function NewDeal({ onCreated }: { onCreated: (id: string) => void }) {
         title="Create a private mandate."
         description="Start with the essentials. Your teaser stays private until you publish it."
       />
-      <Panel title="Business profile">
+      <Panel title="Sell-side mandate">
         <div className="panel-body">
           <MutationForm
             action="createDeal"
             label="Create private mandate"
             onSuccess={(r) => r.id && onCreated(r.id)}
           >
-            <div className="form-grid">
-              <Field
-                label="Project name (shown in teaser)"
-                name="title"
-                help="Use a code name, e.g. Project Cedar."
-              />
-              <Field
-                label="Legal company name (confidential)"
-                name="company_name"
-              />
-              <SelectField
-                label="Industry"
-                name="sector"
-                options={SECTORS}
-                value={SECTORS[0]}
-              />
-              <SelectField
-                label="Province or territory"
-                name="province"
-                options={PROVINCES}
-                value="Ontario"
-              />
-              <Field label="City (confidential)" name="city" />
-              <Field
-                label="Year founded"
-                name="founded"
-                type="number"
-                value={2010}
-                min={1800}
-                max={new Date().getFullYear()}
-              />
-              <Field
-                label="Annual revenue (CAD)"
-                name="revenue"
-                type="number"
-                min={0}
-              />
-              <Field label="EBITDA (CAD)" name="ebitda" type="number" min={0} />
-              <Field
-                label="Indicative asking price (CAD)"
-                name="asking_price"
-                type="number"
-                min={0}
-              />
-              <Field
-                label="Employees (confidential)"
-                name="employees"
-                type="number"
-                min={0}
-              />
-              <label className="full">
-                Anonymous teaser
-                <textarea
-                  name="description"
-                  minLength={30}
-                  maxLength={1200}
-                  required
-                  placeholder="Describe the opportunity without identifying the company, its customers, or its employees."
-                />
-                <span className="field-hint">
-                  Visible to signed-in buyers once published. Financial figures
-                  and province will also be visible.
-                </span>
-              </label>
-              <label className="full">
-                Confidential business summary
-                <textarea
-                  name="confidential_summary"
-                  maxLength={5000}
-                  placeholder="Details available only to the deal team and approved buyers."
-                />
-              </label>
-            </div>
+            <MandateDetailFields includeInitialFinancial />
             {data.user.role === "advisor" && (
               <p className="notice">
                 Only create mandates you are authorized to represent. After
@@ -1752,6 +2001,143 @@ function BuyerNextStep({
   );
 }
 
+function FinancialHistory({
+  deal,
+  manage = false,
+}: {
+  deal: Deal;
+  manage?: boolean;
+}) {
+  const { data } = useWorkspace();
+  const financials = data.deal_financials.filter(
+    (financial) => financial.deal_id === deal.id,
+  );
+  return (
+    <Panel title="Historical financials">
+      {financials.length ? (
+        <div className="table-scroll">
+          <table className="data-table financial-table">
+            <thead>
+              <tr>
+                <th>Period</th>
+                <th>Revenue</th>
+                <th>Gross profit</th>
+                <th>EBITDA</th>
+                <th>Margin</th>
+              </tr>
+            </thead>
+            <tbody>
+              {financials.map((financial) => (
+                <tr key={financial.id}>
+                  <td>
+                    <strong>
+                      {financial.period_type === "annual" ? "FY" : ""}
+                      {financial.fiscal_year}
+                    </strong>
+                    <small>
+                      {financialPeriodLabel(financial.period_type)}
+                      {financial.is_projected ? " · Projected" : ""}
+                    </small>
+                  </td>
+                  <td className="numeric">{money(financial.revenue, false)}</td>
+                  <td className="numeric">
+                    {financial.gross_profit === null
+                      ? "—"
+                      : money(financial.gross_profit, false)}
+                  </td>
+                  <td className="numeric">{money(financial.ebitda, false)}</td>
+                  <td className="numeric">
+                    {financial.revenue
+                      ? `${((financial.ebitda / financial.revenue) * 100).toFixed(1)}%`
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <Empty
+          title="No financial history yet"
+          body="Add the first financial period to give qualified buyers a clearer view of the opportunity."
+        />
+      )}
+      {manage && (
+        <div className="financial-editor">
+          <h3>Add or update a period</h3>
+          <p className="muted">
+            Saving the same year and period type updates the existing record.
+          </p>
+          <MutationForm
+            action="upsertDealFinancial"
+            extra={{ deal_id: deal.id }}
+            label="Save financial period"
+            reset
+          >
+            <div className="form-grid">
+              <Field
+                label="Financial year"
+                name="fiscal_year"
+                type="number"
+                value={new Date().getFullYear()}
+                min={1800}
+                max={2200}
+              />
+              <OptionSelectField
+                label="Period type"
+                name="period_type"
+                options={financialPeriodOptions}
+                value="annual"
+              />
+              <Field
+                label="Revenue (CAD)"
+                name="revenue"
+                type="number"
+                min={0}
+              />
+              <Field label="EBITDA (CAD)" name="ebitda" type="number" />
+              <Field
+                label="Gross profit (CAD, optional)"
+                name="gross_profit"
+                type="number"
+                required={false}
+              />
+              <label className="checkbox-label financial-projection">
+                <input type="checkbox" name="is_projected" />
+                This period is projected
+              </label>
+            </div>
+          </MutationForm>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function MandateSettings({ deal }: { deal: Deal }) {
+  return (
+    <div className="mandate-settings">
+      <Panel title="Mandate details">
+        <div className="panel-body">
+          <p className="notice mandate-notice">
+            Company identity and the confidential summary are restricted to the
+            deal team and approved buyers. Review the anonymous teaser before
+            enabling Qualified Discovery.
+          </p>
+          <MutationForm
+            action="updateDealDetails"
+            extra={{ deal_id: deal.id }}
+            label="Save mandate details"
+          >
+            <MandateDetailFields deal={deal} />
+          </MutationForm>
+        </div>
+      </Panel>
+      <FinancialHistory deal={deal} manage />
+    </div>
+  );
+}
+
 function DealDetail({ deal }: { deal: Deal }) {
   const { data, act, busy } = useWorkspace();
   const [tab, setTab] = useState("Overview");
@@ -1760,6 +2146,7 @@ function DealDetail({ deal }: { deal: Deal }) {
   const tabs = deal.has_access
     ? [
         "Overview",
+        ...(deal.can_manage ? ["Mandate settings"] : []),
         "Data room",
         "Messages",
         "Tasks",
@@ -1840,6 +2227,54 @@ function DealDetail({ deal }: { deal: Deal }) {
                 </dl>
               </div>
             </Panel>
+            <Panel title="Transaction profile">
+              <div className="panel-body">
+                <dl className="detail-metrics transaction-metrics">
+                  <div>
+                    <dt>Transaction type</dt>
+                    <dd>{projectTransactionLabel(deal.transaction_type)}</dd>
+                  </div>
+                  <div>
+                    <dt>Ownership available</dt>
+                    <dd>{deal.ownership_percentage_available}%</dd>
+                  </div>
+                  <div>
+                    <dt>Expected value</dt>
+                    <dd>{expectedValueLabel(deal)}</dd>
+                  </div>
+                  <div>
+                    <dt>Seller flexibility</dt>
+                    <dd>
+                      {[
+                        deal.seller_rollover_possible && "Rollover",
+                        deal.seller_financing_possible && "Financing",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || "Not specified"}
+                    </dd>
+                  </div>
+                </dl>
+                {deal.has_access &&
+                  (deal.management_transition ||
+                    deal.reason_for_transaction) && (
+                    <div className="transaction-notes">
+                      {deal.reason_for_transaction && (
+                        <div>
+                          <strong>Reason for transaction</strong>
+                          <p>{deal.reason_for_transaction}</p>
+                        </div>
+                      )}
+                      {deal.management_transition && (
+                        <div>
+                          <strong>Management transition</strong>
+                          <p>{deal.management_transition}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+              </div>
+            </Panel>
+            {deal.has_access && <FinancialHistory deal={deal} />}
             {deal.has_access ? (
               <Panel title="Behind the business">
                 <div className="panel-body">
@@ -1904,8 +2339,9 @@ function DealDetail({ deal }: { deal: Deal }) {
                         Publish the anonymous teaser to signed-in buyers
                       </label>
                       <p className="field-hint">
-                        Review the teaser carefully for identifying information
-                        before publishing.
+                        Publishing makes the teaser visible only when the
+                        distribution strategy is Qualified Discovery. Change the
+                        strategy under Mandate settings.
                       </p>
                     </MutationForm>
                   </div>
@@ -1990,6 +2426,8 @@ function DealDetail({ deal }: { deal: Deal }) {
             )}
           </aside>
         </div>
+      ) : tab === "Mandate settings" ? (
+        <MandateSettings deal={deal} />
       ) : tab === "Data room" ? (
         <>
           <DocumentTable

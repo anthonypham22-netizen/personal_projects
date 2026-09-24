@@ -52,6 +52,173 @@ test("buyers receive redacted teasers before confidential approval", () => {
   );
 });
 
+test("distribution strategy controls discovery and redacts seller identity", () => {
+  const result = mutate(owner, {
+    action: "createDeal",
+    data: {
+      title: "Project Distribution",
+      company_name: "Distribution Test Company",
+      sector: "Manufacturing",
+      province: "Ontario",
+      city: "Toronto",
+      revenue: 7_500_000,
+      ebitda: 1_250_000,
+      asking_price: 10_000_000,
+      employees: 32,
+      founded: 2008,
+      description:
+        "A fictional Ontario manufacturer used to verify private distribution controls.",
+      confidential_summary: "Confidential seller information.",
+      transaction_type: "majority_acquisition",
+      ownership_percentage_available: 80,
+      seller_rollover_possible: true,
+      seller_financing_possible: false,
+      management_transition: "Founder available for a twelve-month transition.",
+      reason_for_transaction: "Planned founder succession.",
+      min_expected_value: 9_000_000,
+      max_expected_value: 11_000_000,
+      distribution_mode: "private_outreach",
+      financial_year: 2025,
+      gross_profit: 3_100_000,
+      financial_is_projected: false,
+    },
+  });
+  const dealId = result.id!;
+
+  mutate(owner, {
+    action: "updateDeal",
+    data: {
+      deal_id: dealId,
+      stage: "On market",
+      published: true,
+      distribution_mode: "private_outreach",
+    },
+  });
+  assert.equal(
+    workspace(buyer).deals.some((deal) => deal.id === dealId),
+    false,
+    "private outreach must not enter buyer discovery",
+  );
+
+  mutate(owner, {
+    action: "updateDeal",
+    data: {
+      deal_id: dealId,
+      stage: "On market",
+      published: true,
+      distribution_mode: "qualified_discovery",
+    },
+  });
+  const discovery = workspace(buyer).deals.find((deal) => deal.id === dealId)!;
+  assert.ok(discovery);
+  assert.equal(discovery.company_name, "Confidential company");
+  assert.equal(discovery.owner_id, "");
+  assert.equal(discovery.advisor_id, null);
+  assert.equal(discovery.owner_organization_id, null);
+  assert.equal(discovery.advisor_organization_id, null);
+  assert.equal(discovery.created_by_user_id, null);
+  assert.equal(discovery.confidential_summary, "");
+  assert.equal(discovery.city, "");
+  assert.equal(discovery.management_transition, "");
+  assert.equal(discovery.reason_for_transaction, "");
+  assert.equal(
+    workspace(buyer).deal_financials.some(
+      (financial) =>
+        financial.deal_id === dealId && financial.fiscal_year === 2025,
+    ),
+    false,
+    "detailed financial history remains gated until NDA approval",
+  );
+});
+
+test("deal teams can maintain transaction objectives and historical financials", () => {
+  const result = mutate(owner, {
+    action: "createDeal",
+    data: {
+      title: "Project Financial History",
+      company_name: "Financial History Company",
+      sector: "Business services",
+      province: "Alberta",
+      city: "Calgary",
+      revenue: 6_000_000,
+      ebitda: 900_000,
+      asking_price: 7_500_000,
+      employees: 24,
+      founded: 2012,
+      description:
+        "A fictional services company used to verify structured mandate financials.",
+      confidential_summary: "Confidential operating information.",
+      financial_year: 2025,
+    },
+  });
+  const dealId = result.id!;
+
+  mutate(owner, {
+    action: "updateDealDetails",
+    data: {
+      deal_id: dealId,
+      transaction_type: "recapitalization",
+      ownership_percentage_available: 65,
+      seller_rollover_possible: true,
+      seller_financing_possible: true,
+      management_transition: "Management will remain after closing.",
+      reason_for_transaction: "Growth capital and shareholder liquidity.",
+      min_expected_value: 7_000_000,
+      max_expected_value: 9_000_000,
+    },
+  });
+  const updated = getDeal(dealId);
+  assert.equal(updated.transaction_type, "recapitalization");
+  assert.equal(updated.ownership_percentage_available, 65);
+  assert.equal(updated.seller_rollover_possible, 1);
+  assert.equal(updated.seller_financing_possible, 1);
+  assert.equal(updated.min_expected_value, 7_000_000);
+  assert.equal(updated.max_expected_value, 9_000_000);
+
+  const financialResult = mutate(owner, {
+    action: "upsertDealFinancial",
+    data: {
+      deal_id: dealId,
+      fiscal_year: 2024,
+      period_type: "annual",
+      revenue: 5_400_000,
+      ebitda: 760_000,
+      gross_profit: 2_100_000,
+      is_projected: false,
+    },
+  });
+  const financial = workspace(owner).deal_financials.find(
+    (row) => row.id === financialResult.id,
+  )!;
+  assert.equal(financial.revenue, 5_400_000);
+  assert.equal(financial.gross_profit, 2_100_000);
+  assert.throws(
+    () =>
+      mutate(buyer, {
+        action: "upsertDealFinancial",
+        data: {
+          deal_id: dealId,
+          fiscal_year: 2024,
+          period_type: "annual",
+          revenue: 1,
+          ebitda: 1,
+          gross_profit: 1,
+          is_projected: false,
+        },
+      }),
+    /Only an authorized deal-team member/,
+  );
+
+  mutate(owner, {
+    action: "deleteDealFinancial",
+    data: { deal_id: dealId, financial_id: financial.id },
+  });
+  assert.equal(
+    workspace(owner).deal_financials.some((row) => row.id === financial.id),
+    false,
+  );
+});
+
 test("document authorization separates buyers and seller-only records", () => {
   const deal = getDeal("cedar");
   const financial = one<Document>(
@@ -632,7 +799,12 @@ test("demo buyers can preview a published real teaser without crossing the confi
   );
   mutate(realOwner, {
     action: "updateDeal",
-    data: { deal_id: dealId, stage: "On market", published: true },
+    data: {
+      deal_id: dealId,
+      stage: "On market",
+      published: true,
+      distribution_mode: "qualified_discovery",
+    },
   });
 
   run(

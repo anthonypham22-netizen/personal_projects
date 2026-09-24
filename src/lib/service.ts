@@ -11,6 +11,9 @@ import {
   BUYER_PROJECT_STATUSES,
   BUYER_PROJECT_TRANSACTION_TYPES,
   BUYER_PROJECT_OWNERSHIP_PREFERENCES,
+  DEAL_TRANSACTION_TYPES,
+  DEAL_DISTRIBUTION_MODES,
+  DEAL_FINANCIAL_PERIOD_TYPES,
   type User,
   type Deal,
   type Access,
@@ -25,6 +28,7 @@ import {
   type OrganizationMemberRole,
   type OrganizationType,
   type BuyerProject,
+  type DealFinancial,
 } from "./types";
 import { inImmediateTransaction } from "./sqlite-transaction";
 
@@ -41,6 +45,16 @@ export const userColumns =
 const text = (min = 1, max = 200) => z.string().trim().min(min).max(max);
 const idSchema = text(1, 100);
 const amount = z.coerce.number().int().min(0).max(10000000000);
+const optionalAmount = z.preprocess(
+  (value) =>
+    value === "" || value === undefined || value === null ? null : value,
+  amount.nullable(),
+);
+const optionalSignedAmount = z.preprocess(
+  (value) =>
+    value === "" || value === undefined || value === null ? null : value,
+  z.coerce.number().int().min(-10_000_000_000).max(10_000_000_000).nullable(),
+);
 const parse = <T>(schema: z.ZodType<T>, input: unknown): T => {
   const result = schema.safeParse(input);
   if (!result.success)
@@ -307,6 +321,82 @@ export function match(user: User, deal: Deal) {
     match_reasons: reasons,
   };
 }
+
+const dealDetailsFields = {
+  title: text(3, 120),
+  company_name: text(2, 180),
+  sector: z.enum(SECTORS),
+  province: z.enum(PROVINCES),
+  city: text(1, 100),
+  revenue: amount,
+  ebitda: amount,
+  asking_price: amount,
+  employees: z.coerce.number().int().min(0).max(100000),
+  founded: z.coerce.number().int().min(1800).max(new Date().getFullYear()),
+  description: text(30, 1200),
+  confidential_summary: text(0, 5000),
+  transaction_type: z.enum(DEAL_TRANSACTION_TYPES),
+  ownership_percentage_available: z.coerce.number().min(0).max(100),
+  seller_rollover_possible: z.boolean(),
+  seller_financing_possible: z.boolean(),
+  management_transition: text(0, 2000),
+  reason_for_transaction: text(0, 2000),
+  min_expected_value: optionalAmount,
+  max_expected_value: optionalAmount,
+  distribution_mode: z.enum(DEAL_DISTRIBUTION_MODES),
+};
+const dealDetailsSchema = z.object({
+  ...dealDetailsFields,
+  transaction_type:
+    dealDetailsFields.transaction_type.default("full_acquisition"),
+  ownership_percentage_available:
+    dealDetailsFields.ownership_percentage_available.default(100),
+  seller_rollover_possible:
+    dealDetailsFields.seller_rollover_possible.default(false),
+  seller_financing_possible:
+    dealDetailsFields.seller_financing_possible.default(false),
+  management_transition: dealDetailsFields.management_transition.default(""),
+  reason_for_transaction: dealDetailsFields.reason_for_transaction.default(""),
+  min_expected_value: dealDetailsFields.min_expected_value.default(null),
+  max_expected_value: dealDetailsFields.max_expected_value.default(null),
+  distribution_mode:
+    dealDetailsFields.distribution_mode.default("private_outreach"),
+});
+const dealCreateSchema = dealDetailsSchema.extend({
+  financial_year: z.coerce
+    .number()
+    .int()
+    .min(1800)
+    .max(2200)
+    .default(new Date().getFullYear()),
+  gross_profit: optionalSignedAmount.default(null),
+  financial_is_projected: z.boolean().default(false),
+});
+const dealDetailsUpdateSchema = z
+  .object(dealDetailsFields)
+  .partial()
+  .extend({ deal_id: idSchema });
+const dealFinancialSchema = z.object({
+  fiscal_year: z.coerce.number().int().min(1800).max(2200),
+  period_type: z.enum(DEAL_FINANCIAL_PERIOD_TYPES),
+  revenue: amount,
+  ebitda: z.coerce.number().int().min(-10_000_000_000).max(10_000_000_000),
+  gross_profit: optionalSignedAmount,
+  is_projected: z.boolean(),
+});
+const validateExpectedValueRange = (deal: {
+  min_expected_value: number | null;
+  max_expected_value: number | null;
+}) => {
+  if (
+    deal.min_expected_value !== null &&
+    deal.max_expected_value !== null &&
+    deal.min_expected_value > deal.max_expected_value
+  )
+    throw new AppError(
+      "Minimum expected value must not exceed maximum expected value.",
+    );
+};
 
 const buyerOrganizationTypes = new Set<OrganizationType>(
   BUYER_ORGANIZATION_TYPES,
@@ -689,10 +779,10 @@ export function workspace(user: User): WorkspaceData {
   };
   const rawDeals = all<Deal & { owner_is_demo: number }>(
     `SELECT d.*,owner.is_demo owner_is_demo FROM deals d JOIN users owner ON owner.id=d.owner_id
-    WHERE (owner.is_demo=? OR (?='buyer' AND ?=1 AND owner.is_demo=0 AND d.published=1))
+    WHERE (owner.is_demo=? OR (?='buyer' AND ?=1 AND owner.is_demo=0 AND d.published=1 AND d.distribution_mode='qualified_discovery'))
     AND ((d.owner_id=? AND d.owner_organization_id IS NULL) OR (d.advisor_id=? AND d.advisor_organization_id IS NULL)
       OR (?<>'buyer' AND EXISTS (SELECT 1 FROM organization_members om WHERE om.user_id=? AND om.status='active' AND om.organization_id IN (d.owner_organization_id,d.advisor_organization_id)))
-      OR (?='buyer' AND (d.published=1 OR d.id IN (SELECT deal_id FROM access WHERE buyer_id=?))))
+      OR (?='buyer' AND ((d.published=1 AND d.distribution_mode='qualified_discovery') OR d.id IN (SELECT deal_id FROM access WHERE buyer_id=?))))
     ORDER BY d.created_at DESC,d.title`,
     user.is_demo,
     user.role,
@@ -723,6 +813,15 @@ export function workspace(user: User): WorkspaceData {
         founded: 0,
         description: d.description,
         confidential_summary: "",
+        transaction_type: d.transaction_type,
+        ownership_percentage_available: d.ownership_percentage_available,
+        seller_rollover_possible: d.seller_rollover_possible,
+        seller_financing_possible: d.seller_financing_possible,
+        management_transition: "",
+        reason_for_transaction: "",
+        min_expected_value: d.min_expected_value,
+        max_expected_value: d.max_expected_value,
+        distribution_mode: d.distribution_mode,
         owner_id: "",
         advisor_id: null,
         owner_organization_id: null,
@@ -749,6 +848,13 @@ export function workspace(user: User): WorkspaceData {
       employees: allowed ? d.employees : 0,
       founded: allowed ? d.founded : 0,
       confidential_summary: allowed ? d.confidential_summary : "",
+      management_transition: allowed ? d.management_transition : "",
+      reason_for_transaction: allowed ? d.reason_for_transaction : "",
+      owner_id: allowed ? d.owner_id : "",
+      advisor_id: allowed ? d.advisor_id : null,
+      owner_organization_id: allowed ? d.owner_organization_id : null,
+      advisor_organization_id: allowed ? d.advisor_organization_id : null,
+      created_by_user_id: allowed ? d.created_by_user_id : null,
       can_manage: managing,
       can_manage_owner_side: canManageOwnerSideForDeal(d),
       has_access: allowed,
@@ -764,6 +870,14 @@ export function workspace(user: User): WorkspaceData {
   const rawDealById = new Map(rawDeals.map((d) => [d.id, d]));
   const accessibleIds = new Set(
     deals.filter((d) => d.has_access).map((d) => d.id),
+  );
+  const dealFinancials = all<DealFinancial>(
+    `SELECT * FROM deal_financials
+     ORDER BY fiscal_year DESC,
+       CASE period_type WHEN 'annual' THEN 1 WHEN 'trailing_twelve_months' THEN 2 ELSE 3 END`,
+  ).filter(
+    (financial) =>
+      ids.has(financial.deal_id) && accessibleIds.has(financial.deal_id),
   );
   const teamMember = (id: string) => {
     const deal = rawDealById.get(id);
@@ -839,6 +953,7 @@ export function workspace(user: User): WorkspaceData {
       : [],
     can_manage_buyer_projects: canManageBuyerProjects,
     deals,
+    deal_financials: dealFinancials,
     access,
     documents,
     messages,
@@ -991,28 +1106,10 @@ export function mutate(
   if (action === "createDeal") {
     if (user.role === "buyer")
       throw new AppError("Only owners and advisors can create mandates.", 403);
-    const p = parse(
-      z.object({
-        title: text(3, 120),
-        company_name: text(2, 180),
-        sector: z.enum(SECTORS),
-        province: z.enum(PROVINCES),
-        city: text(1, 100),
-        revenue: amount,
-        ebitda: amount,
-        asking_price: amount,
-        employees: z.coerce.number().int().min(0).max(100000),
-        founded: z.coerce
-          .number()
-          .int()
-          .min(1800)
-          .max(new Date().getFullYear()),
-        description: text(30, 1200),
-        confidential_summary: text(0, 5000),
-      }),
-      data,
-    );
+    const p = parse(dealCreateSchema, data);
+    validateExpectedValueRange(p);
     const id = randomUUID(),
+      financialId = randomUUID(),
       organization = organizationFor(user.id);
     if (!organization)
       throw new AppError(
@@ -1024,27 +1121,64 @@ export function mutate(
         "Read-only organization members cannot create mandates.",
         403,
       );
-    run(
-      "INSERT INTO deals(id,title,company_name,sector,province,city,revenue,ebitda,asking_price,employees,founded,description,confidential_summary,owner_id,advisor_id,owner_organization_id,advisor_organization_id,created_by_user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      id,
-      p.title,
-      p.company_name,
-      p.sector,
-      p.province,
-      p.city,
-      p.revenue,
-      p.ebitda,
-      p.asking_price,
-      p.employees,
-      p.founded,
-      p.description,
-      p.confidential_summary,
-      user.id,
-      user.role === "advisor" ? user.id : null,
-      organization.id,
-      user.role === "advisor" ? organization.id : null,
-      user.id,
-    );
+    const database = db();
+    inImmediateTransaction(database, () => {
+      database
+        .prepare(
+          `INSERT INTO deals(
+            id,title,company_name,sector,province,city,revenue,ebitda,asking_price,
+            employees,founded,description,confidential_summary,owner_id,advisor_id,
+            owner_organization_id,advisor_organization_id,created_by_user_id,
+            transaction_type,ownership_percentage_available,seller_rollover_possible,
+            seller_financing_possible,management_transition,reason_for_transaction,
+            min_expected_value,max_expected_value,distribution_mode
+          ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        )
+        .run(
+          id,
+          p.title,
+          p.company_name,
+          p.sector,
+          p.province,
+          p.city,
+          p.revenue,
+          p.ebitda,
+          p.asking_price,
+          p.employees,
+          p.founded,
+          p.description,
+          p.confidential_summary,
+          user.id,
+          user.role === "advisor" ? user.id : null,
+          organization.id,
+          user.role === "advisor" ? organization.id : null,
+          user.id,
+          p.transaction_type,
+          p.ownership_percentage_available,
+          p.seller_rollover_possible ? 1 : 0,
+          p.seller_financing_possible ? 1 : 0,
+          p.management_transition,
+          p.reason_for_transaction,
+          p.min_expected_value,
+          p.max_expected_value,
+          p.distribution_mode,
+        );
+      database
+        .prepare(
+          `INSERT INTO deal_financials(
+            id,deal_id,fiscal_year,period_type,revenue,ebitda,gross_profit,is_projected
+          ) VALUES(?,?,?,'annual',?,?,?,?)`,
+        )
+        .run(
+          financialId,
+          id,
+          p.financial_year,
+          p.revenue,
+          p.ebitda,
+          p.gross_profit,
+          p.financial_is_projected ? 1 : 0,
+        );
+    });
     audit(user, id, "Created a private mandate");
     return {
       id,
@@ -1060,7 +1194,11 @@ export function mutate(
   if (!dealOwner || !!dealOwner.is_demo !== !!user.is_demo)
     throw new AppError("This deal is not available.", 404);
   if (action === "requestAccess") {
-    if (user.role !== "buyer" || !deal.published)
+    if (
+      user.role !== "buyer" ||
+      !deal.published ||
+      deal.distribution_mode !== "qualified_discovery"
+    )
       throw new AppError("This opportunity is not accepting requests.", 403);
     const existing = membership(deal.id, user.id);
     if (existing)
@@ -1079,13 +1217,18 @@ export function mutate(
   if (action === "updateDeal") {
     requireManager(user, deal);
     const p = parse(
-      z.object({ stage: z.enum(STAGES), published: z.boolean() }),
+      z.object({
+        stage: z.enum(STAGES),
+        published: z.boolean(),
+        distribution_mode: z.enum(DEAL_DISTRIBUTION_MODES).optional(),
+      }),
       data,
     );
     run(
-      "UPDATE deals SET stage=?,published=? WHERE id=?",
+      "UPDATE deals SET stage=?,published=?,distribution_mode=? WHERE id=?",
       p.stage,
       p.published ? 1 : 0,
+      p.distribution_mode ?? deal.distribution_mode,
       deal.id,
     );
     audit(
@@ -1094,6 +1237,94 @@ export function mutate(
       `Updated stage to ${p.stage}; teaser ${p.published ? "published" : "private"}`,
     );
     return { message: "Deal settings saved." };
+  }
+  if (action === "updateDealDetails") {
+    requireManager(user, deal);
+    const update = parse(dealDetailsUpdateSchema, data);
+    const p = parse(dealDetailsSchema, {
+      ...deal,
+      ...update,
+      seller_rollover_possible:
+        update.seller_rollover_possible ??
+        Boolean(deal.seller_rollover_possible),
+      seller_financing_possible:
+        update.seller_financing_possible ??
+        Boolean(deal.seller_financing_possible),
+    });
+    validateExpectedValueRange(p);
+    run(
+      `UPDATE deals SET
+        title=?,company_name=?,sector=?,province=?,city=?,revenue=?,ebitda=?,asking_price=?,
+        employees=?,founded=?,description=?,confidential_summary=?,transaction_type=?,
+        ownership_percentage_available=?,seller_rollover_possible=?,seller_financing_possible=?,
+        management_transition=?,reason_for_transaction=?,min_expected_value=?,max_expected_value=?,
+        distribution_mode=? WHERE id=?`,
+      p.title,
+      p.company_name,
+      p.sector,
+      p.province,
+      p.city,
+      p.revenue,
+      p.ebitda,
+      p.asking_price,
+      p.employees,
+      p.founded,
+      p.description,
+      p.confidential_summary,
+      p.transaction_type,
+      p.ownership_percentage_available,
+      p.seller_rollover_possible ? 1 : 0,
+      p.seller_financing_possible ? 1 : 0,
+      p.management_transition,
+      p.reason_for_transaction,
+      p.min_expected_value,
+      p.max_expected_value,
+      p.distribution_mode,
+      deal.id,
+    );
+    audit(user, deal.id, "Updated the confidential sell-side mandate");
+    return { message: "Mandate details saved." };
+  }
+  if (action === "upsertDealFinancial") {
+    requireManager(user, deal);
+    const p = parse(dealFinancialSchema, data);
+    const existing = one<{ id: string }>(
+      "SELECT id FROM deal_financials WHERE deal_id=? AND fiscal_year=? AND period_type=?",
+      deal.id,
+      p.fiscal_year,
+      p.period_type,
+    );
+    const id = existing?.id ?? randomUUID();
+    run(
+      `INSERT INTO deal_financials(
+        id,deal_id,fiscal_year,period_type,revenue,ebitda,gross_profit,is_projected
+      ) VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(deal_id,fiscal_year,period_type) DO UPDATE SET
+        revenue=excluded.revenue,ebitda=excluded.ebitda,gross_profit=excluded.gross_profit,
+        is_projected=excluded.is_projected,updated_at=CURRENT_TIMESTAMP`,
+      id,
+      deal.id,
+      p.fiscal_year,
+      p.period_type,
+      p.revenue,
+      p.ebitda,
+      p.gross_profit,
+      p.is_projected ? 1 : 0,
+    );
+    audit(user, deal.id, `Updated ${p.fiscal_year} financial history`);
+    return { id, message: "Financial period saved." };
+  }
+  if (action === "deleteDealFinancial") {
+    requireManager(user, deal);
+    const financialId = parse(idSchema, data.financial_id);
+    const result = run(
+      "DELETE FROM deal_financials WHERE id=? AND deal_id=?",
+      financialId,
+      deal.id,
+    );
+    if (!result.changes) throw new AppError("Financial period not found.", 404);
+    audit(user, deal.id, "Removed a financial history period");
+    return { message: "Financial period removed." };
   }
   if (action === "appointAdvisor") {
     if (!canManageOwnerSide(user, deal))

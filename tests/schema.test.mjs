@@ -13,6 +13,7 @@ import {
 import { initialUpgrade } from "../src/lib/migrations/001_initial_upgrade.ts";
 import { organizationsMigration } from "../src/lib/migrations/002_organizations.ts";
 import { buyerProjectsMigration } from "../src/lib/migrations/003_buyer_projects.ts";
+import { sellSideMandatesMigration } from "../src/lib/migrations/004_sell_side_mandates.ts";
 
 const legacySchemaSql = readFileSync(
   new URL("./fixtures/legacy-schema-v0.sql", import.meta.url),
@@ -46,6 +47,7 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
       { version: 3, name: "buyer_projects" },
+      { version: 4, name: "sell_side_mandates" },
     ]);
 
     seed(database, directory);
@@ -68,6 +70,11 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM buyer_projects").get().count,
       2,
+    );
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_financials").get()
+        .count,
+      18,
     );
     assert.ok(
       database.prepare("SELECT COUNT(*) count FROM buyer_project_sectors").get()
@@ -278,11 +285,12 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 3);
+    assert.equal(history.length, 4);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
       { version: 3, name: "buyer_projects" },
+      { version: 4, name: "sell_side_mandates" },
     ]);
     assert.equal(
       database
@@ -301,6 +309,134 @@ test("an existing database upgrades to organizations without losing data", () =>
       "Existing Co.",
     );
     assert.match(history[1].applied_at, /^\d{4}-\d{2}-\d{2} /);
+  } finally {
+    database.close();
+  }
+});
+
+test("an existing Phase 2 database upgrades sell-side mandates without losing deals", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase3-"));
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    applyMigrations(database, [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+    ]);
+    seed(database, directory);
+    const dealsBefore = database
+      .prepare("SELECT COUNT(*) count FROM deals")
+      .get().count;
+
+    applyMigrations(database, [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+    ]);
+
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deals").get().count,
+      dealsBefore,
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT COUNT(*) count FROM deals WHERE published=1 AND distribution_mode='qualified_discovery'",
+        )
+        .get().count,
+      5,
+    );
+    assert.equal(
+      database
+        .prepare("SELECT distribution_mode FROM deals WHERE id='atlas'")
+        .get().distribution_mode,
+      "private_outreach",
+    );
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_financials").get()
+        .count,
+      0,
+    );
+    seed(database, directory);
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_financials").get()
+        .count,
+      18,
+    );
+    assert.deepEqual(migrationSummary(database), [
+      { version: 1, name: "initial_upgrade" },
+      { version: 2, name: "organizations" },
+      { version: 3, name: "buyer_projects" },
+      { version: 4, name: "sell_side_mandates" },
+    ]);
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("sell-side mandate constraints reject unsafe distribution and financial data", () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    runMigrations(database);
+    database
+      .prepare(
+        "INSERT INTO users(id,email,password_hash,name,company,role) VALUES('seller','seller@example.test','hash','Seller','Seller Co.','owner')",
+      )
+      .run();
+    database
+      .prepare(
+        `INSERT INTO deals(
+          id,title,company_name,sector,province,city,revenue,ebitda,asking_price,
+          employees,founded,description,confidential_summary,owner_id
+        ) VALUES('mandate','Project Mandate','Seller Co.','Manufacturing','Ontario','Toronto',100,20,120,5,2015,'A sufficiently detailed anonymous opportunity description.','Private','seller')`,
+      )
+      .run();
+
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            "UPDATE deals SET distribution_mode='public_classified' WHERE id='mandate'",
+          )
+          .run(),
+      /CHECK constraint/,
+    );
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            "UPDATE deals SET ownership_percentage_available=101 WHERE id='mandate'",
+          )
+          .run(),
+      /CHECK constraint/,
+    );
+    database
+      .prepare(
+        "INSERT INTO deal_financials(id,deal_id,fiscal_year,period_type,revenue,ebitda,gross_profit,is_projected) VALUES('financial','mandate',2025,'annual',100,20,60,0)",
+      )
+      .run();
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            "INSERT INTO deal_financials(id,deal_id,fiscal_year,period_type,revenue,ebitda,gross_profit,is_projected) VALUES('duplicate','mandate',2025,'annual',110,25,65,0)",
+          )
+          .run(),
+      /UNIQUE constraint/,
+    );
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            "INSERT INTO deal_financials(id,deal_id,fiscal_year,period_type,revenue,ebitda,gross_profit,is_projected) VALUES('negative','mandate',2024,'annual',-1,20,60,0)",
+          )
+          .run(),
+      /CHECK constraint/,
+    );
   } finally {
     database.close();
   }

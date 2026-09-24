@@ -3,6 +3,7 @@ import { inImmediateTransaction } from "../sqlite-transaction.ts";
 import { initialUpgrade } from "./001_initial_upgrade.ts";
 import { organizationsMigration } from "./002_organizations.ts";
 import { buyerProjectsMigration } from "./003_buyer_projects.ts";
+import { sellSideMandatesMigration } from "./004_sell_side_mandates.ts";
 
 export type Migration = {
   version: number;
@@ -20,6 +21,7 @@ const migrations: readonly Migration[] = [
   initialUpgrade,
   organizationsMigration,
   buyerProjectsMigration,
+  sellSideMandatesMigration,
 ];
 
 const migrationTableSql = `

@@ -3,7 +3,7 @@
   "engines": { "node": ">=24.14.0 <25" },
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
-    "build": "next build", "start": "next start --hostname 0.0.0.0",
+    "build": "next build --webpack", "start": "next start --hostname 0.0.0.0",
     "typecheck": "tsc --noEmit", "test": "tsx --test tests/*.test.ts tests/*.test.mjs",
     "test:core": "node --test tests/*.test.mjs",
     "test:e2e": "playwright test", "check": "npm run typecheck && npm test && npm run build",
