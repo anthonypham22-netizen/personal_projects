@@ -2,6 +2,8 @@
 import {
   createContext,
   useContext,
+  useEffect,
+  useRef,
   useState,
   type ReactNode,
   type FormEvent,
@@ -63,6 +65,7 @@ import {
   type Document,
   type Access,
   type DealMatch,
+  type DealOutreachRecipient,
 } from "@/lib/types";
 
 const buyerOrganizationTypes = new Set<string>(BUYER_ORGANIZATION_TYPES);
@@ -1407,10 +1410,14 @@ function Opportunities() {
   const [q, setQ] = useState(""),
     [province, setProvince] = useState(""),
     [sector, setSector] = useState("");
+  const privateOutreachByDeal = new Map<string, DealOutreachRecipient>();
+  for (const recipient of data.deal_outreach)
+    if (!privateOutreachByDeal.has(recipient.deal_id))
+      privateOutreachByDeal.set(recipient.deal_id, recipient);
   const deals = data.deals
     .filter(
       (d) =>
-        d.published &&
+        (d.published || privateOutreachByDeal.has(d.id)) &&
         (!q ||
           `${d.title} ${d.description} ${d.sector}`
             .toLowerCase()
@@ -1471,55 +1478,66 @@ function Opportunities() {
         All financial figures in CAD
       </p>
       <div className="deal-grid">
-        {deals.map((d) => (
-          <Link className="deal-card" key={d.id} href={`/app/deals/${d.id}`}>
-            <div className="deal-card-top">
-              <span className="icon-tile">
-                <Building2 size={23} />
-              </span>
-              {data.user.role === "buyer" ? (
-                d.preview_only ? (
-                  <span className="badge badge-amber">Preview only</span>
+        {deals.map((d) => {
+          const privateOutreach = privateOutreachByDeal.get(d.id);
+          return (
+            <Link className="deal-card" key={d.id} href={`/app/deals/${d.id}`}>
+              <div className="deal-card-top">
+                <span className="icon-tile">
+                  <Building2 size={23} />
+                </span>
+                {data.user.role === "buyer" ? (
+                  privateOutreach ? (
+                    ["pursued", "passed"].includes(privateOutreach.status) ? (
+                      <Status value={privateOutreach.status} />
+                    ) : (
+                      <span className="badge badge-green">New opportunity</span>
+                    )
+                  ) : d.preview_only ? (
+                    <span className="badge badge-amber">Preview only</span>
+                  ) : (
+                    <span
+                      className="badge badge-green"
+                      title={d.match_reasons?.join(",")}
+                    >
+                      {d.match_score}% criteria fit
+                    </span>
+                  )
                 ) : (
-                  <span
-                    className="badge badge-green"
-                    title={d.match_reasons?.join(",")}
-                  >
-                    {d.match_score}% criteria fit
-                  </span>
-                )
-              ) : (
-                <Status value={d.stage} />
-              )}
-            </div>
-            <h2>{d.title}</h2>
-            <p className="muted flex items-center gap-1">
-              <MapPin size={13} />
-              {d.province} · {d.sector}
-            </p>
-            <p className="description">{d.description}</p>
-            <div className="deal-card-metrics">
-              <div>
-                <span>Annual revenue</span>
-                <strong>{money(d.revenue)}</strong>
+                  <Status value={d.stage} />
+                )}
               </div>
-              <div>
-                <span>EBITDA</span>
-                <strong>{money(d.ebitda)}</strong>
+              <h2>{d.title}</h2>
+              <p className="muted flex items-center gap-1">
+                <MapPin size={13} />
+                {d.province} · {d.sector}
+              </p>
+              <p className="description">{d.description}</p>
+              <div className="deal-card-metrics">
+                <div>
+                  <span>Annual revenue</span>
+                  <strong>{money(d.revenue)}</strong>
+                </div>
+                <div>
+                  <span>EBITDA</span>
+                  <strong>{money(d.ebitda)}</strong>
+                </div>
               </div>
-            </div>
-            <div className="deal-card-footer">
-              <span>
-                {d.has_access
-                  ? "Open deal room"
-                  : d.preview_only
-                    ? "Preview teaser"
-                    : "View opportunity"}
-              </span>
-              <ArrowUpRight size={18} />
-            </div>
-          </Link>
-        ))}
+              <div className="deal-card-footer">
+                <span>
+                  {d.has_access
+                    ? "Open deal room"
+                    : privateOutreach
+                      ? "Review private invitation"
+                      : d.preview_only
+                        ? "Preview teaser"
+                        : "View opportunity"}
+                </span>
+                <ArrowUpRight size={18} />
+              </div>
+            </Link>
+          );
+        })}
       </div>
       {!deals.length && (
         <Empty
@@ -2160,6 +2178,23 @@ function DealDetail({ deal }: { deal: Deal }) {
   const [tab, setTab] = useState("Overview");
   const access = data.access.filter((a) => a.deal_id === deal.id);
   const myAccess = access.find((a) => a.buyer_id === data.user.id);
+  const myOutreach = data.deal_outreach.filter(
+    (recipient) => recipient.deal_id === deal.id,
+  );
+  const primaryOutreach = myOutreach[0];
+  const viewedOutreach = useRef("");
+  const sentRecipientIds = myOutreach
+    .filter((recipient) => recipient.status === "sent")
+    .map((recipient) => recipient.id);
+  useEffect(() => {
+    const viewKey = sentRecipientIds.slice().sort().join(",");
+    if (!viewKey || viewedOutreach.current === viewKey) return;
+    viewedOutreach.current = viewKey;
+    void act("viewOutreach", {
+      deal_id: deal.id,
+      recipient_ids: sentRecipientIds,
+    });
+  }, [act, deal.id, sentRecipientIds]);
   const tabs = deal.has_access
     ? [
         "Overview",
@@ -2217,6 +2252,14 @@ function DealDetail({ deal }: { deal: Deal }) {
       {tab === "Overview" ? (
         <div className="detail-grid">
           <div className="detail-main">
+            {data.user.role === "buyer" &&
+              myOutreach.map((outreach) => (
+                <PrivateOutreachPanel
+                  deal={deal}
+                  outreach={outreach}
+                  key={outreach.id}
+                />
+              ))}
             <Panel title="The opportunity">
               <div className="panel-body">
                 <p className="mb-6 leading-relaxed text-slate-600">
@@ -2404,7 +2447,8 @@ function DealDetail({ deal }: { deal: Deal }) {
                   </div>
                 </Panel>
               </>
-            ) : data.user.role === "buyer" ? (
+            ) : data.user.role === "buyer" &&
+              (!myOutreach.length || myAccess) ? (
               <BuyerNextStep
                 deal={deal}
                 access={myAccess}
@@ -2421,18 +2465,31 @@ function DealDetail({ deal }: { deal: Deal }) {
               </Panel>
             )}{" "}
             {data.user.role === "buyer" && (
-              <Panel title="Why this could fit">
+              <Panel
+                title={
+                  primaryOutreach ? "Matched mandate" : "Why this could fit"
+                }
+              >
                 <div className="panel-body">
                   <strong className="text-2xl tabular-nums text-emerald-800">
-                    {deal.match_score}%
+                    {primaryOutreach?.match_score ?? deal.match_score}%
                   </strong>
-                  <p className="muted mb-4">Rules-based criteria match</p>
-                  {deal.match_reasons?.map((r) => (
-                    <p className="my-2 flex items-center gap-2 text-sm" key={r}>
-                      <Check size={15} className="text-emerald-700" />
-                      {r}
-                    </p>
-                  ))}
+                  <p className="muted mb-4">
+                    {primaryOutreach
+                      ? `Matched to ${primaryOutreach.buyer_project_name}`
+                      : "Rules-based criteria match"}
+                  </p>
+                  {(primaryOutreach?.match_reasons ?? deal.match_reasons)?.map(
+                    (r) => (
+                      <p
+                        className="my-2 flex items-center gap-2 text-sm"
+                        key={r}
+                      >
+                        <Check size={15} className="text-emerald-700" />
+                        {primaryOutreach ? matchDimensionLabel(r) : r}
+                      </p>
+                    ),
+                  )}
                   <Link
                     href="/app/settings"
                     className="mt-4 inline-block text-sm text-emerald-800 underline"
@@ -2513,6 +2570,84 @@ function DealDetail({ deal }: { deal: Deal }) {
           </details>
         )}
     </>
+  );
+}
+
+function PrivateOutreachPanel({
+  deal,
+  outreach,
+}: {
+  deal: Deal;
+  outreach: DealOutreachRecipient;
+}) {
+  const { act, busy } = useWorkspace();
+  const responseRecorded = ["pursued", "passed"].includes(outreach.status);
+  return (
+    <section
+      className="private-invitation"
+      aria-labelledby="private-invitation-title"
+    >
+      <div className="private-invitation-kicker">
+        <span>NEW OPPORTUNITY</span>
+        <Status value={outreach.status} />
+      </div>
+      <h2 id="private-invitation-title">{outreach.subject}</h2>
+      <p>{outreach.message}</p>
+      <dl>
+        <div>
+          <dt>Matched to</dt>
+          <dd>{outreach.buyer_project_name}</dd>
+        </div>
+        <div>
+          <dt>Profile</dt>
+          <dd>
+            {deal.sector} · {deal.province}
+          </dd>
+        </div>
+        <div>
+          <dt>Annual revenue</dt>
+          <dd>{money(deal.revenue, false)}</dd>
+        </div>
+      </dl>
+      {responseRecorded ? (
+        <p className="private-invitation-response">
+          {outreach.status === "pursued"
+            ? "Interest recorded. The deal team will review your request before confidential information is released."
+            : "Pass recorded. This opportunity will remain in your history."}
+        </p>
+      ) : (
+        <div className="private-invitation-actions">
+          <button
+            type="button"
+            className="button button-green"
+            disabled={busy}
+            onClick={() =>
+              act("respondToOutreach", {
+                deal_id: deal.id,
+                recipient_id: outreach.id,
+                response: "interested",
+              })
+            }
+          >
+            <Handshake size={16} /> I’m interested
+          </button>
+          <button
+            type="button"
+            className="button button-quiet"
+            disabled={busy}
+            onClick={() =>
+              act("respondToOutreach", {
+                deal_id: deal.id,
+                recipient_id: outreach.id,
+                response: "pass",
+              })
+            }
+          >
+            Pass
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -2801,6 +2936,12 @@ function RecommendedBuyers({ deal }: { deal: Deal }) {
   const selectedCount = matches.filter(
     (match) => match.status === "selected",
   ).length;
+  const selectedMatches = matches.filter(
+    (match) => match.status === "selected" && match.eligible,
+  );
+  const outreach = data.deal_outreach.filter(
+    (recipient) => recipient.deal_id === deal.id,
+  );
   const updateStatus = async (
     matchIds: string[],
     status: DealMatch["status"],
@@ -2936,6 +3077,12 @@ function RecommendedBuyers({ deal }: { deal: Deal }) {
         </button>
       </div>
 
+      <DistributionDocket
+        deal={deal}
+        selectedMatches={selectedMatches}
+        outreach={outreach}
+      />
+
       <div className="recommendation-list">
         {recommendations.map((match, index) => (
           <BuyerRecommendation
@@ -2957,6 +3104,144 @@ function RecommendedBuyers({ deal }: { deal: Deal }) {
           </div>
         )}
       </div>
+    </section>
+  );
+}
+
+function DistributionDocket({
+  deal,
+  selectedMatches,
+  outreach,
+}: {
+  deal: Deal;
+  selectedMatches: DealMatch[];
+  outreach: DealOutreachRecipient[];
+}) {
+  const { act, busy } = useWorkspace();
+  const [subject, setSubject] = useState(
+    "Private Canadian acquisition opportunity",
+  );
+  const [message, setMessage] = useState(
+    "We are representing a Canadian business that appears to fit your acquisition criteria. Review the confidential teaser and let us know whether you would like to pursue the opportunity.",
+  );
+  const [preview, setPreview] = useState(false);
+  const share = () =>
+    act("shareTeaser", {
+      deal_id: deal.id,
+      match_ids: selectedMatches.map((match) => match.id),
+      subject,
+      message,
+    });
+  return (
+    <section
+      className="distribution-docket"
+      aria-labelledby="distribution-title"
+    >
+      <div className="distribution-docket-head">
+        <div>
+          <p className="eyebrow">CONTROLLED CIRCULATION</p>
+          <h3 id="distribution-title">Share teaser</h3>
+          <p>
+            {selectedMatches.length} buyer project
+            {selectedMatches.length === 1 ? "" : "s"} selected. Only these
+            organizations will receive the opportunity.
+          </p>
+        </div>
+        <span className="distribution-count">{selectedMatches.length}</span>
+      </div>
+      {selectedMatches.length ? (
+        <>
+          <div
+            className="distribution-recipients"
+            aria-label="Selected recipients"
+          >
+            {selectedMatches.map((match) => (
+              <span key={match.id}>
+                <Building2 size={14} /> {match.buyer_organization_name} ·{" "}
+                {match.buyer_project_name}
+              </span>
+            ))}
+          </div>
+          <div className="distribution-compose">
+            <label>
+              Subject
+              <input
+                value={subject}
+                maxLength={200}
+                onChange={(event) => setSubject(event.target.value)}
+              />
+            </label>
+            <label>
+              Message
+              <textarea
+                value={message}
+                maxLength={5000}
+                onChange={(event) => setMessage(event.target.value)}
+              />
+            </label>
+          </div>
+          {preview && (
+            <div className="distribution-preview">
+              <span>BUYER PREVIEW</span>
+              <strong>{subject}</strong>
+              <p>{message}</p>
+              <small>
+                {deal.sector} · {deal.province} · {money(deal.revenue, false)}{" "}
+                revenue
+              </small>
+            </div>
+          )}
+          <div className="distribution-actions">
+            <button
+              type="button"
+              className="button button-quiet"
+              onClick={() => setPreview((current) => !current)}
+            >
+              <FileText size={16} />{" "}
+              {preview ? "Hide preview" : "Preview outreach"}
+            </button>
+            <button
+              type="button"
+              className="button button-green"
+              disabled={busy || !subject.trim() || !message.trim()}
+              onClick={share}
+            >
+              <Send size={16} /> Share teaser
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="distribution-empty">
+          Select eligible recommendations below to prepare a private outreach.
+        </p>
+      )}
+      {!!outreach.length && (
+        <div className="distribution-ledger">
+          <h4>Outreach activity</h4>
+          {outreach.map((recipient) => (
+            <div key={recipient.id}>
+              <span>
+                <strong>{recipient.buyer_organization_name}</strong>
+                <small>{recipient.buyer_project_name}</small>
+              </span>
+              <span>
+                <Status value={recipient.status} />
+                <small>
+                  {recipient.pursued_at
+                    ? `Pursued ${dateLabel(recipient.pursued_at)}`
+                    : recipient.passed_at
+                      ? `Passed ${dateLabel(recipient.passed_at)}`
+                      : recipient.viewed_at
+                        ? `Viewed ${dateLabel(recipient.viewed_at)}`
+                        : recipient.sent_at
+                          ? `Sent ${dateLabel(recipient.sent_at)}`
+                          : "Queued"}
+                </small>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

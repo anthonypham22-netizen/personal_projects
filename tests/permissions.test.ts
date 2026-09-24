@@ -1420,3 +1420,222 @@ test("deal managers can curate recommended buyers without granting access", () =
     /authorized deal-team member/i,
   );
 });
+
+test("private teaser outreach is isolated to selected buyer organizations and advances interest", () => {
+  const suffix = Date.now();
+  const buyerAToken = register({
+    name: "Private Buyer A",
+    company: `Private Capital A ${suffix}`,
+    email: `private-buyer-a-${suffix}@example.test`,
+    role: "buyer",
+    password: "private-outreach-password-2026",
+  });
+  const buyerA = sessionUser(buyerAToken)!;
+  const projectA = mutate(buyerA, {
+    action: "createBuyerProject",
+    data: {
+      name: `Project Private A ${suffix}`,
+      status: "active",
+      thesis: "Ontario business services platforms.",
+      min_revenue: 1_000_000,
+      max_revenue: 20_000_000,
+      sectors: ["Business services"],
+      provinces: ["Ontario"],
+    },
+  });
+  const buyerBToken = register({
+    name: "Private Buyer B",
+    company: `Private Capital B ${suffix}`,
+    email: `private-buyer-b-${suffix}@example.test`,
+    role: "buyer",
+    password: "private-outreach-password-2026",
+  });
+  const buyerB = sessionUser(buyerBToken)!;
+  const projectB = mutate(buyerB, {
+    action: "createBuyerProject",
+    data: {
+      name: `Project Private B ${suffix}`,
+      status: "active",
+      thesis: "Ontario business services platforms.",
+      min_revenue: 1_000_000,
+      max_revenue: 20_000_000,
+      sectors: ["Business services"],
+      provinces: ["Ontario"],
+    },
+  });
+  const sellerToken = register({
+    name: "Private Seller",
+    company: `Private Services ${suffix}`,
+    email: `private-seller-${suffix}@example.test`,
+    role: "owner",
+    password: "private-outreach-password-2026",
+  });
+  const seller = sessionUser(sellerToken)!;
+  const deal = mutate(seller, {
+    action: "createDeal",
+    data: {
+      title: `Project Private ${suffix}`,
+      company_name: `Private Services ${suffix}`,
+      sector: "Business services",
+      province: "Ontario",
+      city: "Toronto",
+      revenue: 8_000_000,
+      ebitda: 1_300_000,
+      asking_price: 10_000_000,
+      employees: 28,
+      founded: 2010,
+      description: "A recurring-revenue Canadian services platform.",
+      confidential_summary: "Confidential customer and ownership details.",
+      distribution_mode: "private_outreach",
+      financial_year: 2025,
+    },
+  });
+  const matchA = one<{ id: string }>(
+    "SELECT id FROM deal_matches WHERE deal_id=? AND buyer_project_id=? AND eligible=1",
+    deal.id!,
+    projectA.id!,
+  )!;
+  assert.ok(matchA);
+  assert.equal(
+    workspace(buyerA).deals.some((item) => item.id === deal.id),
+    false,
+  );
+  assert.equal(
+    workspace(buyerB).deals.some((item) => item.id === deal.id),
+    false,
+  );
+
+  mutate(seller, {
+    action: "updateDealMatchStatus",
+    data: { deal_id: deal.id, match_ids: [matchA.id], status: "selected" },
+  });
+  const shared = mutate(seller, {
+    action: "shareTeaser",
+    data: {
+      deal_id: deal.id,
+      match_ids: [matchA.id],
+      subject: "Private Canadian acquisition opportunity",
+      message: "This business appears to fit your acquisition criteria.",
+    },
+  });
+  assert.ok(shared.id);
+
+  const buyerAState = workspace(buyerA);
+  const teaser = buyerAState.deals.find((item) => item.id === deal.id)!;
+  assert.ok(teaser);
+  assert.equal(teaser.company_name, "Confidential company");
+  assert.equal(teaser.confidential_summary, "");
+  assert.equal(buyerAState.deal_outreach.length, 1);
+  assert.equal(buyerAState.deal_outreach[0].buyer_project_id, projectA.id);
+  assert.equal(
+    workspace(buyerB).deals.some((item) => item.id === deal.id),
+    false,
+    "an unselected buyer organization must not discover private outreach",
+  );
+  assert.equal(workspace(buyerB).deal_outreach.length, 0);
+
+  const recipientId = buyerAState.deal_outreach[0].id;
+  assert.throws(
+    () =>
+      mutate(buyerB, {
+        action: "viewOutreach",
+        data: { deal_id: deal.id, recipient_id: recipientId },
+      }),
+    /not available/i,
+  );
+  mutate(buyerA, {
+    action: "viewOutreach",
+    data: { deal_id: deal.id, recipient_id: recipientId },
+  });
+  assert.equal(workspace(seller).deal_outreach[0].status, "viewed");
+  mutate(buyerA, {
+    action: "respondToOutreach",
+    data: {
+      deal_id: deal.id,
+      recipient_id: recipientId,
+      response: "interested",
+    },
+  });
+  assert.equal(workspace(seller).deal_outreach[0].status, "pursued");
+  assert.equal(
+    workspace(buyerA).access.find((item) => item.deal_id === deal.id)?.status,
+    "requested",
+  );
+  assert.equal(
+    workspace(buyerA).deals.find((item) => item.id === deal.id)?.has_access,
+    false,
+    "interest must not bypass NDA and deal-team approval",
+  );
+  assert.throws(
+    () =>
+      mutate(buyerA, {
+        action: "respondToOutreach",
+        data: {
+          deal_id: deal.id,
+          recipient_id: recipientId,
+          response: "pass",
+        },
+      }),
+    /final response/i,
+  );
+
+  mutate(seller, {
+    action: "updateDealMatchStatus",
+    data: { deal_id: deal.id, match_ids: [matchA.id], status: "selected" },
+  });
+  assert.throws(
+    () =>
+      mutate(seller, {
+        action: "shareTeaser",
+        data: {
+          deal_id: deal.id,
+          match_ids: [matchA.id],
+          subject: "Duplicate outreach",
+          message: "This project already received the opportunity.",
+        },
+      }),
+    /already received/i,
+  );
+
+  const matchB = one<{ id: string }>(
+    "SELECT id FROM deal_matches WHERE deal_id=? AND buyer_project_id=? AND eligible=1",
+    deal.id!,
+    projectB.id!,
+  )!;
+  mutate(seller, {
+    action: "updateDealMatchStatus",
+    data: { deal_id: deal.id, match_ids: [matchB.id], status: "selected" },
+  });
+  mutate(seller, {
+    action: "shareTeaser",
+    data: {
+      deal_id: deal.id,
+      match_ids: [matchB.id],
+      subject: "Private Canadian acquisition opportunity",
+      message: "This business appears to fit your acquisition criteria.",
+    },
+  });
+  const buyerBRecipient = workspace(buyerB).deal_outreach.find(
+    (item) => item.buyer_project_id === projectB.id,
+  )!;
+  assert.ok(buyerBRecipient);
+  mutate(buyerB, {
+    action: "respondToOutreach",
+    data: {
+      deal_id: deal.id,
+      recipient_id: buyerBRecipient.id,
+      response: "pass",
+    },
+  });
+  assert.equal(
+    workspace(seller).deal_outreach.find(
+      (item) => item.id === buyerBRecipient.id,
+    )?.status,
+    "passed",
+  );
+  assert.equal(
+    workspace(buyerB).access.some((item) => item.deal_id === deal.id),
+    false,
+    "passing must not create a transaction access relationship",
+  );
+});

@@ -98,6 +98,165 @@ test("owner can inspect and curate recommended buyers", async ({ page }) => {
   await expect(recommendation).toContainText("Recommended");
 });
 
+test("seller shares a private teaser and sees the buyer response", async ({
+  page,
+}) => {
+  const suffix = Date.now();
+  const headers = { Origin: "http://localhost:3000" };
+  const password = "private-outreach-password-2026";
+  const buyerEmail = `outreach-buyer-${suffix}@example.test`;
+  const sellerEmail = `outreach-seller-${suffix}@example.test`;
+  const projectName = `Project Outreach ${suffix}`;
+  const dealTitle = `Project Invitation ${suffix}`;
+
+  expect(
+    (
+      await page.request.post("/api/auth", {
+        headers,
+        data: {
+          action: "register",
+          name: "Outreach Buyer",
+          company: `Outreach Capital ${suffix}`,
+          email: buyerEmail,
+          password,
+          role: "buyer",
+        },
+      })
+    ).status(),
+  ).toBe(200);
+  const projectResponse = await page.request.post("/api/workspace", {
+    headers,
+    data: {
+      action: "createBuyerProject",
+      data: {
+        name: projectName,
+        status: "active",
+        thesis: "Ontario business services companies with recurring revenue.",
+        min_revenue: 1_000_000,
+        max_revenue: 20_000_000,
+        sectors: ["Business services"],
+        provinces: ["Ontario"],
+      },
+    },
+  });
+  expect(projectResponse.status()).toBe(200);
+  const projectId = (await projectResponse.json()).id;
+  await page.request.post("/api/auth", {
+    headers,
+    data: { action: "logout" },
+  });
+
+  expect(
+    (
+      await page.request.post("/api/auth", {
+        headers,
+        data: {
+          action: "register",
+          name: "Outreach Seller",
+          company: `Outreach Services ${suffix}`,
+          email: sellerEmail,
+          password,
+          role: "owner",
+        },
+      })
+    ).status(),
+  ).toBe(200);
+  const dealResponse = await page.request.post("/api/workspace", {
+    headers,
+    data: {
+      action: "createDeal",
+      data: {
+        title: dealTitle,
+        company_name: `Outreach Services ${suffix}`,
+        sector: "Business services",
+        province: "Ontario",
+        city: "Toronto",
+        revenue: 8_000_000,
+        ebitda: 1_400_000,
+        asking_price: 10_000_000,
+        employees: 31,
+        founded: 2011,
+        description: "A Canadian services platform with recurring contracts.",
+        confidential_summary: "Confidential customer concentration details.",
+        distribution_mode: "private_outreach",
+        financial_year: 2025,
+      },
+    },
+  });
+  expect(dealResponse.status()).toBe(200);
+  const dealId = (await dealResponse.json()).id;
+  const sellerWorkspace = await (
+    await page.request.get("/api/workspace")
+  ).json();
+  const match = sellerWorkspace.deal_matches.find(
+    (candidate: { deal_id: string; buyer_project_id: string }) =>
+      candidate.deal_id === dealId && candidate.buyer_project_id === projectId,
+  );
+  expect(match?.eligible).toBe(1);
+  expect(
+    (
+      await page.request.post("/api/workspace", {
+        headers,
+        data: {
+          action: "updateDealMatchStatus",
+          data: { deal_id: dealId, match_ids: [match.id], status: "selected" },
+        },
+      })
+    ).status(),
+  ).toBe(200);
+
+  await page.goto(`/app/deals/${dealId}`);
+  await page.getByRole("button", { name: "Recommended buyers" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Share teaser" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(projectName, { exact: false }).first(),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Preview outreach" }).click();
+  await expect(page.getByText("BUYER PREVIEW", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Share teaser", exact: true }).click();
+  await expect(
+    page.getByText("Outreach activity", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Sent", { exact: true }).first()).toBeVisible();
+
+  await page.request.post("/api/auth", {
+    headers,
+    data: { action: "logout" },
+  });
+  await page.goto("/login");
+  await page.getByLabel("Email address").fill(buyerEmail);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goto("/app/opportunities");
+  const invitation = page.getByRole("link", { name: new RegExp(dealTitle) });
+  await expect(invitation).toContainText("New opportunity");
+  await invitation.click();
+  const privatePanel = page.locator(".private-invitation");
+  await expect(privatePanel).toContainText(projectName);
+  await expect(privatePanel).toContainText("Viewed");
+  await privatePanel.getByRole("button", { name: "I’m interested" }).click();
+  await expect(privatePanel).toContainText("Interest recorded");
+  await expect(
+    page.getByText(`Outreach Services ${suffix}`, { exact: true }),
+  ).toHaveCount(0);
+
+  await page.request.post("/api/auth", {
+    headers,
+    data: { action: "logout" },
+  });
+  await page.goto("/login");
+  await page.getByLabel("Email address").fill(sellerEmail);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goto(`/app/deals/${dealId}`);
+  await page.getByRole("button", { name: "Recommended buyers" }).click();
+  await expect(page.getByText("Pursued", { exact: true })).toBeVisible();
+});
+
 test("buyer sees approved documents but cannot download seller-only files", async ({
   page,
 }) => {

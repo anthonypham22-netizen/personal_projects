@@ -16,6 +16,7 @@ import { buyerProjectsMigration } from "../src/lib/migrations/003_buyer_projects
 import { sellSideMandatesMigration } from "../src/lib/migrations/004_sell_side_mandates.ts";
 import { matchingEngineMigration } from "../src/lib/migrations/005_matching_engine.ts";
 import { recommendedBuyersMigration } from "../src/lib/migrations/006_recommended_buyers.ts";
+import { privateTeaserDistributionMigration } from "../src/lib/migrations/007_private_teaser_distribution.ts";
 import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
 
 const legacySchemaSql = readFileSync(
@@ -53,6 +54,7 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 4, name: "sell_side_mandates" },
       { version: 5, name: "matching_engine" },
       { version: 6, name: "recommended_buyers" },
+      { version: 7, name: "private_teaser_distribution" },
     ]);
 
     seed(database, directory);
@@ -295,7 +297,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 6);
+    assert.equal(history.length, 7);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
@@ -303,6 +305,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       { version: 4, name: "sell_side_mandates" },
       { version: 5, name: "matching_engine" },
       { version: 6, name: "recommended_buyers" },
+      { version: 7, name: "private_teaser_distribution" },
     ]);
     assert.equal(
       database
@@ -323,6 +326,82 @@ test("an existing database upgrades to organizations without losing data", () =>
     assert.match(history[1].applied_at, /^\d{4}-\d{2}-\d{2} /);
   } finally {
     database.close();
+  }
+});
+
+test("an existing Phase 5 database adds private teaser distribution without losing matches", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase6-"));
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    applyMigrations(database, [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+      recommendedBuyersMigration,
+    ]);
+    seed(database, directory);
+    ensureInitialMatchBackfill(database);
+    const matchesBefore = database
+      .prepare("SELECT COUNT(*) count FROM deal_matches")
+      .get().count;
+
+    applyMigrations(database, [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+      recommendedBuyersMigration,
+      privateTeaserDistributionMigration,
+    ]);
+
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_matches").get().count,
+      matchesBefore,
+    );
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 7,
+      name: "private_teaser_distribution",
+    });
+    const selected = database
+      .prepare(
+        "SELECT * FROM deal_matches WHERE eligible=1 ORDER BY score DESC LIMIT 1",
+      )
+      .get();
+    database
+      .prepare(
+        "INSERT INTO deal_outreach(id,deal_id,sender_user_id,subject,message) VALUES('outreach','cedar','demo-owner','Private opportunity','A confidential Canadian opportunity matches your mandate.')",
+      )
+      .run();
+    database
+      .prepare(
+        "INSERT INTO deal_outreach_recipients(id,outreach_id,buyer_organization_id,buyer_project_id,status,sent_at) VALUES('recipient','outreach',?,?, 'sent',CURRENT_TIMESTAMP)",
+      )
+      .run(selected.buyer_organization_id, selected.buyer_project_id);
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            "INSERT INTO deal_outreach_recipients(id,outreach_id,buyer_organization_id,buyer_project_id,status) VALUES('duplicate','outreach',?,?, 'queued')",
+          )
+          .run(selected.buyer_organization_id, selected.buyer_project_id),
+      /UNIQUE constraint/,
+    );
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            "UPDATE deal_outreach_recipients SET status='opened' WHERE id='recipient'",
+          )
+          .run(),
+      /CHECK constraint/,
+    );
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

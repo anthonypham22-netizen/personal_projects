@@ -31,6 +31,7 @@ import {
   type BuyerProject,
   type DealFinancial,
   type DealMatch,
+  type DealOutreachRecipient,
 } from "./types";
 import { inImmediateTransaction } from "./sqlite-transaction";
 import {
@@ -199,6 +200,50 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
     score_breakdown: JSON.parse(
       score_breakdown_json,
     ) as DealMatch["score_breakdown"],
+  }));
+}
+
+function dealOutreachFor(
+  user: User,
+  organizationId: string,
+  managedDealIds: string[],
+): DealOutreachRecipient[] {
+  const managerView = user.role !== "buyer";
+  if (managerView && !managedDealIds.length) return [];
+  const managerPlaceholders = managedDealIds.map(() => "?").join(",");
+  const rows = all<
+    Omit<DealOutreachRecipient, "match_reasons"> & {
+      score_breakdown_json: string;
+    }
+  >(
+    `SELECT dor.id,dor.outreach_id,o.deal_id,o.sender_user_id,
+       sender.name sender_name,o.subject,o.message,o.created_at,
+       dor.buyer_organization_id,organization.name buyer_organization_name,
+       dor.buyer_project_id,project.name buyer_project_name,dor.status,
+       dor.sent_at,dor.viewed_at,dor.pursued_at,dor.passed_at,
+       dm.score match_score,dm.score_breakdown_json
+     FROM deal_outreach_recipients dor
+     JOIN deal_outreach o ON o.id=dor.outreach_id
+     JOIN users sender ON sender.id=o.sender_user_id
+     JOIN organizations organization ON organization.id=dor.buyer_organization_id
+     JOIN buyer_projects project ON project.id=dor.buyer_project_id
+     JOIN deal_matches dm
+       ON dm.deal_id=o.deal_id AND dm.buyer_project_id=dor.buyer_project_id
+     WHERE ${
+       managerView
+         ? `o.deal_id IN (${managerPlaceholders})`
+         : "dor.buyer_organization_id=?"
+     }
+     ORDER BY o.created_at DESC,dor.rowid DESC`,
+    ...(managerView ? managedDealIds : [organizationId]),
+  );
+  return rows.map(({ score_breakdown_json, ...row }) => ({
+    ...row,
+    match_reasons: (
+      JSON.parse(score_breakdown_json) as DealMatch["score_breakdown"]
+    ).reasons
+      .filter((reason) => reason.score > 0)
+      .map((reason) => reason.dimension),
   }));
 }
 export const membership = (dealId: string, userId: string) =>
@@ -853,7 +898,14 @@ export function workspace(user: User): WorkspaceData {
     WHERE (owner.is_demo=? OR (?='buyer' AND ?=1 AND owner.is_demo=0 AND d.published=1 AND d.distribution_mode='qualified_discovery'))
     AND ((d.owner_id=? AND d.owner_organization_id IS NULL) OR (d.advisor_id=? AND d.advisor_organization_id IS NULL)
       OR (?<>'buyer' AND EXISTS (SELECT 1 FROM organization_members om WHERE om.user_id=? AND om.status='active' AND om.organization_id IN (d.owner_organization_id,d.advisor_organization_id)))
-      OR (?='buyer' AND ((d.published=1 AND d.distribution_mode='qualified_discovery') OR d.id IN (SELECT deal_id FROM access WHERE buyer_id=?))))
+      OR (?='buyer' AND ((d.published=1 AND d.distribution_mode='qualified_discovery')
+        OR d.id IN (SELECT deal_id FROM access WHERE buyer_id=?)
+        OR EXISTS (
+          SELECT 1 FROM deal_outreach o
+          JOIN deal_outreach_recipients dor ON dor.outreach_id=o.id
+          WHERE o.deal_id=d.id AND dor.buyer_organization_id=?
+            AND dor.status IN ('sent','viewed','pursued','passed')
+        ))))
     ORDER BY d.created_at DESC,d.title`,
     user.is_demo,
     user.role,
@@ -864,6 +916,7 @@ export function workspace(user: User): WorkspaceData {
     user.id,
     user.role,
     user.id,
+    organization.id,
   );
   const deals = rawDeals.map((d) => {
     const previewOnly =
@@ -1020,6 +1073,7 @@ export function workspace(user: User): WorkspaceData {
     .map((deal) => deal.id);
   const dealMatches =
     user.role === "buyer" ? undefined : dealMatchesForDeals(managedDealIds);
+  const dealOutreach = dealOutreachFor(user, organization.id, managedDealIds);
   return {
     user,
     organization,
@@ -1030,6 +1084,7 @@ export function workspace(user: User): WorkspaceData {
     can_manage_buyer_projects: canManageBuyerProjects,
     deals,
     ...(dealMatches ? { deal_matches: dealMatches } : {}),
+    deal_outreach: dealOutreach,
     deal_financials: dealFinancials,
     access,
     documents,
@@ -1324,6 +1379,226 @@ export function mutate(
   );
   if (!dealOwner || !!dealOwner.is_demo !== !!user.is_demo)
     throw new AppError("This deal is not available.", 404);
+  if (action === "shareTeaser") {
+    requireManager(user, deal);
+    const p = parse(
+      z.object({
+        match_ids: z.array(idSchema).min(1).max(100),
+        subject: text(1, 200),
+        message: text(1, 5000),
+      }),
+      data,
+    );
+    const matchIds = [...new Set(p.match_ids)];
+    const placeholders = matchIds.map(() => "?").join(",");
+    const database = db();
+    const outreachId = randomUUID();
+    inImmediateTransaction(database, () => {
+      const recipients = database
+        .prepare(
+          `SELECT dm.id,dm.buyer_project_id,dm.buyer_organization_id
+           FROM deal_matches dm
+           JOIN buyer_projects bp
+             ON bp.id=dm.buyer_project_id
+            AND bp.organization_id=dm.buyer_organization_id
+           WHERE dm.deal_id=? AND dm.id IN (${placeholders})
+             AND dm.eligible=1 AND dm.status='selected'`,
+        )
+        .all(deal.id, ...matchIds) as {
+        id: string;
+        buyer_project_id: string;
+        buyer_organization_id: string;
+      }[];
+      if (recipients.length !== matchIds.length)
+        throw new AppError(
+          "Every recipient must be an eligible selected recommendation.",
+          409,
+        );
+      const duplicate = database
+        .prepare(
+          `SELECT 1 FROM deal_outreach existing_outreach
+           JOIN deal_outreach_recipients existing_recipient
+             ON existing_recipient.outreach_id=existing_outreach.id
+           WHERE existing_outreach.deal_id=?
+             AND existing_recipient.buyer_project_id IN (${recipients.map(() => "?").join(",")})
+             AND existing_recipient.status<>'expired' LIMIT 1`,
+        )
+        .get(
+          deal.id,
+          ...recipients.map((recipient) => recipient.buyer_project_id),
+        );
+      if (duplicate)
+        throw new AppError(
+          "One or more selected projects already received this opportunity.",
+          409,
+        );
+      database
+        .prepare(
+          "INSERT INTO deal_outreach(id,deal_id,sender_user_id,subject,message) VALUES(?,?,?,?,?)",
+        )
+        .run(outreachId, deal.id, user.id, p.subject, p.message);
+      const insertRecipient = database.prepare(
+        `INSERT INTO deal_outreach_recipients(
+          id,outreach_id,buyer_organization_id,buyer_project_id,status,sent_at
+        ) VALUES(?,?,?,?,'sent',CURRENT_TIMESTAMP)`,
+      );
+      for (const recipient of recipients)
+        insertRecipient.run(
+          randomUUID(),
+          outreachId,
+          recipient.buyer_organization_id,
+          recipient.buyer_project_id,
+        );
+      database
+        .prepare(
+          `UPDATE deal_matches
+           SET status='contacted',updated_at=strftime('%Y-%m-%d %H:%M:%f','now')
+           WHERE deal_id=? AND id IN (${placeholders})`,
+        )
+        .run(deal.id, ...matchIds);
+      audit(
+        user,
+        deal.id,
+        `Shared private teaser with ${recipients.length} buyer project${recipients.length === 1 ? "" : "s"}`,
+      );
+    });
+    return {
+      id: outreachId,
+      message: `Private teaser shared with ${matchIds.length} buyer project${matchIds.length === 1 ? "" : "s"}.`,
+    };
+  }
+  if (action === "viewOutreach" || action === "respondToOutreach") {
+    if (user.role !== "buyer")
+      throw new AppError("Only recipient buyers can access outreach.", 403);
+    const organization = organizationFor(user.id);
+    if (!organization)
+      throw new AppError(
+        "Your account is not connected to an organization.",
+        403,
+      );
+    if (action === "viewOutreach") {
+      const recipientIds = [
+        ...new Set(
+          parse(
+            z.array(idSchema).min(1).max(100),
+            data.recipient_ids ?? [data.recipient_id],
+          ),
+        ),
+      ];
+      const placeholders = recipientIds.map(() => "?").join(",");
+      const recipients = all<{
+        id: string;
+        status: string;
+        buyer_organization_id: string;
+      }>(
+        `SELECT dor.id,dor.status,dor.buyer_organization_id
+         FROM deal_outreach_recipients dor
+         JOIN deal_outreach o ON o.id=dor.outreach_id
+         WHERE dor.id IN (${placeholders}) AND o.deal_id=?`,
+        ...recipientIds,
+        deal.id,
+      );
+      if (
+        recipients.length !== recipientIds.length ||
+        recipients.some(
+          (recipient) => recipient.buyer_organization_id !== organization.id,
+        )
+      )
+        throw new AppError("This private outreach is not available.", 404);
+      const sentIds = recipients
+        .filter((recipient) => recipient.status === "sent")
+        .map((recipient) => recipient.id);
+      if (sentIds.length) {
+        const sentPlaceholders = sentIds.map(() => "?").join(",");
+        run(
+          `UPDATE deal_outreach_recipients
+           SET status='viewed',viewed_at=CURRENT_TIMESTAMP
+           WHERE id IN (${sentPlaceholders}) AND status='sent'`,
+          ...sentIds,
+        );
+        audit(
+          user,
+          deal.id,
+          `Viewed ${sentIds.length} private teaser recipient${sentIds.length === 1 ? "" : "s"}`,
+        );
+      }
+      return { message: "Opportunity marked as viewed." };
+    }
+    const recipientId = parse(idSchema, data.recipient_id);
+    const recipient = one<{
+      id: string;
+      status: string;
+      buyer_organization_id: string;
+    }>(
+      `SELECT dor.id,dor.status,dor.buyer_organization_id
+       FROM deal_outreach_recipients dor
+       JOIN deal_outreach o ON o.id=dor.outreach_id
+       WHERE dor.id=? AND o.deal_id=?`,
+      recipientId,
+      deal.id,
+    );
+    if (!recipient || recipient.buyer_organization_id !== organization.id)
+      throw new AppError("This private outreach is not available.", 404);
+    if (organization.membership_role === "viewer")
+      throw new AppError(
+        "Read-only organization members cannot respond to outreach.",
+        403,
+      );
+    const response = parse(z.enum(["interested", "pass"]), data.response);
+    const targetStatus = response === "interested" ? "pursued" : "passed";
+    if (recipient.status === targetStatus)
+      return {
+        message:
+          response === "interested"
+            ? "Interest already recorded."
+            : "Pass already recorded.",
+      };
+    if (!["sent", "viewed"].includes(recipient.status))
+      throw new AppError("This outreach already has a final response.", 409);
+    const existingAccess = membership(deal.id, user.id);
+    if (
+      response === "interested" &&
+      existingAccess &&
+      ["denied", "revoked"].includes(existingAccess.status)
+    )
+      throw new AppError(
+        "Your organization cannot pursue this opportunity at this time.",
+        403,
+      );
+    const database = db();
+    inImmediateTransaction(database, () => {
+      const updated = database
+        .prepare(
+          `UPDATE deal_outreach_recipients SET status=?,
+             viewed_at=COALESCE(viewed_at,CURRENT_TIMESTAMP),
+             pursued_at=CASE WHEN ?='pursued' THEN CURRENT_TIMESTAMP ELSE pursued_at END,
+             passed_at=CASE WHEN ?='passed' THEN CURRENT_TIMESTAMP ELSE passed_at END
+           WHERE id=? AND status IN ('sent','viewed')`,
+        )
+        .run(targetStatus, targetStatus, targetStatus, recipient.id);
+      if (!updated.changes)
+        throw new AppError("This outreach already has a final response.", 409);
+      if (response === "interested" && !existingAccess)
+        database
+          .prepare(
+            "INSERT INTO access(id,deal_id,buyer_id,status,nda_status,notes) VALUES(?,?,?,'requested','not_requested','Interest submitted from private teaser outreach')",
+          )
+          .run(randomUUID(), deal.id, user.id);
+      audit(
+        user,
+        deal.id,
+        response === "interested"
+          ? "Expressed interest in private outreach"
+          : "Passed on private outreach",
+      );
+    });
+    return {
+      message:
+        response === "interested"
+          ? "Interest shared with the deal team."
+          : "Opportunity passed.",
+    };
+  }
   if (action === "requestAccess") {
     if (
       user.role !== "buyer" ||

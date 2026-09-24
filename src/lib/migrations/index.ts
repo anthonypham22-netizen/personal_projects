@@ -6,6 +6,7 @@ import { buyerProjectsMigration } from "./003_buyer_projects.ts";
 import { sellSideMandatesMigration } from "./004_sell_side_mandates.ts";
 import { matchingEngineMigration } from "./005_matching_engine.ts";
 import { recommendedBuyersMigration } from "./006_recommended_buyers.ts";
+import { privateTeaserDistributionMigration } from "./007_private_teaser_distribution.ts";
 
 export type Migration = {
   version: number;
@@ -26,6 +27,7 @@ const migrations: readonly Migration[] = [
   sellSideMandatesMigration,
   matchingEngineMigration,
   recommendedBuyersMigration,
+  privateTeaserDistributionMigration,
 ];
 
 const migrationTableSql = `

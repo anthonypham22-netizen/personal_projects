@@ -256,6 +256,37 @@ export type DealMatch = {
   created_at: string;
   updated_at: string;
 };
+export const DEAL_OUTREACH_RECIPIENT_STATUSES = [
+  "queued",
+  "sent",
+  "viewed",
+  "pursued",
+  "passed",
+  "expired",
+] as const;
+export type DealOutreachRecipientStatus =
+  (typeof DEAL_OUTREACH_RECIPIENT_STATUSES)[number];
+export type DealOutreachRecipient = {
+  id: string;
+  outreach_id: string;
+  deal_id: string;
+  sender_user_id: string;
+  sender_name: string;
+  subject: string;
+  message: string;
+  created_at: string;
+  buyer_organization_id: string;
+  buyer_organization_name: string;
+  buyer_project_id: string;
+  buyer_project_name: string;
+  status: DealOutreachRecipientStatus;
+  sent_at: string | null;
+  viewed_at: string | null;
+  pursued_at: string | null;
+  passed_at: string | null;
+  match_score: number;
+  match_reasons: string[];
+};
 export type Access = {
   id: string;
   deal_id: string;
@@ -335,6 +366,7 @@ export type WorkspaceData = {
   can_manage_buyer_projects: boolean;
   deals: Deal[];
   deal_matches?: DealMatch[];
+  deal_outreach: DealOutreachRecipient[];
   deal_financials: DealFinancial[];
   access: Access[];
   documents: Document[];
