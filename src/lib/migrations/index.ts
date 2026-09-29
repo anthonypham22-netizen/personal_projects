@@ -16,6 +16,7 @@ import { emailProcessingTokenMigration } from "./013_email_processing_token.ts";
 import { buyerVerificationMigration } from "./014_buyer_verification.ts";
 import { buyerFirmProfilesMigration } from "./015_buyer_firm_profiles.ts";
 import { buyerFirmProfileRevisionMigration } from "./016_buyer_firm_profile_revision.ts";
+import { closedTransactionsMigration } from "./017_closed_transactions.ts";
 
 export type Migration = {
   version: number;
@@ -46,6 +47,7 @@ const migrations: readonly Migration[] = [
   buyerVerificationMigration,
   buyerFirmProfilesMigration,
   buyerFirmProfileRevisionMigration,
+  closedTransactionsMigration,
 ];
 
 const migrationTableSql = `

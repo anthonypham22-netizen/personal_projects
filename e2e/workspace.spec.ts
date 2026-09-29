@@ -129,6 +129,7 @@ test("owner can inspect and curate recommended buyers", async ({ page }) => {
 test("buyer can maintain a seller-facing firm profile", async ({ page }) => {
   await page.goto("/login");
   await page.getByRole("button", { name: "Buyer demo" }).click();
+  await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/verification");
 
   await expect(
@@ -160,6 +161,75 @@ test("buyer can maintain a seller-facing firm profile", async ({ page }) => {
   await expect(
     page.getByLabel("Completed acquisitions (self-reported)"),
   ).toHaveValue("");
+});
+
+test("buyer adds a transaction tombstone for review and sellers see its verification state", async ({
+  page,
+}) => {
+  const industry = `Specialty distribution ${Date.now()}`;
+  const headers = { Origin: "http://localhost:3000" };
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goto("/app/verification");
+
+  await expect(
+    page.getByRole("heading", { name: "Closed transaction history" }),
+  ).toBeVisible();
+  await page.getByLabel("Industry").fill(industry);
+  await page.getByLabel("Province").selectOption("Ontario");
+  await page.getByLabel("Enterprise value (CAD)").fill("18000000");
+  await page.getByLabel("Closing date").fill("2025-06-30");
+  await page
+    .getByLabel("Anonymized transaction description")
+    .fill(
+      "Majority acquisition of a Canadian recurring-revenue distribution business.",
+    );
+  await page.getByRole("button", { name: "Add transaction record" }).click();
+  const buyerTombstone = page
+    .locator(".transaction-tombstones-own article")
+    .filter({ hasText: industry });
+  await expect(buyerTombstone).toContainText("Self-reported");
+
+  await page.request.post("/api/auth", {
+    headers,
+    data: { action: "logout" },
+  });
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Advisor demo" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goto("/app/verification");
+  const review = page
+    .locator(".verification-review-card")
+    .filter({ hasText: industry });
+  await expect(review).toContainText("Evergreen Capital");
+  await review
+    .getByRole("button", { name: "Mark as Succera verified" })
+    .click();
+  await expect(
+    page
+      .getByRole("status")
+      .getByText("Transaction history verified by Succera."),
+  ).toBeVisible();
+
+  await page.request.post("/api/auth", {
+    headers,
+    data: { action: "logout" },
+  });
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Owner demo" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goto("/app/deals/cedar");
+  await page.getByRole("button", { name: "Recommended buyers" }).click();
+  const recommendation = page.getByRole("article").filter({
+    has: page.getByRole("checkbox", {
+      name: /Select Evergreen Capital.*Project Maple/,
+    }),
+  });
+  await recommendation.getByText("View profile").click();
+  await expect(recommendation).toContainText("Closed transaction history");
+  await expect(recommendation).toContainText(industry);
+  await expect(recommendation).toContainText("Succera verified");
 });
 
 test("advisor can inspect the event-backed buyer funnel and record a milestone", async ({

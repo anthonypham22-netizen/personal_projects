@@ -8,7 +8,7 @@ The first deployment should be a staging environment with fictional data. A succ
 
 ## 1. Complete local verification
 
-Local installation, TypeScript checking, the production build, 17 backend tests, and 6 Chromium checks passed. Repeat verification after changes and before deployment:
+Local installation, TypeScript checking, the production build, 76 backend tests, and 21 Chromium checks passed. Repeat verification after changes and before deployment:
 
 ```sh
 npm ci
@@ -195,6 +195,28 @@ ORDER BY version;
 ```
 
 `missing_buyer_firm_profiles` should be zero and migrations 15 and 16 should each appear exactly once. Compare the pre/post buyer-project, deal-match, and verification-profile counts; the profile migrations must not rewrite them except for the deliberate buyer-project pause/recalculation when an organization is reclassified out of buyer status. If startup or validation fails, stop the application and restore the complete snapshot before starting the previous code. There is no automatic down migration.
+
+### Phase 13 migration checks
+
+Migration `017_closed_transactions` adds buyer-organization transaction tombstones and their explicit verification metadata. Before deployment, retain the normal verified database-and-uploads backup and record the counts for organizations, buyer projects, deal matches, buyer profiles, and existing deals. After restart, run:
+
+```sql
+SELECT version,name,applied_at
+FROM schema_migrations
+WHERE version=17;
+
+SELECT verified,COUNT(*) AS transaction_count
+FROM closed_transactions
+GROUP BY verified
+ORDER BY verified;
+
+SELECT COUNT(*) AS invalid_verified_records
+FROM closed_transactions
+WHERE (verified=0 AND (verified_by_user_id IS NOT NULL OR verified_at IS NOT NULL))
+   OR (verified=1 AND (verified_by_user_id IS NULL OR verified_at IS NULL));
+```
+
+Migration 17 should appear exactly once and `invalid_verified_records` should be zero. The migration creates no historical transaction claims by itself; demo seeding adds fictional examples only when demo data is enabled. Compare all pre/post marketplace counts—the migration must not rewrite organizations, projects, matches, profiles, deals, documents, or funnel events. If startup or validation fails, stop the application and restore the complete snapshot before starting the previous code. There is no automatic down migration.
 
 ## What changes for a larger launch
 

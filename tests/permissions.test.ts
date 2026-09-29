@@ -38,6 +38,130 @@ after(() => {
   rmSync(directory, { recursive: true, force: true });
 });
 
+test("buyer transaction tombstones remain scoped and require platform verification", () => {
+  const created = mutate(buyer, {
+    action: "createClosedTransaction",
+    data: {
+      industry: "Business services",
+      province: "Ontario",
+      enterprise_value: 18_000_000,
+      closed_date: "2025-06-30",
+      description:
+        "Majority acquisition of a Canadian recurring-revenue field-services company.",
+    },
+  });
+  assert.ok(created.id);
+
+  const buyerState = workspace(buyer) as WorkspaceWithTransactions;
+  const transaction = buyerState.closed_transactions.find(
+    (entry) => entry.id === created.id,
+  );
+  assert.equal(transaction?.buyer_organization_id, "org-demo-buyer");
+  assert.equal(transaction?.verified, 0);
+  assert.equal(transaction?.verification_label, "Self-reported");
+  assert.equal(
+    (
+      workspace(otherBuyer) as WorkspaceWithTransactions
+    ).closed_transactions.some((entry) => entry.id === created.id),
+    false,
+  );
+
+  assert.throws(
+    () =>
+      mutate(owner, {
+        action: "createClosedTransaction",
+        data: {
+          industry: "Technology",
+          province: "Ontario",
+          enterprise_value: 5_000_000,
+          closed_date: "2024-01-31",
+          description: "An unauthorized transaction-history record.",
+        },
+      }),
+    /Only buyer organization owners and administrators/,
+  );
+  assert.throws(
+    () =>
+      mutate(otherBuyer, {
+        action: "verifyClosedTransaction",
+        data: { transaction_id: created.id },
+      }),
+    /Only platform verification reviewers/,
+  );
+  run("UPDATE users SET is_platform_admin=1 WHERE id=?", buyer.id);
+  buyer.is_platform_admin = 1;
+  try {
+    assert.throws(
+      () =>
+        mutate(buyer, {
+          action: "verifyClosedTransaction",
+          data: { transaction_id: created.id },
+        }),
+      /unavailable or has already been reviewed/,
+      "a platform reviewer must not verify a record for their own firm",
+    );
+  } finally {
+    run("UPDATE users SET is_platform_admin=0 WHERE id=?", buyer.id);
+    buyer.is_platform_admin = 0;
+  }
+
+  const reviewerBefore = workspace(advisor) as WorkspaceWithTransactions;
+  assert.equal(
+    reviewerBefore.closed_transaction_review_queue?.some(
+      (entry) => entry.id === created.id,
+    ),
+    true,
+  );
+  mutate(advisor, {
+    action: "verifyClosedTransaction",
+    data: { transaction_id: created.id },
+  });
+
+  const verified = (
+    workspace(buyer) as WorkspaceWithTransactions
+  ).closed_transactions.find((entry) => entry.id === created.id);
+  assert.equal(verified?.verified, 1);
+  assert.equal(verified?.verification_label, "Succera verified");
+  assert.equal(
+    (
+      workspace(advisor) as WorkspaceWithTransactions
+    ).closed_transaction_review_queue?.some((entry) => entry.id === created.id),
+    false,
+  );
+
+  const sellerMatch = workspace(owner).deal_matches?.find(
+    (match) => match.buyer_organization_id === "org-demo-buyer",
+  );
+  const sellerTransaction = (
+    sellerMatch?.buyer_firm_profile as unknown as {
+      closed_transactions: Array<Record<string, unknown>>;
+    }
+  ).closed_transactions.find((entry) => entry.id === created.id);
+  assert.deepEqual(Object.keys(sellerTransaction ?? {}).sort(), [
+    "closed_date",
+    "description",
+    "enterprise_value",
+    "id",
+    "industry",
+    "province",
+    "verification_label",
+    "verified",
+  ]);
+  assert.equal(sellerTransaction?.verified, 1);
+  assert.equal("seller_organization_id" in (sellerTransaction ?? {}), false);
+  assert.equal("advisor_organization_id" in (sellerTransaction ?? {}), false);
+});
+
+type WorkspaceWithTransactions = ReturnType<typeof workspace> & {
+  closed_transactions: Array<{
+    id: string;
+    buyer_organization_id: string;
+    verified: number;
+    verification_label: string;
+  }>;
+  closed_transaction_review_queue?: Array<{ id: string }>;
+};
+
 test("buyers receive redacted teasers before confidential approval", () => {
   const state = workspace(buyer);
   const harbour = state.deals.find((d) => d.id === "harbour")!;
@@ -1826,7 +1950,10 @@ test("buyer firm profile saves reject stale revisions", () => {
       self_reported_acquisition_count: 1,
     },
   });
-  assert.equal(workspace(concurrentBuyer).buyer_firm_profile?.revision, revision + 1);
+  assert.equal(
+    workspace(concurrentBuyer).buyer_firm_profile?.revision,
+    revision + 1,
+  );
   assert.throws(
     () =>
       mutate(concurrentBuyer, {

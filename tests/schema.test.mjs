@@ -26,6 +26,7 @@ import { emailProcessingTokenMigration } from "../src/lib/migrations/013_email_p
 import { buyerVerificationMigration } from "../src/lib/migrations/014_buyer_verification.ts";
 import { buyerFirmProfilesMigration } from "../src/lib/migrations/015_buyer_firm_profiles.ts";
 import { buyerFirmProfileRevisionMigration } from "../src/lib/migrations/016_buyer_firm_profile_revision.ts";
+import { closedTransactionsMigration } from "../src/lib/migrations/017_closed_transactions.ts";
 import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
 import { ensureBuyerFunnelBackfill } from "../src/lib/buyer-funnel.ts";
 
@@ -74,6 +75,7 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 14, name: "buyer_verification" },
       { version: 15, name: "buyer_firm_profiles" },
       { version: 16, name: "buyer_firm_profile_revision" },
+      { version: 17, name: "closed_transactions" },
     ]);
 
     seed(database, directory);
@@ -146,6 +148,11 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       database.prepare("SELECT COUNT(*) count FROM buyer_firm_profiles").get()
         .count,
       2,
+    );
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM closed_transactions").get()
+        .count,
+      3,
     );
     assert.equal(
       database
@@ -362,7 +369,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 16);
+    assert.equal(history.length, 17);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
@@ -380,6 +387,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       { version: 14, name: "buyer_verification" },
       { version: 15, name: "buyer_firm_profiles" },
       { version: 16, name: "buyer_firm_profile_revision" },
+      { version: 17, name: "closed_transactions" },
     ]);
     assert.equal(
       database
@@ -1131,9 +1139,8 @@ test("an existing Phase 12 preview profile table gains nullable counts and revis
       database
         .prepare("PRAGMA table_info(buyer_firm_profiles)")
         .all()
-        .find(
-          (column) => column.name === "self_reported_acquisition_count",
-        ).notnull,
+        .find((column) => column.name === "self_reported_acquisition_count")
+        .notnull,
       0,
     );
     assert.doesNotThrow(() =>
@@ -1145,6 +1152,119 @@ test("an existing Phase 12 preview profile table gains nullable counts and revis
     );
   } finally {
     database.close();
+  }
+});
+
+test("an existing Phase 12 database adds constrained transaction tombstones without rewriting marketplace data", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase13-"));
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    const phaseTwelve = [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+      recommendedBuyersMigration,
+      privateTeaserDistributionMigration,
+      qualifiedDiscoveryMigration,
+      buyerFunnelMigration,
+      internalDealNotesMigration,
+      notificationsMigration,
+      emailProcessingLeaseMigration,
+      emailProcessingTokenMigration,
+      buyerVerificationMigration,
+      buyerFirmProfilesMigration,
+      buyerFirmProfileRevisionMigration,
+    ];
+    applyMigrations(database, phaseTwelve);
+    seed(database, directory);
+    ensureInitialMatchBackfill(database);
+    const before = {
+      users: database.prepare("SELECT COUNT(*) count FROM users").get().count,
+      deals: database.prepare("SELECT COUNT(*) count FROM deals").get().count,
+      projects: database
+        .prepare("SELECT COUNT(*) count FROM buyer_projects")
+        .get().count,
+      matches: database.prepare("SELECT COUNT(*) count FROM deal_matches").get()
+        .count,
+      firmProfiles: database
+        .prepare("SELECT COUNT(*) count FROM buyer_firm_profiles")
+        .get().count,
+    };
+
+    applyMigrations(database, [...phaseTwelve, closedTransactionsMigration]);
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 17,
+      name: "closed_transactions",
+    });
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM closed_transactions").get()
+        .count,
+      0,
+      "the migration must not invent historical transactions",
+    );
+    assert.deepEqual(
+      {
+        users: database.prepare("SELECT COUNT(*) count FROM users").get().count,
+        deals: database.prepare("SELECT COUNT(*) count FROM deals").get().count,
+        projects: database
+          .prepare("SELECT COUNT(*) count FROM buyer_projects")
+          .get().count,
+        matches: database
+          .prepare("SELECT COUNT(*) count FROM deal_matches")
+          .get().count,
+        firmProfiles: database
+          .prepare("SELECT COUNT(*) count FROM buyer_firm_profiles")
+          .get().count,
+      },
+      before,
+    );
+
+    seed(database, directory);
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM closed_transactions").get()
+        .count,
+      3,
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT verified FROM closed_transactions WHERE id='closed-demo-evergreen-manufacturing'",
+        )
+        .get().verified,
+      0,
+      "self-reported history must remain explicitly unverified",
+    );
+    assert.throws(() =>
+      database
+        .prepare(
+          `INSERT INTO closed_transactions(
+             id,buyer_organization_id,industry,province,closed_date,
+             description,verified
+           ) VALUES(
+             'invalid-verified','org-demo-buyer','Services','Ontario',
+             '2025-01-31','A valid-length description',1
+           )`,
+        )
+        .run(),
+    );
+    assert.throws(() =>
+      database
+        .prepare(
+          `INSERT INTO closed_transactions(
+             id,buyer_organization_id,industry,province,closed_date,description
+           ) VALUES(
+             'invalid-date','org-demo-buyer','Services','Ontario',
+             '2025-02-31','A valid-length description'
+           )`,
+        )
+        .run(),
+    );
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

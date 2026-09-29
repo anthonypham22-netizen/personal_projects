@@ -206,6 +206,42 @@ export type BuyerFirmProfile = {
   updated_at: string;
   can_manage: boolean;
 };
+export type ClosedTransactionVerificationLabel =
+  "Self-reported" | "Succera verified";
+export type ClosedTransaction = {
+  id: string;
+  buyer_organization_id: string;
+  seller_organization_id: string | null;
+  advisor_organization_id: string | null;
+  industry: string;
+  province: string;
+  enterprise_value: number | null;
+  closed_date: string;
+  description: string;
+  verified: number;
+  verification_label: ClosedTransactionVerificationLabel;
+  created_by_user_id: string | null;
+  verified_by_user_id: string | null;
+  verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+  can_manage: boolean;
+};
+export type SellerVisibleClosedTransaction = Pick<
+  ClosedTransaction,
+  | "id"
+  | "industry"
+  | "province"
+  | "enterprise_value"
+  | "closed_date"
+  | "description"
+  | "verified"
+  | "verification_label"
+>;
+export type ClosedTransactionReviewEntry = ClosedTransaction & {
+  buyer_organization_name: string;
+  submitted_by_name: string | null;
+};
 export type SellerVisibleBuyerProject = {
   id: string;
   name: string;
@@ -229,6 +265,7 @@ export type SellerVisibleBuyerFirmProfile = Pick<
   | "updated_at"
 > & {
   active_projects: SellerVisibleBuyerProject[];
+  closed_transactions: SellerVisibleClosedTransaction[];
 };
 export type VerificationReview = {
   id: string;
@@ -634,9 +671,11 @@ export type WorkspaceData = {
   notification_preferences: NotificationPreferences;
   buyer_verification_profile?: BuyerVerificationProfile;
   buyer_firm_profile?: BuyerFirmProfile;
+  closed_transactions: ClosedTransaction[];
   is_platform_admin: boolean;
   verification_admin_queue?: VerificationAdminEntry[];
   verification_reviews?: VerificationReview[];
+  closed_transaction_review_queue?: ClosedTransactionReviewEntry[];
   advisors: Pick<User, "id" | "name" | "company" | "province" | "bio">[];
   demo: boolean;
 };

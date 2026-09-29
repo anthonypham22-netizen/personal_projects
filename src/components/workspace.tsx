@@ -82,6 +82,7 @@ import {
   type NotificationPreferences,
   type NotificationType,
   type BuyerVerificationStatus,
+  type SellerVisibleClosedTransaction,
 } from "@/lib/types";
 
 const buyerOrganizationTypes = new Set<string>(BUYER_ORGANIZATION_TYPES);
@@ -179,6 +180,12 @@ const dateTimeLabel = (date: string) =>
     minute: "2-digit",
     timeZone: "America/Toronto",
   });
+const closedDateLabel = (date: string) =>
+  new Date(`${date}T12:00:00Z`).toLocaleDateString("en-CA", {
+    month: "short",
+    year: "numeric",
+    timeZone: "America/Toronto",
+  });
 const statusText = (value: string) =>
   value.replaceAll("_", " ").replace(/^./, (v) => v.toUpperCase());
 function Status({ value }: { value: string }) {
@@ -197,6 +204,7 @@ function Status({ value }: { value: string }) {
           "Shortlisted",
           "selected",
           "contacted",
+          "Succera verified",
         ].includes(value)
           ? "badge-green"
           : [
@@ -205,6 +213,7 @@ function Status({ value }: { value: string }) {
                 "nda_pending",
                 "LOI review",
                 "Under review",
+                "Self-reported",
               ].includes(value)
             ? "badge-amber"
             : [
@@ -220,6 +229,38 @@ function Status({ value }: { value: string }) {
     >
       {statusText(value)}
     </span>
+  );
+}
+function TransactionTombstones({
+  transactions,
+  className,
+}: {
+  transactions: SellerVisibleClosedTransaction[];
+  className?: string;
+}) {
+  return (
+    <div className={cn("transaction-tombstones", className)} role="list">
+      {transactions.map((transaction) => (
+        <article key={transaction.id} role="listitem">
+          <header>
+            <div>
+              <strong>{transaction.industry}</strong>
+              <span>
+                {transaction.province} · Closed{" "}
+                {closedDateLabel(transaction.closed_date)}
+              </span>
+            </div>
+            <Status value={transaction.verification_label} />
+          </header>
+          <p>{transaction.description}</p>
+          <small>
+            {transaction.enterprise_value === null
+              ? "Enterprise value not disclosed"
+              : `${money(transaction.enterprise_value, false)} enterprise value`}
+          </small>
+        </article>
+      ))}
+    </div>
   );
 }
 function Empty({
@@ -4462,6 +4503,17 @@ function BuyerRecommendation({
               </section>
 
               <section>
+                <h4>Closed transaction history</h4>
+                {match.buyer_firm_profile.closed_transactions.length ? (
+                  <TransactionTombstones
+                    transactions={match.buyer_firm_profile.closed_transactions}
+                  />
+                ) : (
+                  <p>No closed transaction records have been added.</p>
+                )}
+              </section>
+
+              <section>
                 <h4>Active acquisition projects</h4>
                 {match.buyer_firm_profile.active_projects.length ? (
                   <div className="buyer-profile-projects">
@@ -5234,6 +5286,97 @@ const verificationLadder = BUYER_VERIFICATION_STATUSES.filter(
   (status) => status !== "rejected",
 );
 
+function BuyerTransactionHistoryPanel() {
+  const { data } = useWorkspace();
+  const transactions = data.closed_transactions;
+  const canManage = Boolean(data.buyer_firm_profile?.can_manage);
+  return (
+    <Panel title="Closed transaction history">
+      <div className="panel-body">
+        <div className="verification-admin-intro">
+          <Handshake size={20} />
+          <div>
+            <strong>Build a credible acquisition record</strong>
+            <p>
+              Add anonymized transaction tombstones. New entries remain visibly
+              self-reported until a Succera platform reviewer verifies them.
+            </p>
+          </div>
+        </div>
+        {canManage && (
+          <MutationForm
+            action="createClosedTransaction"
+            label="Add transaction record"
+            reset
+          >
+            <div className="form-grid">
+              <Field
+                label="Industry"
+                name="industry"
+                value=""
+                help="Use a concise category; do not name the acquired company."
+              />
+              <SelectField
+                label="Province"
+                name="province"
+                options={PROVINCES}
+                value={data.organization.province}
+              />
+              <Field
+                label="Enterprise value (CAD)"
+                name="enterprise_value"
+                type="number"
+                min={0}
+                max={10_000_000_000}
+                required={false}
+                help="Optional. Leave blank if the value is confidential."
+              />
+              <label>
+                Closing date
+                <input
+                  name="closed_date"
+                  type="date"
+                  max={new Date().toISOString().slice(0, 10)}
+                  required
+                />
+              </label>
+              <label className="full">
+                Anonymized transaction description
+                <textarea
+                  name="description"
+                  minLength={10}
+                  maxLength={2000}
+                  required
+                  placeholder="Majority acquisition of a Canadian recurring-revenue industrial services platform."
+                />
+                <span className="field-hint">
+                  Exclude company, seller, advisor, customer, and financing
+                  identities.
+                </span>
+              </label>
+            </div>
+          </MutationForm>
+        )}
+        {transactions.length ? (
+          <TransactionTombstones
+            transactions={transactions}
+            className="transaction-tombstones-own"
+          />
+        ) : (
+          <Empty
+            title="No transaction records yet"
+            body={
+              canManage
+                ? "Add an anonymized closed transaction to begin building the firm’s history."
+                : "An organization owner or administrator can add transaction history."
+            }
+          />
+        )}
+      </div>
+    </Panel>
+  );
+}
+
 function BuyerVerificationPanel() {
   const { data } = useWorkspace();
   const profile = data.buyer_verification_profile;
@@ -5328,6 +5471,7 @@ function BuyerVerificationPanel() {
           </div>
         </Panel>
       )}
+      <BuyerTransactionHistoryPanel />
       <Panel title="Buyer verification">
         <div className="verification-summary">
           <div>
@@ -5585,6 +5729,7 @@ function VerificationReviewQueue() {
   const queue = data.verification_admin_queue ?? [];
   const pending = queue.filter((entry) => entry.submitted_at);
   const reviews = data.verification_reviews ?? [];
+  const transactionQueue = data.closed_transaction_review_queue ?? [];
   return (
     <div className="verification-admin-stack">
       <Panel title={`Internal review queue · ${pending.length}`}>
@@ -5688,6 +5833,81 @@ function VerificationReviewQueue() {
           <Empty
             title="No buyer profiles await review"
             body="Submitted buyer evidence will appear here for an internal decision."
+          />
+        )}
+      </Panel>
+      <Panel title={`Transaction history review · ${transactionQueue.length}`}>
+        <div className="verification-admin-intro">
+          <Handshake size={20} />
+          <div>
+            <strong>Verify the record, not the marketing claim</strong>
+            <p>
+              Confirm supporting evidence outside this profile before marking a
+              self-reported transaction as Succera verified.
+            </p>
+          </div>
+        </div>
+        {transactionQueue.length ? (
+          <div className="verification-review-list">
+            {transactionQueue.map((transaction) => (
+              <article
+                className="verification-review-card"
+                key={transaction.id}
+              >
+                <header>
+                  <div>
+                    <p className="eyebrow">SELF-REPORTED TRANSACTION</p>
+                    <h3>{transaction.buyer_organization_name}</h3>
+                    <p>
+                      Submitted by {transaction.submitted_by_name || "Unknown"}{" "}
+                      · {closedDateLabel(transaction.closed_date)}
+                    </p>
+                  </div>
+                  <Status value={transaction.verification_label} />
+                </header>
+                <div className="verification-review-grid">
+                  <div>
+                    <span>Industry</span>
+                    <strong>{transaction.industry}</strong>
+                  </div>
+                  <div>
+                    <span>Province</span>
+                    <strong>{transaction.province}</strong>
+                  </div>
+                  <div>
+                    <span>Enterprise value</span>
+                    <strong>
+                      {transaction.enterprise_value === null
+                        ? "Not disclosed"
+                        : money(transaction.enterprise_value, false)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Closed</span>
+                    <strong>{closedDateLabel(transaction.closed_date)}</strong>
+                  </div>
+                  <div className="full">
+                    <span>Anonymized description</span>
+                    <p>{transaction.description}</p>
+                  </div>
+                </div>
+                <MutationForm
+                  action="verifyClosedTransaction"
+                  extra={{ transaction_id: transaction.id }}
+                  label="Mark as Succera verified"
+                >
+                  <p className="notice">
+                    This records platform review. It is not legal accreditation,
+                    valuation confirmation, or investment advice.
+                  </p>
+                </MutationForm>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <Empty
+            title="No transaction records await review"
+            body="New self-reported tombstones will appear here for platform verification."
           />
         )}
       </Panel>

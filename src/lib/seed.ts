@@ -595,10 +595,68 @@ function syncDemoBuyerFirmProfiles(d: DatabaseSync) {
   ).run();
 }
 
+function syncDemoClosedTransactions(d: DatabaseSync) {
+  if (!tableExists(d, "closed_transactions")) return;
+  const insert = d.prepare(`
+    INSERT OR IGNORE INTO closed_transactions(
+      id,buyer_organization_id,seller_organization_id,
+      advisor_organization_id,industry,province,enterprise_value,
+      closed_date,description,verified,created_by_user_id,
+      verified_by_user_id,verified_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  insert.run(
+    "closed-demo-evergreen-services",
+    "org-demo-buyer",
+    "org-demo-owner",
+    "org-demo-advisor",
+    "Industrial services",
+    "Ontario",
+    18_000_000,
+    "2025-06-30",
+    "Majority acquisition of a Canadian recurring-revenue industrial services platform.",
+    1,
+    "demo-buyer",
+    "demo-advisor",
+    "2025-07-15 14:00:00",
+  );
+  insert.run(
+    "closed-demo-evergreen-manufacturing",
+    "org-demo-buyer",
+    null,
+    null,
+    "Specialty manufacturing",
+    "Alberta",
+    12_500_000,
+    "2023-11-15",
+    "Control acquisition of a founder-led Canadian specialty manufacturer.",
+    0,
+    "demo-buyer",
+    null,
+    null,
+  );
+  insert.run(
+    "closed-demo-laurent-technology",
+    "org-demo-buyer-2",
+    "org-demo-owner",
+    "org-demo-advisor",
+    "Technology",
+    "Québec",
+    6_200_000,
+    "2024-09-30",
+    "Operator-led acquisition of a profitable Canadian managed-services business.",
+    1,
+    "demo-buyer-2",
+    "demo-advisor",
+    "2024-10-18 16:30:00",
+  );
+}
+
 export function seed(d: DatabaseSync, directory: string) {
   if (d.prepare("SELECT id FROM users WHERE id='demo-advisor'").get()) {
     syncDemoVerification(d);
     syncDemoBuyerFirmProfiles(d);
+    syncDemoClosedTransactions(d);
     syncDemoDocuments(d, directory);
     syncDemoBuyerProjects(d);
     syncDemoMandates(d);
@@ -702,6 +760,7 @@ export function seed(d: DatabaseSync, directory: string) {
     }
     syncDemoVerification(d);
     syncDemoBuyerFirmProfiles(d);
+    syncDemoClosedTransactions(d);
     const deals = [
       [
         "cedar",

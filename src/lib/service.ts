@@ -42,6 +42,9 @@ import {
   type BuyerVerificationProfile,
   type BuyerFirmProfile,
   type SellerVisibleBuyerProject,
+  type ClosedTransaction,
+  type ClosedTransactionReviewEntry,
+  type SellerVisibleClosedTransaction,
   type VerificationAdminEntry,
   type VerificationReview,
   type BuyerVerificationStatus,
@@ -100,6 +103,13 @@ const optionalSignedAmount = z.preprocess(
     value === "" || value === undefined || value === null ? null : value,
   z.coerce.number().int().min(-10_000_000_000).max(10_000_000_000).nullable(),
 );
+const closedDate = z.iso
+  .date()
+  .refine(
+    (value) =>
+      value >= "1900-01-01" && value <= new Date().toISOString().slice(0, 10),
+    "Closing date must be between 1900 and today.",
+  );
 const parse = <T>(schema: z.ZodType<T>, input: unknown): T => {
   const result = schema.safeParse(input);
   if (!result.success)
@@ -179,6 +189,66 @@ const buyerFirmProfileFor = (
     ? { ...profile, can_manage: organization.can_manage }
     : undefined;
 };
+const transactionVerificationLabel = (verified: number) =>
+  verified ? ("Succera verified" as const) : ("Self-reported" as const);
+const closedTransactionsForOrganization = (
+  organization: Organization,
+): ClosedTransaction[] =>
+  all<Omit<ClosedTransaction, "can_manage" | "verification_label">>(
+    `SELECT * FROM closed_transactions
+     WHERE buyer_organization_id=?
+     ORDER BY closed_date DESC,created_at DESC,id DESC`,
+    organization.id,
+  ).map((transaction) => ({
+    ...transaction,
+    verification_label: transactionVerificationLabel(transaction.verified),
+    can_manage: organization.can_manage,
+  }));
+const closedTransactionReviewQueue = (
+  reviewer: User,
+): ClosedTransactionReviewEntry[] =>
+  all<Omit<ClosedTransactionReviewEntry, "can_manage" | "verification_label">>(
+    `SELECT ct.*,organization.name buyer_organization_name,
+       submitter.name submitted_by_name
+     FROM closed_transactions ct
+     JOIN organizations organization
+       ON organization.id=ct.buyer_organization_id
+     LEFT JOIN users submitter
+       ON submitter.id=ct.created_by_user_id
+     WHERE ct.verified=0
+       AND EXISTS (
+         SELECT 1
+         FROM organization_members realm_owner_members
+         JOIN users realm_owner ON realm_owner.id=realm_owner_members.user_id
+         WHERE realm_owner_members.organization_id=ct.buyer_organization_id
+           AND realm_owner_members.role='owner'
+           AND realm_owner_members.status='active'
+           AND realm_owner.is_demo=?
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM organization_members cross_realm_members
+         JOIN users cross_realm_user ON cross_realm_user.id=cross_realm_members.user_id
+         WHERE cross_realm_members.organization_id=ct.buyer_organization_id
+           AND cross_realm_members.status='active'
+           AND cross_realm_user.is_demo<>?
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM organization_members reviewer_membership
+         WHERE reviewer_membership.organization_id=ct.buyer_organization_id
+           AND reviewer_membership.user_id=?
+           AND reviewer_membership.status='active'
+       )
+     ORDER BY ct.created_at,ct.id
+     LIMIT 100`,
+    reviewer.is_demo,
+    reviewer.is_demo,
+    reviewer.id,
+  ).map((transaction) => ({
+    ...transaction,
+    verification_label: transactionVerificationLabel(transaction.verified),
+    can_manage: false,
+  }));
 const verificationAdminQueue = (reviewer: User): VerificationAdminEntry[] =>
   all<VerificationAdminEntry>(
     `SELECT profile.*,organization.name organization_name,
@@ -434,6 +504,42 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
   }
   for (const projects of activeProjects.values())
     projects.sort((left, right) => left.name.localeCompare(right.name));
+  const buyerOrganizationIds = [
+    ...new Set(rows.map((row) => row.buyer_organization_id)),
+  ];
+  const closedTransactions = new Map<
+    string,
+    SellerVisibleClosedTransaction[]
+  >();
+  if (buyerOrganizationIds.length) {
+    const organizationPlaceholders = buyerOrganizationIds
+      .map(() => "?")
+      .join(",");
+    const transactions = all<
+      SellerVisibleClosedTransaction & { buyer_organization_id: string }
+    >(
+      `SELECT id,buyer_organization_id,industry,province,enterprise_value,
+         closed_date,description,verified,
+         CASE WHEN verified=1 THEN 'Succera verified'
+              ELSE 'Self-reported' END verification_label
+       FROM closed_transactions ct
+       WHERE buyer_organization_id IN (${organizationPlaceholders})
+         AND id IN (
+           SELECT recent.id FROM closed_transactions recent
+           WHERE recent.buyer_organization_id=ct.buyer_organization_id
+           ORDER BY recent.closed_date DESC,recent.created_at DESC,recent.id DESC
+           LIMIT 20
+         )
+       ORDER BY buyer_organization_id,closed_date DESC,created_at DESC,id DESC`,
+      ...buyerOrganizationIds,
+    );
+    for (const { buyer_organization_id, ...transaction } of transactions) {
+      const organizationTransactions =
+        closedTransactions.get(buyer_organization_id) ?? [];
+      organizationTransactions.push(transaction);
+      closedTransactions.set(buyer_organization_id, organizationTransactions);
+    }
+  }
   return rows.map(
     ({
       score_breakdown_json,
@@ -462,6 +568,8 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
         active_projects:
           activeProjects.get(`${row.deal_id}:${row.buyer_organization_id}`) ??
           [],
+        closed_transactions:
+          closedTransactions.get(row.buyer_organization_id) ?? [],
       },
       score_breakdown: JSON.parse(
         score_breakdown_json,
@@ -1533,6 +1641,9 @@ export function workspace(user: User): WorkspaceData {
   const buyerFirmProfile = isEligibleBuyerOrganization(organization)
     ? buyerFirmProfileFor(organization)
     : undefined;
+  const closedTransactions = isEligibleBuyerOrganization(organization)
+    ? closedTransactionsForOrganization(organization)
+    : [];
   return {
     user,
     organization,
@@ -1564,11 +1675,13 @@ export function workspace(user: User): WorkspaceData {
       ? { buyer_verification_profile: buyerVerificationProfile }
       : {}),
     ...(buyerFirmProfile ? { buyer_firm_profile: buyerFirmProfile } : {}),
+    closed_transactions: closedTransactions,
     is_platform_admin: platformAdmin,
     ...(platformAdmin
       ? {
           verification_admin_queue: verificationAdminQueue(user),
           verification_reviews: verificationReviews(user),
+          closed_transaction_review_queue: closedTransactionReviewQueue(user),
         }
       : {}),
     advisors,
@@ -1639,6 +1752,109 @@ export function mutate(
       p.preferences as Partial<NotificationPreferences>,
     );
     return { message: "Notification preferences saved." };
+  }
+  if (action === "createClosedTransaction") {
+    const organization = organizationFor(user.id);
+    if (
+      !organization ||
+      !isEligibleBuyerOrganization(organization) ||
+      !organization.can_manage
+    )
+      throw new AppError(
+        "Only buyer organization owners and administrators can add transaction history.",
+        403,
+      );
+    const p = parse(
+      z.object({
+        industry: text(2, 160),
+        province: z.enum(PROVINCES),
+        enterprise_value: optionalAmount,
+        closed_date: closedDate,
+        description: text(10, 2000),
+      }),
+      data,
+    );
+    const id = randomUUID();
+    run(
+      `INSERT INTO closed_transactions(
+         id,buyer_organization_id,industry,province,enterprise_value,
+         closed_date,description,created_by_user_id
+       ) VALUES(?,?,?,?,?,?,?,?)`,
+      id,
+      organization.id,
+      p.industry,
+      p.province,
+      p.enterprise_value,
+      p.closed_date,
+      p.description,
+      user.id,
+    );
+    return {
+      id,
+      message:
+        "Transaction added as self-reported history and sent for platform review.",
+    };
+  }
+  if (action === "verifyClosedTransaction") {
+    if (!isPlatformAdmin(user))
+      throw new AppError(
+        "Only platform verification reviewers can verify transaction history.",
+        403,
+      );
+    const p = parse(z.object({ transaction_id: idSchema }), data);
+    const database = db();
+    inImmediateTransaction(database, () => {
+      const target = database
+        .prepare(
+          `SELECT ct.id
+           FROM closed_transactions ct
+           WHERE ct.id=? AND ct.verified=0
+             AND EXISTS (
+               SELECT 1
+               FROM organization_members realm_owner_members
+               JOIN users realm_owner ON realm_owner.id=realm_owner_members.user_id
+               WHERE realm_owner_members.organization_id=ct.buyer_organization_id
+                 AND realm_owner_members.role='owner'
+                 AND realm_owner_members.status='active'
+                 AND realm_owner.is_demo=?
+             )
+             AND NOT EXISTS (
+               SELECT 1
+               FROM organization_members cross_realm_members
+               JOIN users cross_realm_user
+                 ON cross_realm_user.id=cross_realm_members.user_id
+               WHERE cross_realm_members.organization_id=ct.buyer_organization_id
+                 AND cross_realm_members.status='active'
+                 AND cross_realm_user.is_demo<>?
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM organization_members reviewer_membership
+               WHERE reviewer_membership.organization_id=ct.buyer_organization_id
+                 AND reviewer_membership.user_id=?
+                 AND reviewer_membership.status='active'
+             )`,
+        )
+        .get(p.transaction_id, user.is_demo, user.is_demo, user.id);
+      if (!target)
+        throw new AppError(
+          "Transaction record is unavailable or has already been reviewed.",
+          404,
+        );
+      const updated = database
+        .prepare(
+          `UPDATE closed_transactions
+           SET verified=1,verified_by_user_id=?,verified_at=CURRENT_TIMESTAMP,
+             updated_at=CURRENT_TIMESTAMP
+           WHERE id=? AND verified=0`,
+        )
+        .run(user.id, p.transaction_id);
+      if (updated.changes !== 1)
+        throw new AppError(
+          "Transaction record was already reviewed. Refresh and try again.",
+          409,
+        );
+    });
+    return { message: "Transaction history verified by Succera." };
   }
   if (action === "updateBuyerFirmProfile") {
     const organization = organizationFor(user.id);
