@@ -197,6 +197,39 @@ export type BuyerVerificationProfile = {
   updated_at: string;
   can_manage: boolean;
 };
+export type BuyerFirmProfile = {
+  organization_id: string;
+  fund_structure: string;
+  financing_profile: string;
+  self_reported_acquisition_count: number | null;
+  revision: number;
+  updated_at: string;
+  can_manage: boolean;
+};
+export type SellerVisibleBuyerProject = {
+  id: string;
+  name: string;
+  min_revenue: number | null;
+  max_revenue: number | null;
+  min_ebitda: number | null;
+  max_ebitda: number | null;
+  min_equity_check: number | null;
+  max_equity_check: number | null;
+  ownership_preference: BuyerProjectOwnershipPreference;
+  transaction_type: BuyerProjectTransactionType;
+  sectors: string[];
+  provinces: string[];
+};
+export type SellerVisibleBuyerFirmProfile = Pick<
+  BuyerFirmProfile,
+  | "organization_id"
+  | "fund_structure"
+  | "financing_profile"
+  | "self_reported_acquisition_count"
+  | "updated_at"
+> & {
+  active_projects: SellerVisibleBuyerProject[];
+};
 export type VerificationReview = {
   id: string;
   organization_id: string;
@@ -302,6 +335,7 @@ export type DealMatch = {
   buyer_organization_verification_status: BuyerVerificationStatus;
   buyer_organization_website: string;
   buyer_organization_description: string;
+  buyer_firm_profile: SellerVisibleBuyerFirmProfile;
   relevant_acquisitions: number;
   score: number;
   eligible: number;
@@ -599,6 +633,7 @@ export type WorkspaceData = {
   notification_unread_count: number;
   notification_preferences: NotificationPreferences;
   buyer_verification_profile?: BuyerVerificationProfile;
+  buyer_firm_profile?: BuyerFirmProfile;
   is_platform_admin: boolean;
   verification_admin_queue?: VerificationAdminEntry[];
   verification_reviews?: VerificationReview[];

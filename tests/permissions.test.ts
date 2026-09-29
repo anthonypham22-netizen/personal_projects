@@ -1489,6 +1489,366 @@ test("deal managers can curate recommended buyers without granting access", () =
   );
 });
 
+test("buyer firms manage a seller-visible profile without exposing verification evidence", () => {
+  const buyerState = workspace(buyer);
+  mutate(buyer, {
+    action: "updateBuyerFirmProfile",
+    data: {
+      fund_structure:
+        "Closed-end private equity fund backed by Canadian institutions.",
+      financing_profile:
+        "Equity capital with senior acquisition financing where appropriate.",
+      revision: buyerState.buyer_firm_profile!.revision,
+      self_reported_acquisition_count: 12,
+    },
+  });
+
+  assert.equal(buyerState.buyer_firm_profile?.can_manage, true);
+  assert.equal(
+    buyerState.buyer_firm_profile?.self_reported_acquisition_count,
+    12,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(buyerState, "deal_matches"),
+    false,
+  );
+
+  const sellerMatch = workspace(owner).deal_matches?.find(
+    (match) =>
+      match.deal_id === "cedar" &&
+      match.buyer_organization_id === buyerState.organization.id,
+  );
+  assert.ok(sellerMatch?.buyer_firm_profile);
+  assert.equal(
+    sellerMatch.buyer_firm_profile.self_reported_acquisition_count,
+    12,
+  );
+  assert.deepEqual(
+    sellerMatch.buyer_firm_profile.active_projects.map(
+      (project) => project.name,
+    ),
+    ["Project Maple", "Project Northern Lights"],
+  );
+  assert.ok(
+    sellerMatch.buyer_firm_profile.active_projects.every(
+      (project) =>
+        Array.isArray(project.sectors) && Array.isArray(project.provinces),
+    ),
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      sellerMatch.buyer_firm_profile,
+      "capital_source",
+    ),
+    false,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      sellerMatch.buyer_firm_profile,
+      "acquisition_history",
+    ),
+    false,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      sellerMatch.buyer_firm_profile,
+      "principals",
+    ),
+    false,
+  );
+
+  run(
+    `INSERT INTO users(
+       id,email,password_hash,name,company,role,is_demo
+     ) VALUES('demo-buyer-profile-viewer','profile-viewer@example.test','hash',
+       'Profile Viewer','Evergreen Capital','buyer',1)`,
+  );
+  run(
+    `INSERT INTO organization_members(
+       id,organization_id,user_id,role,status
+     ) VALUES('membership-demo-buyer-profile-viewer',?,'demo-buyer-profile-viewer','viewer','active')`,
+    buyerState.organization.id,
+  );
+  const profileViewer = one<User>(
+    "SELECT * FROM users WHERE id='demo-buyer-profile-viewer'",
+  )!;
+  assert.equal(workspace(profileViewer).buyer_firm_profile?.can_manage, false);
+  assert.throws(
+    () =>
+      mutate(profileViewer, {
+        action: "updateBuyerFirmProfile",
+        data: {
+          fund_structure: "Unauthorized change",
+          financing_profile: "Unauthorized change",
+          revision: workspace(profileViewer).buyer_firm_profile!.revision,
+          self_reported_acquisition_count: 99,
+        },
+      }),
+    /owners and administrators/,
+  );
+  assert.throws(
+    () =>
+      mutate(owner, {
+        action: "updateBuyerFirmProfile",
+        data: {
+          fund_structure: "Unauthorized seller change",
+          financing_profile: "Unauthorized seller change",
+          revision: 1,
+          self_reported_acquisition_count: 99,
+        },
+      }),
+    /buyer organization owners and administrators/,
+  );
+});
+
+test("buyer firm profiles distinguish an untouched count from an explicit zero", () => {
+  const suffix = Date.now();
+  const token = register({
+    name: "Unreported Buyer",
+    company: `Unreported Capital ${suffix}`,
+    email: `unreported-buyer-${suffix}@example.test`,
+    role: "buyer",
+    password: "unreported-profile-password-2026",
+  });
+  const registeredBuyer = sessionUser(token)!;
+
+  assert.equal(
+    workspace(registeredBuyer).buyer_firm_profile
+      ?.self_reported_acquisition_count,
+    null,
+  );
+
+  mutate(registeredBuyer, {
+    action: "updateBuyerFirmProfile",
+    data: {
+      fund_structure: "",
+      financing_profile: "",
+      revision: workspace(registeredBuyer).buyer_firm_profile!.revision,
+      self_reported_acquisition_count: "",
+    },
+  });
+  assert.equal(
+    workspace(registeredBuyer).buyer_firm_profile
+      ?.self_reported_acquisition_count,
+    null,
+  );
+
+  mutate(registeredBuyer, {
+    action: "updateBuyerFirmProfile",
+    data: {
+      fund_structure: "",
+      financing_profile: "",
+      revision: workspace(registeredBuyer).buyer_firm_profile!.revision,
+      self_reported_acquisition_count: 0,
+    },
+  });
+  assert.equal(
+    workspace(registeredBuyer).buyer_firm_profile
+      ?.self_reported_acquisition_count,
+    0,
+  );
+});
+
+test("buyer reclassification pauses projects and blocks stale seller match actions", () => {
+  const suffix = Date.now();
+  const token = register({
+    name: "Reclassified Buyer",
+    company: `Reclassified Capital ${suffix}`,
+    email: `reclassified-buyer-${suffix}@example.test`,
+    role: "buyer",
+    password: "reclassified-profile-password-2026",
+  });
+  const reclassifiedBuyer = sessionUser(token)!;
+  const organization = workspace(reclassifiedBuyer).organization;
+  const sellerToken = register({
+    name: "Registered Seller",
+    company: `Registered Seller Co. ${suffix}`,
+    email: `registered-seller-${suffix}@example.test`,
+    role: "owner",
+    password: "reclassified-seller-password-2026",
+  });
+  const registeredSeller = sessionUser(sellerToken)!;
+  const project = mutate(reclassifiedBuyer, {
+    action: "createBuyerProject",
+    data: {
+      name: `Project Reclassified ${suffix}`,
+      status: "active",
+      thesis: "Acquire established Ontario business services companies.",
+      sectors: ["Business services"],
+      provinces: ["Ontario"],
+      transaction_type: "full_acquisition",
+      ownership_preference: "flexible",
+    },
+  });
+  assert.ok(project.id);
+  const deal = mutate(registeredSeller, {
+    action: "createDeal",
+    data: {
+      title: `Project Reclassification ${suffix}`,
+      company_name: `Reclassification Services ${suffix}`,
+      sector: "Business services",
+      province: "Ontario",
+      city: "Toronto",
+      revenue: 8_000_000,
+      ebitda: 1_500_000,
+      asking_price: 10_000_000,
+      employees: 24,
+      founded: 2010,
+      description:
+        "An established Ontario business services company with recurring customer relationships.",
+      confidential_summary: "Confidential seller summary.",
+      transaction_type: "full_acquisition",
+      ownership_percentage_available: 100,
+      seller_rollover_possible: false,
+      seller_financing_possible: false,
+      management_transition: "Founder will support a transition.",
+      reason_for_transaction: "Planned succession.",
+      min_expected_value: 9_000_000,
+      max_expected_value: 11_000_000,
+      distribution_mode: "private_outreach",
+      financial_year: 2025,
+      gross_profit: 3_000_000,
+      financial_is_projected: false,
+    },
+  });
+  assert.ok(deal.id);
+  const match = one<{
+    id: string;
+    eligible: number;
+  }>(
+    "SELECT id,eligible FROM deal_matches WHERE deal_id=? AND buyer_project_id=?",
+    deal.id,
+    project.id,
+  )!;
+  assert.equal(match.eligible, 1);
+
+  mutate(registeredSeller, {
+    action: "updateDealMatchStatus",
+    data: { deal_id: deal.id, match_ids: [match.id], status: "selected" },
+  });
+  mutate(registeredSeller, {
+    action: "shareTeaser",
+    data: {
+      deal_id: deal.id,
+      match_ids: [match.id],
+      subject: "A private Canadian opportunity",
+      message: "Please review this private opportunity.",
+    },
+  });
+
+  mutate(reclassifiedBuyer, {
+    action: "organization",
+    data: {
+      name: organization.name,
+      organization_type: "business",
+      website: organization.website,
+      province: organization.province,
+      description: organization.description,
+    },
+  });
+
+  const reclassifiedState = workspace(reclassifiedBuyer);
+  assert.equal(reclassifiedState.organization.organization_type, "business");
+  assert.equal(reclassifiedState.buyer_firm_profile, undefined);
+  assert.deepEqual(reclassifiedState.buyer_projects, []);
+  assert.equal(
+    one<{ status: string }>(
+      "SELECT status FROM buyer_projects WHERE id=?",
+      project.id,
+    )?.status,
+    "paused",
+  );
+  assert.equal(
+    one<{ eligible: number }>(
+      "SELECT eligible FROM deal_matches WHERE id=?",
+      match.id,
+    )?.eligible,
+    0,
+  );
+  assert.equal(
+    workspace(registeredSeller).deal_matches?.some(
+      (entry) => entry.buyer_organization_id === organization.id,
+    ),
+    false,
+  );
+  assert.equal(
+    workspace(registeredSeller).deal_outreach.some(
+      (entry) => entry.buyer_organization_id === organization.id,
+    ),
+    true,
+    "historical outreach remains available to the deal team",
+  );
+
+  run(
+    "UPDATE deal_matches SET eligible=1,status='selected' WHERE id=?",
+    match.id,
+  );
+  assert.throws(
+    () =>
+      mutate(registeredSeller, {
+        action: "shareTeaser",
+        data: {
+          deal_id: deal.id,
+          match_ids: [match.id],
+          subject: "Stale selection",
+          message: "This must not be shared.",
+        },
+      }),
+    /eligible selected recommendation/,
+  );
+  assert.throws(
+    () =>
+      mutate(registeredSeller, {
+        action: "updateDealMatchStatus",
+        data: { deal_id: deal.id, match_ids: [match.id], status: "selected" },
+      }),
+    /not available for this mandate/,
+  );
+});
+
+test("buyer firm profile saves reject stale revisions", () => {
+  const suffix = Date.now();
+  const token = register({
+    name: "Concurrent Buyer",
+    company: `Concurrent Capital ${suffix}`,
+    email: `concurrent-buyer-${suffix}@example.test`,
+    role: "buyer",
+    password: "concurrent-profile-password-2026",
+  });
+  const concurrentBuyer = sessionUser(token)!;
+  const revision = workspace(concurrentBuyer).buyer_firm_profile!.revision;
+  mutate(concurrentBuyer, {
+    action: "updateBuyerFirmProfile",
+    data: {
+      fund_structure: "First owner update",
+      financing_profile: "First financing profile",
+      revision,
+      self_reported_acquisition_count: 1,
+    },
+  });
+  assert.equal(workspace(concurrentBuyer).buyer_firm_profile?.revision, revision + 1);
+  assert.throws(
+    () =>
+      mutate(concurrentBuyer, {
+        action: "updateBuyerFirmProfile",
+        data: {
+          fund_structure: "Stale second-client update",
+          financing_profile: "Should not overwrite the first client",
+          revision,
+          self_reported_acquisition_count: 2,
+        },
+      }),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message.includes("changed in another session") &&
+      (error as { status?: number }).status === 409,
+  );
+  assert.equal(
+    workspace(concurrentBuyer).buyer_firm_profile?.fund_structure,
+    "First owner update",
+  );
+});
+
 test("private teaser outreach is isolated to selected buyer organizations and advances interest", () => {
   const suffix = Date.now();
   const buyerAToken = register({

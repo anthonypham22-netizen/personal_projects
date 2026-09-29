@@ -1281,6 +1281,9 @@
   .recommendation-disclosures details {
     @apply rounded-lg border border-slate-200 bg-white;
   }
+  .recommendation-disclosures details:first-child {
+    @apply lg:col-span-2;
+  }
   .recommendation-disclosures summary {
     @apply cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700;
   }
@@ -1295,6 +1298,61 @@
   }
   .recommendation-disclosures a {
     @apply mt-4 inline-flex items-center gap-1 font-semibold text-emerald-800 underline;
+  }
+  .buyer-profile-sheet {
+    @apply space-y-5;
+  }
+  .buyer-profile-intro {
+    @apply flex flex-col items-start justify-between gap-3 md:flex-row;
+  }
+  .buyer-profile-intro > p {
+    @apply max-w-3xl;
+  }
+  .buyer-profile-intro > a {
+    @apply mt-0 shrink-0;
+  }
+  .buyer-profile-sheet section {
+    @apply border-t border-slate-100 pt-4;
+  }
+  .buyer-profile-sheet section h4 {
+    @apply mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500;
+  }
+  .buyer-profile-sheet section > p {
+    @apply text-sm leading-relaxed text-slate-500;
+  }
+  .buyer-profile-facts {
+    @apply grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3;
+  }
+  .buyer-profile-facts > div.full {
+    @apply sm:col-span-2 lg:col-span-3;
+  }
+  .buyer-profile-facts dt {
+    @apply text-[11px] font-medium uppercase tracking-wide text-slate-400;
+  }
+  .buyer-profile-facts dd {
+    @apply mt-1 text-sm font-medium leading-relaxed text-slate-800;
+  }
+  .buyer-profile-facts dd small {
+    @apply font-normal text-slate-400;
+  }
+  .buyer-profile-projects {
+    @apply grid gap-2 sm:grid-cols-2;
+  }
+  .buyer-profile-projects > div {
+    @apply rounded-lg border border-slate-200 bg-slate-50 px-3 py-3;
+  }
+  .buyer-profile-projects strong,
+  .buyer-profile-projects span {
+    @apply block;
+  }
+  .buyer-profile-projects strong {
+    @apply text-sm font-semibold text-slate-800;
+  }
+  .buyer-profile-projects span {
+    @apply mt-1 text-xs leading-relaxed text-slate-500;
+  }
+  .buyer-profile-disclaimer {
+    @apply rounded-lg bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500;
   }
   .match-ledger {
     @apply divide-y divide-slate-100;

@@ -97,11 +97,22 @@ test("owner can inspect and curate recommended buyers", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Recommended buyers" }),
   ).toBeVisible();
-  const recommendation = page
-    .getByRole("article")
-    .filter({ hasText: "Project Maple" });
+  const recommendation = page.getByRole("article").filter({
+    has: page.getByRole("checkbox", {
+      name: /Select Evergreen Capital.*Project Maple/,
+    }),
+  });
   await expect(recommendation).toContainText("Evergreen Capital");
   await expect(recommendation).toContainText(/\d+% match/);
+  await recommendation.getByText("View profile").click();
+  await expect(recommendation).toContainText("Acquisition criteria");
+  await expect(recommendation).toContainText("Capital");
+  await expect(recommendation).toContainText("Experience");
+  await expect(recommendation).toContainText("Active acquisition projects");
+  await expect(recommendation).toContainText("Project Northern Lights");
+  await expect(recommendation).not.toContainText(
+    "Fictional committed private investment fund.",
+  );
   await recommendation.getByText("Inspect match reasoning").click();
   await expect(recommendation).toContainText("Industry");
   await recommendation
@@ -113,6 +124,42 @@ test("owner can inspect and curate recommended buyers", async ({ page }) => {
   await expect(recommendation).toContainText("Excluded");
   await recommendation.getByRole("button", { name: "Restore buyer" }).click();
   await expect(recommendation).toContainText("Recommended");
+});
+
+test("buyer can maintain a seller-facing firm profile", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await page.goto("/app/verification");
+
+  await expect(
+    page.getByRole("heading", { name: "Seller-facing firm profile" }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Fund structure")
+    .fill("Canadian lower-middle-market private equity fund.");
+  await page
+    .getByLabel("Financing profile")
+    .fill("Committed equity with senior acquisition financing.");
+  await page.getByLabel("Completed acquisitions (self-reported)").fill("14");
+  await page
+    .getByRole("button", { name: "Save seller-facing profile" })
+    .click();
+  await expect(
+    page.getByRole("status").getByText("Seller-facing firm profile saved."),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel("Completed acquisitions (self-reported)"),
+  ).toHaveValue("14");
+  await page.getByLabel("Completed acquisitions (self-reported)").fill("");
+  await page
+    .getByRole("button", { name: "Save seller-facing profile" })
+    .click();
+  await expect(
+    page.getByRole("status").getByText("Seller-facing firm profile saved."),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel("Completed acquisitions (self-reported)"),
+  ).toHaveValue("");
 });
 
 test("advisor can inspect the event-backed buyer funnel and record a milestone", async ({

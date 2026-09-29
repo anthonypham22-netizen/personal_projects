@@ -40,6 +40,8 @@ import {
   type DealBuyerEventType,
   type NotificationPreferences,
   type BuyerVerificationProfile,
+  type BuyerFirmProfile,
+  type SellerVisibleBuyerProject,
   type VerificationAdminEntry,
   type VerificationReview,
   type BuyerVerificationStatus,
@@ -47,6 +49,7 @@ import {
 import { inImmediateTransaction } from "./sqlite-transaction";
 import {
   recalculateDealMatch,
+  recalculateBuyerOrganizationMatches,
   recalculateBuyerOrganizationDealMatches,
   recalculateBuyerProjectMatches,
   recalculateDealMatches,
@@ -157,6 +160,19 @@ const buyerVerificationProfileFor = (
      FROM buyer_verification_profiles profile
      JOIN organizations organization ON organization.id=profile.organization_id
      WHERE profile.organization_id=?`,
+    organization.id,
+  );
+  return profile
+    ? { ...profile, can_manage: organization.can_manage }
+    : undefined;
+};
+const buyerFirmProfileFor = (
+  organization: Organization,
+): BuyerFirmProfile | undefined => {
+  const profile = one<Omit<BuyerFirmProfile, "can_manage">>(
+    `SELECT organization_id,fund_structure,financing_profile,
+       self_reported_acquisition_count,revision,updated_at
+     FROM buyer_firm_profiles WHERE organization_id=?`,
     organization.id,
   );
   return profile
@@ -280,21 +296,67 @@ export function dealMatchesForUser(user: User, dealId: string): DealMatch[] {
   return dealMatchesForDeals([dealId]);
 }
 
+const groupedProjectValues = <
+  T extends { buyer_project_id: string },
+  K extends keyof T,
+>(
+  rows: T[],
+  valueKey: K,
+) => {
+  const values = new Map<string, string[]>();
+  for (const row of rows) {
+    const projectValues = values.get(row.buyer_project_id) ?? [];
+    projectValues.push(String(row[valueKey]));
+    values.set(row.buyer_project_id, projectValues);
+  }
+  return values;
+};
+
 function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
   if (!dealIds.length) return [];
   const placeholders = dealIds.map(() => "?").join(",");
-  const rows = all<
-    Omit<DealMatch, "score_breakdown"> & { score_breakdown_json: string }
-  >(
+  type DealMatchRow = Omit<
+    DealMatch,
+    "score_breakdown" | "buyer_firm_profile"
+  > & {
+    score_breakdown_json: string;
+    buyer_project_status: BuyerProject["status"];
+    buyer_project_min_revenue: number | null;
+    buyer_project_max_revenue: number | null;
+    buyer_project_min_ebitda: number | null;
+    buyer_project_max_ebitda: number | null;
+    buyer_project_min_equity_check: number | null;
+    buyer_project_max_equity_check: number | null;
+    buyer_project_ownership_preference: BuyerProject["ownership_preference"];
+    buyer_project_transaction_type: BuyerProject["transaction_type"];
+    buyer_firm_fund_structure: string;
+    buyer_firm_financing_profile: string;
+    buyer_firm_acquisition_count: number | null;
+    buyer_firm_profile_updated_at: string;
+  };
+  const rows = all<DealMatchRow>(
     `SELECT dm.*,
        bp.name buyer_project_name,
        bp.thesis buyer_project_thesis,
+       bp.status buyer_project_status,
+       bp.min_revenue buyer_project_min_revenue,
+       bp.max_revenue buyer_project_max_revenue,
+       bp.min_ebitda buyer_project_min_ebitda,
+       bp.max_ebitda buyer_project_max_ebitda,
+       bp.min_equity_check buyer_project_min_equity_check,
+       bp.max_equity_check buyer_project_max_equity_check,
+       bp.ownership_preference buyer_project_ownership_preference,
+       bp.transaction_type buyer_project_transaction_type,
        o.name buyer_organization_name,
        o.organization_type buyer_organization_type,
        o.province buyer_organization_province,
        o.verification_status buyer_organization_verification_status,
        o.website buyer_organization_website,
        o.description buyer_organization_description,
+       COALESCE(profile.fund_structure,'') buyer_firm_fund_structure,
+       COALESCE(profile.financing_profile,'') buyer_firm_financing_profile,
+       profile.self_reported_acquisition_count buyer_firm_acquisition_count,
+       COALESCE(profile.updated_at,o.updated_at) buyer_firm_profile_updated_at,
        (
          SELECT COUNT(DISTINCT previous.id)
          FROM deals previous
@@ -314,16 +376,98 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
      JOIN buyer_projects bp ON bp.id=dm.buyer_project_id
      JOIN organizations o ON o.id=dm.buyer_organization_id
      JOIN deals d ON d.id=dm.deal_id
+     LEFT JOIN buyer_firm_profiles profile
+       ON profile.organization_id=dm.buyer_organization_id
      WHERE dm.deal_id IN (${placeholders})
+       AND o.organization_type IN (${BUYER_ORGANIZATION_TYPES.map(() => "?").join(",")})
+       AND bp.status='active'
      ORDER BY dm.eligible DESC,dm.score DESC,bp.name`,
     ...dealIds,
+    ...BUYER_ORGANIZATION_TYPES,
   );
-  return rows.map(({ score_breakdown_json, ...row }) => ({
-    ...row,
-    score_breakdown: JSON.parse(
+  const visibleProjectRows = rows.filter(
+    (row) => row.buyer_project_status === "active" && row.eligible,
+  );
+  const projectIds = [
+    ...new Set(visibleProjectRows.map((row) => row.buyer_project_id)),
+  ];
+  const projectPlaceholders = projectIds.map(() => "?").join(",");
+  let sectors = new Map<string, string[]>();
+  let provinces = new Map<string, string[]>();
+  if (projectIds.length) {
+    sectors = groupedProjectValues(
+      all<{ buyer_project_id: string; sector: string }>(
+        `SELECT buyer_project_id,sector FROM buyer_project_sectors
+         WHERE buyer_project_id IN (${projectPlaceholders}) ORDER BY rowid`,
+        ...projectIds,
+      ),
+      "sector",
+    );
+    provinces = groupedProjectValues(
+      all<{ buyer_project_id: string; province: string }>(
+        `SELECT buyer_project_id,province FROM buyer_project_provinces
+         WHERE buyer_project_id IN (${projectPlaceholders}) ORDER BY rowid`,
+        ...projectIds,
+      ),
+      "province",
+    );
+  }
+  const activeProjects = new Map<string, SellerVisibleBuyerProject[]>();
+  for (const row of visibleProjectRows) {
+    const key = `${row.deal_id}:${row.buyer_organization_id}`;
+    const projects = activeProjects.get(key) ?? [];
+    projects.push({
+      id: row.buyer_project_id,
+      name: row.buyer_project_name,
+      min_revenue: row.buyer_project_min_revenue,
+      max_revenue: row.buyer_project_max_revenue,
+      min_ebitda: row.buyer_project_min_ebitda,
+      max_ebitda: row.buyer_project_max_ebitda,
+      min_equity_check: row.buyer_project_min_equity_check,
+      max_equity_check: row.buyer_project_max_equity_check,
+      ownership_preference: row.buyer_project_ownership_preference,
+      transaction_type: row.buyer_project_transaction_type,
+      sectors: sectors.get(row.buyer_project_id) ?? [],
+      provinces: provinces.get(row.buyer_project_id) ?? [],
+    });
+    activeProjects.set(key, projects);
+  }
+  for (const projects of activeProjects.values())
+    projects.sort((left, right) => left.name.localeCompare(right.name));
+  return rows.map(
+    ({
       score_breakdown_json,
-    ) as DealMatch["score_breakdown"],
-  }));
+      buyer_project_status: _buyerProjectStatus,
+      buyer_project_min_revenue: _buyerProjectMinRevenue,
+      buyer_project_max_revenue: _buyerProjectMaxRevenue,
+      buyer_project_min_ebitda: _buyerProjectMinEbitda,
+      buyer_project_max_ebitda: _buyerProjectMaxEbitda,
+      buyer_project_min_equity_check: _buyerProjectMinEquityCheck,
+      buyer_project_max_equity_check: _buyerProjectMaxEquityCheck,
+      buyer_project_ownership_preference: _buyerProjectOwnershipPreference,
+      buyer_project_transaction_type: _buyerProjectTransactionType,
+      buyer_firm_fund_structure,
+      buyer_firm_financing_profile,
+      buyer_firm_acquisition_count,
+      buyer_firm_profile_updated_at,
+      ...row
+    }) => ({
+      ...row,
+      buyer_firm_profile: {
+        organization_id: row.buyer_organization_id,
+        fund_structure: buyer_firm_fund_structure,
+        financing_profile: buyer_firm_financing_profile,
+        self_reported_acquisition_count: buyer_firm_acquisition_count,
+        updated_at: buyer_firm_profile_updated_at,
+        active_projects:
+          activeProjects.get(`${row.deal_id}:${row.buyer_organization_id}`) ??
+          [],
+      },
+      score_breakdown: JSON.parse(
+        score_breakdown_json,
+      ) as DealMatch["score_breakdown"],
+    }),
+  );
 }
 
 function dealOutreachFor(
@@ -660,7 +804,7 @@ export function register(input: unknown) {
         "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'owner','active')",
       )
       .run(randomUUID(), organizationId, id);
-    if (data.role === "buyer")
+    if (data.role === "buyer") {
       database
         .prepare(
           `INSERT INTO buyer_verification_profiles(
@@ -668,6 +812,14 @@ export function register(input: unknown) {
            ) VALUES(?,?,?)`,
         )
         .run(organizationId, data.company, id);
+      database
+        .prepare(
+          `INSERT INTO buyer_firm_profiles(
+             organization_id,updated_by_user_id
+           ) VALUES(?,?)`,
+        )
+        .run(organizationId, id);
+    }
   });
   return createSession(id);
 }
@@ -1083,19 +1235,7 @@ const buyerProjectsFor = (organizationId: string, canManage: boolean) => {
     "SELECT * FROM buyer_projects WHERE organization_id=? ORDER BY created_at DESC,name",
     organizationId,
   );
-  const grouped = <T extends { buyer_project_id: string }, K extends keyof T>(
-    rows: T[],
-    valueKey: K,
-  ) => {
-    const values = new Map<string, string[]>();
-    for (const row of rows) {
-      const projectValues = values.get(row.buyer_project_id) ?? [];
-      projectValues.push(String(row[valueKey]));
-      values.set(row.buyer_project_id, projectValues);
-    }
-    return values;
-  };
-  const sectors = grouped(
+  const sectors = groupedProjectValues(
     all<{ buyer_project_id: string; sector: string }>(
       `SELECT bps.buyer_project_id,bps.sector FROM buyer_project_sectors bps
        JOIN buyer_projects bp ON bp.id=bps.buyer_project_id
@@ -1104,7 +1244,7 @@ const buyerProjectsFor = (organizationId: string, canManage: boolean) => {
     ),
     "sector",
   );
-  const provinces = grouped(
+  const provinces = groupedProjectValues(
     all<{ buyer_project_id: string; province: string }>(
       `SELECT bpp.buyer_project_id,bpp.province FROM buyer_project_provinces bpp
        JOIN buyer_projects bp ON bp.id=bpp.buyer_project_id
@@ -1113,7 +1253,7 @@ const buyerProjectsFor = (organizationId: string, canManage: boolean) => {
     ),
     "province",
   );
-  const keywords = grouped(
+  const keywords = groupedProjectValues(
     all<{ buyer_project_id: string; keyword: string }>(
       `SELECT bpk.buyer_project_id,bpk.keyword FROM buyer_project_keywords bpk
        JOIN buyer_projects bp ON bp.id=bpk.buyer_project_id
@@ -1390,6 +1530,9 @@ export function workspace(user: User): WorkspaceData {
   const buyerVerificationProfile = isEligibleBuyerOrganization(organization)
     ? buyerVerificationProfileFor(organization)
     : undefined;
+  const buyerFirmProfile = isEligibleBuyerOrganization(organization)
+    ? buyerFirmProfileFor(organization)
+    : undefined;
   return {
     user,
     organization,
@@ -1420,6 +1563,7 @@ export function workspace(user: User): WorkspaceData {
     ...(buyerVerificationProfile
       ? { buyer_verification_profile: buyerVerificationProfile }
       : {}),
+    ...(buyerFirmProfile ? { buyer_firm_profile: buyerFirmProfile } : {}),
     is_platform_admin: platformAdmin,
     ...(platformAdmin
       ? {
@@ -1495,6 +1639,58 @@ export function mutate(
       p.preferences as Partial<NotificationPreferences>,
     );
     return { message: "Notification preferences saved." };
+  }
+  if (action === "updateBuyerFirmProfile") {
+    const organization = organizationFor(user.id);
+    if (
+      !organization ||
+      !isEligibleBuyerOrganization(organization) ||
+      !organization.can_manage
+    )
+      throw new AppError(
+        "Only buyer organization owners and administrators can update the seller-facing firm profile.",
+        403,
+      );
+    const profile = parse(
+      z.object({
+        fund_structure: text(0, 2000),
+        financing_profile: text(0, 3000),
+        revision: z.coerce.number().int().min(1),
+        self_reported_acquisition_count: z.preprocess(
+          (value) =>
+            value === "" || value === undefined || value === null
+              ? null
+              : value,
+          z.coerce.number().int().min(0).max(10_000).nullable(),
+        ),
+      }),
+      data,
+    );
+    const database = db();
+    inImmediateTransaction(database, () => {
+      const updated = database
+        .prepare(
+          `UPDATE buyer_firm_profiles SET
+             fund_structure=?,financing_profile=?,
+             self_reported_acquisition_count=?,updated_by_user_id=?,
+             revision=revision+1,updated_at=CURRENT_TIMESTAMP
+           WHERE organization_id=? AND revision=?`,
+        )
+        .run(
+          profile.fund_structure,
+          profile.financing_profile,
+          profile.self_reported_acquisition_count,
+          user.id,
+          organization.id,
+          profile.revision,
+        );
+      if (!updated.changes)
+        throw new AppError(
+          "This firm profile changed in another session. Refresh and try again.",
+          409,
+        );
+    });
+    return { message: "Seller-facing firm profile saved." };
   }
   if (action === "updateBuyerVerificationProfile") {
     const organization = organizationFor(user.id);
@@ -1809,7 +2005,7 @@ export function mutate(
           "UPDATE users SET company=? WHERE id IN (SELECT user_id FROM organization_members WHERE organization_id=? AND status='active')",
         )
         .run(p.name, organization.id);
-      if (remainsBuyerOrganization)
+      if (remainsBuyerOrganization) {
         database
           .prepare(
             `INSERT OR IGNORE INTO buyer_verification_profiles(
@@ -1817,6 +2013,14 @@ export function mutate(
              ) VALUES(?,?,?)`,
           )
           .run(organization.id, p.name, user.id);
+        database
+          .prepare(
+            `INSERT OR IGNORE INTO buyer_firm_profiles(
+               organization_id,updated_by_user_id
+             ) VALUES(?,?)`,
+          )
+          .run(organization.id, user.id);
+      }
       if (
         verificationRelevantChange &&
         (wasBuyerOrganization || remainsBuyerOrganization)
@@ -1839,6 +2043,16 @@ export function mutate(
              WHERE organization_id=?`,
           )
           .run(user.id, organization.id);
+      }
+      if (wasBuyerOrganization && !remainsBuyerOrganization) {
+        database
+          .prepare(
+            `UPDATE buyer_projects
+             SET status='paused',updated_at=strftime('%Y-%m-%d %H:%M:%f','now')
+             WHERE organization_id=? AND status='active'`,
+          )
+          .run(organization.id);
+        recalculateBuyerOrganizationMatches(database, organization.id);
       }
     });
     return { message: "Firm settings saved." };
@@ -1888,10 +2102,17 @@ export function mutate(
     inImmediateTransaction(database, () => {
       const available = database
         .prepare(
-          `SELECT id,buyer_project_id,buyer_organization_id,eligible FROM deal_matches
-           WHERE deal_id=? AND id IN (${placeholders})`,
+          `SELECT dm.id,dm.buyer_project_id,dm.buyer_organization_id,dm.eligible
+           FROM deal_matches dm
+           JOIN buyer_projects bp ON bp.id=dm.buyer_project_id
+            AND bp.organization_id=dm.buyer_organization_id
+           JOIN organizations buyer_organization
+             ON buyer_organization.id=dm.buyer_organization_id
+           WHERE dm.deal_id=? AND dm.id IN (${placeholders})
+             AND buyer_organization.organization_type IN (${BUYER_ORGANIZATION_TYPES.map(() => "?").join(",")})
+             AND bp.status='active'`,
         )
-        .all(p.deal_id, ...matchIds) as {
+        .all(p.deal_id, ...matchIds, ...BUYER_ORGANIZATION_TYPES) as {
         id: string;
         buyer_project_id: string;
         buyer_organization_id: string;
@@ -2131,10 +2352,14 @@ export function mutate(
            JOIN buyer_projects bp
              ON bp.id=dm.buyer_project_id
             AND bp.organization_id=dm.buyer_organization_id
+           JOIN organizations buyer_organization
+             ON buyer_organization.id=dm.buyer_organization_id
            WHERE dm.deal_id=? AND dm.id IN (${placeholders})
-             AND dm.eligible=1 AND dm.status='selected'`,
+             AND dm.eligible=1 AND dm.status='selected'
+             AND buyer_organization.organization_type IN (${BUYER_ORGANIZATION_TYPES.map(() => "?").join(",")})
+             AND bp.status='active'`,
         )
-        .all(deal.id, ...matchIds) as {
+        .all(deal.id, ...matchIds, ...BUYER_ORGANIZATION_TYPES) as {
         id: string;
         buyer_project_id: string;
         buyer_organization_id: string;
@@ -2568,21 +2793,40 @@ export function mutate(
         "This introduction request was already reviewed.",
         409,
       );
-    const buyerVerificationStatus = one<{
+    const buyerOrganization = one<{
       verification_status: BuyerVerificationStatus;
+      organization_type: OrganizationType;
     }>(
-      "SELECT verification_status FROM organizations WHERE id=?",
+      "SELECT verification_status,organization_type FROM organizations WHERE id=?",
       request.buyer_organization_id,
-    )?.verification_status;
+    );
+    const requestProjectStatus = one<{ status: BuyerProject["status"] }>(
+      `SELECT bp.status
+       FROM introduction_requests ir
+       JOIN buyer_projects bp ON bp.id=ir.buyer_project_id
+       WHERE ir.id=? AND bp.organization_id=?`,
+      request.id,
+      request.buyer_organization_id,
+    )?.status;
     if (
       p.status === "approved" &&
       !verificationStatusMeets(
-        buyerVerificationStatus || "unverified",
+        buyerOrganization?.verification_status || "unverified",
         qualifiedDiscoveryMinimumVerificationStatus(),
       )
     )
       throw new AppError(
         "The buyer organization no longer meets the Qualified Discovery verification requirement.",
+        409,
+      );
+    if (
+      p.status === "approved" &&
+      (!buyerOrganization ||
+        !isEligibleBuyerOrganizationType(buyerOrganization.organization_type) ||
+        requestProjectStatus !== "active")
+    )
+      throw new AppError(
+        "The buyer organization or acquisition project is no longer eligible for Qualified Discovery.",
         409,
       );
     const existingAccess = membership(deal.id, request.requested_by_user_id);

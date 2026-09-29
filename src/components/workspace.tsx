@@ -4254,6 +4254,9 @@ function BuyerRecommendation({
   const positiveReasons = match.score_breakdown.reasons.filter(
     (reason) => reason.score > 0,
   );
+  const primaryProject = match.buyer_firm_profile.active_projects.find(
+    (project) => project.id === match.buyer_project_id,
+  );
   return (
     <article
       className={cn(
@@ -4326,18 +4329,166 @@ function BuyerRecommendation({
         <div className="recommendation-disclosures">
           <details>
             <summary>View profile</summary>
-            <div>
-              <p>
-                {match.buyer_organization_description ||
-                  "No firm description has been added."}
+            <div className="buyer-profile-sheet">
+              <div className="buyer-profile-intro">
+                <p>
+                  {match.buyer_organization_description ||
+                    "No firm description has been added."}
+                </p>
+                {match.buyer_organization_website && (
+                  <a
+                    href={match.buyer_organization_website}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Visit firm website <ArrowUpRight size={14} />
+                  </a>
+                )}
+              </div>
+
+              <section>
+                <h4>Acquisition criteria</h4>
+                {primaryProject ? (
+                  <dl className="buyer-profile-facts">
+                    <div>
+                      <dt>Revenue</dt>
+                      <dd>
+                        {projectRange(
+                          primaryProject.min_revenue,
+                          primaryProject.max_revenue,
+                        )}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>EBITDA</dt>
+                      <dd>
+                        {projectRange(
+                          primaryProject.min_ebitda,
+                          primaryProject.max_ebitda,
+                        )}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Industries</dt>
+                      <dd>
+                        {primaryProject.sectors.join(", ") || "All industries"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Geography</dt>
+                      <dd>{primaryProject.provinces.join(", ") || "Canada"}</dd>
+                    </div>
+                    <div>
+                      <dt>Transaction</dt>
+                      <dd>
+                        {projectTransactionLabel(
+                          primaryProject.transaction_type,
+                        )}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Ownership</dt>
+                      <dd>
+                        {projectOwnershipLabel(
+                          primaryProject.ownership_preference,
+                        )}
+                      </dd>
+                    </div>
+                  </dl>
+                ) : (
+                  <p>No active project criteria are available.</p>
+                )}
+              </section>
+
+              <section>
+                <h4>Capital</h4>
+                <dl className="buyer-profile-facts">
+                  <div>
+                    <dt>Fund structure</dt>
+                    <dd>
+                      {match.buyer_firm_profile.fund_structure ||
+                        "Not provided"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Typical equity cheque</dt>
+                    <dd>
+                      {primaryProject
+                        ? projectRange(
+                            primaryProject.min_equity_check,
+                            primaryProject.max_equity_check,
+                          )
+                        : "Not specified"}
+                    </dd>
+                  </div>
+                  <div className="full">
+                    <dt>Financing profile</dt>
+                    <dd>
+                      {match.buyer_firm_profile.financing_profile ||
+                        "Not provided"}
+                    </dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section>
+                <h4>Experience</h4>
+                <dl className="buyer-profile-facts">
+                  <div>
+                    <dt>Completed acquisitions</dt>
+                    <dd>
+                      {match.buyer_firm_profile
+                        .self_reported_acquisition_count === null ? (
+                        "Not provided"
+                      ) : (
+                        <>
+                          {
+                            match.buyer_firm_profile
+                              .self_reported_acquisition_count
+                          }{" "}
+                          <small>self-reported</small>
+                        </>
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Relevant sector acquisitions</dt>
+                    <dd>
+                      {match.relevant_acquisitions}{" "}
+                      <small>recorded on Succera</small>
+                    </dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section>
+                <h4>Active acquisition projects</h4>
+                {match.buyer_firm_profile.active_projects.length ? (
+                  <div className="buyer-profile-projects">
+                    {match.buyer_firm_profile.active_projects.map((project) => (
+                      <div key={project.id}>
+                        <strong>{project.name}</strong>
+                        <span>
+                          {project.sectors.join(", ") || "All industries"} ·{" "}
+                          {project.provinces.join(", ") || "Canada"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p>No active matched projects are available.</p>
+                )}
+              </section>
+
+              <section>
+                <h4>Matched mandate</h4>
+                <p>{match.buyer_project_thesis || "No thesis provided."}</p>
+              </section>
+              <p className="buyer-profile-disclaimer">
+                Firm experience is self-reported unless identified as a Succera
+                marketplace record. Profile access is limited to this matched
+                sell-side team.
               </p>
-              <strong>Acquisition mandate</strong>
-              <p>{match.buyer_project_thesis || "No thesis provided."}</p>
-              {match.buyer_organization_website && (
-                <a href={match.buyer_organization_website} rel="noreferrer">
-                  Visit firm website <ArrowUpRight size={14} />
-                </a>
-              )}
             </div>
           </details>
           <details>
@@ -5086,6 +5237,7 @@ const verificationLadder = BUYER_VERIFICATION_STATUSES.filter(
 function BuyerVerificationPanel() {
   const { data } = useWorkspace();
   const profile = data.buyer_verification_profile;
+  const firmProfile = data.buyer_firm_profile;
   if (!profile) return null;
   const status = data.organization.verification_status;
   const currentIndex = verificationLadder.findIndex(
@@ -5094,6 +5246,88 @@ function BuyerVerificationPanel() {
   const underReview = Boolean(profile.submitted_at);
   return (
     <div className="verification-buyer-stack">
+      {firmProfile && (
+        <Panel title="Seller-facing firm profile">
+          <div className="panel-body">
+            <div className="verification-admin-intro">
+              <Building2 size={20} />
+              <div>
+                <strong>Shared only with matched sell-side teams</strong>
+                <p>
+                  This profile helps owners and advisors assess your firm from
+                  Recommended Buyers. Internal verification evidence and review
+                  notes are never included.
+                </p>
+              </div>
+            </div>
+            {firmProfile.can_manage ? (
+              <MutationForm
+                action="updateBuyerFirmProfile"
+                label="Save seller-facing profile"
+                extra={{ revision: firmProfile.revision }}
+              >
+                <div className="form-grid">
+                  <label className="full">
+                    Fund structure
+                    <textarea
+                      name="fund_structure"
+                      maxLength={2000}
+                      defaultValue={firmProfile.fund_structure}
+                      placeholder="Describe the capital structure sellers should understand."
+                    />
+                    <span className="field-hint">
+                      Do not include investor names, account details, or
+                      confidential fundraising information.
+                    </span>
+                  </label>
+                  <label className="full">
+                    Financing profile
+                    <textarea
+                      name="financing_profile"
+                      maxLength={3000}
+                      defaultValue={firmProfile.financing_profile}
+                      placeholder="Explain how your firm typically finances acquisitions."
+                    />
+                  </label>
+                  <Field
+                    label="Completed acquisitions (self-reported)"
+                    name="self_reported_acquisition_count"
+                    type="number"
+                    min={0}
+                    max={10000}
+                    required={false}
+                    value={firmProfile.self_reported_acquisition_count ?? ""}
+                    help="Displayed as self-reported and kept separate from platform transaction history."
+                  />
+                </div>
+              </MutationForm>
+            ) : (
+              <div className="verification-evidence-sheet">
+                <div className="full">
+                  <span>Fund structure</span>
+                  <p>{firmProfile.fund_structure || "Not provided"}</p>
+                </div>
+                <div className="full">
+                  <span>Financing profile</span>
+                  <p>{firmProfile.financing_profile || "Not provided"}</p>
+                </div>
+                <div>
+                  <span>Completed acquisitions</span>
+                  <strong>
+                    {firmProfile.self_reported_acquisition_count === null
+                      ? "Not provided"
+                      : `${firmProfile.self_reported_acquisition_count} · self-reported`}
+                  </strong>
+                </div>
+                <p className="notice full">
+                  An organization owner or administrator must update this
+                  profile.
+                </p>
+              </div>
+            )}
+          </div>
+        </Panel>
+      )}
       <Panel title="Buyer verification">
         <div className="verification-summary">
           <div>

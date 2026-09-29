@@ -549,9 +549,56 @@ function syncDemoVerification(d: DatabaseSync) {
   );
 }
 
+function syncDemoBuyerFirmProfiles(d: DatabaseSync) {
+  if (!tableExists(d, "buyer_firm_profiles")) return;
+
+  const upsert = d.prepare(`
+    INSERT INTO buyer_firm_profiles(
+      organization_id,fund_structure,financing_profile,
+      self_reported_acquisition_count,updated_by_user_id
+    ) VALUES(?,?,?,?,?)
+    ON CONFLICT(organization_id) DO UPDATE SET
+      fund_structure=excluded.fund_structure,
+      financing_profile=excluded.financing_profile,
+      self_reported_acquisition_count=excluded.self_reported_acquisition_count,
+      updated_by_user_id=excluded.updated_by_user_id,
+      revision=buyer_firm_profiles.revision+1,
+      updated_at=CURRENT_TIMESTAMP
+    WHERE buyer_firm_profiles.fund_structure IS NOT excluded.fund_structure
+       OR buyer_firm_profiles.financing_profile IS NOT excluded.financing_profile
+       OR buyer_firm_profiles.self_reported_acquisition_count
+          IS NOT excluded.self_reported_acquisition_count
+       OR buyer_firm_profiles.updated_by_user_id IS NOT excluded.updated_by_user_id
+  `);
+  upsert.run(
+    "org-demo-buyer",
+    "Canadian lower-middle-market private equity fund with committed partner and institutional capital.",
+    "Committed equity supplemented by senior acquisition financing when appropriate for the business.",
+    12,
+    "demo-buyer",
+  );
+  upsert.run(
+    "org-demo-buyer-2",
+    "Operator-led search fund supported by Canadian entrepreneurs and private investors.",
+    "Investor equity with conventional senior lending, subject to transaction diligence.",
+    3,
+    "demo-buyer-2",
+  );
+  d.prepare(
+    `UPDATE organizations SET description=CASE id
+       WHEN 'org-demo-buyer'
+         THEN 'A Canadian investment firm partnering with established owner-operated businesses through succession.'
+       WHEN 'org-demo-buyer-2'
+         THEN 'An operator-led acquisition firm focused on enduring Canadian small and mid-sized businesses.'
+       ELSE description END
+     WHERE id IN ('org-demo-buyer','org-demo-buyer-2')`,
+  ).run();
+}
+
 export function seed(d: DatabaseSync, directory: string) {
   if (d.prepare("SELECT id FROM users WHERE id='demo-advisor'").get()) {
     syncDemoVerification(d);
+    syncDemoBuyerFirmProfiles(d);
     syncDemoDocuments(d, directory);
     syncDemoBuyerProjects(d);
     syncDemoMandates(d);
@@ -654,6 +701,7 @@ export function seed(d: DatabaseSync, directory: string) {
       ).run(`membership-${id}`, `org-${id}`, id);
     }
     syncDemoVerification(d);
+    syncDemoBuyerFirmProfiles(d);
     const deals = [
       [
         "cedar",

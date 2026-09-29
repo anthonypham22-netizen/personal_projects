@@ -24,6 +24,8 @@ import { notificationsMigration } from "../src/lib/migrations/011_notifications.
 import { emailProcessingLeaseMigration } from "../src/lib/migrations/012_email_processing_lease.ts";
 import { emailProcessingTokenMigration } from "../src/lib/migrations/013_email_processing_token.ts";
 import { buyerVerificationMigration } from "../src/lib/migrations/014_buyer_verification.ts";
+import { buyerFirmProfilesMigration } from "../src/lib/migrations/015_buyer_firm_profiles.ts";
+import { buyerFirmProfileRevisionMigration } from "../src/lib/migrations/016_buyer_firm_profile_revision.ts";
 import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
 import { ensureBuyerFunnelBackfill } from "../src/lib/buyer-funnel.ts";
 
@@ -70,6 +72,8 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 12, name: "email_processing_lease" },
       { version: 13, name: "email_processing_token" },
       { version: 14, name: "buyer_verification" },
+      { version: 15, name: "buyer_firm_profiles" },
+      { version: 16, name: "buyer_firm_profile_revision" },
     ]);
 
     seed(database, directory);
@@ -139,6 +143,11 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       2,
     );
     assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM buyer_firm_profiles").get()
+        .count,
+      2,
+    );
+    assert.equal(
       database
         .prepare("SELECT is_platform_admin FROM users WHERE id='demo-advisor'")
         .get().is_platform_admin,
@@ -182,6 +191,11 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       path.join(directory, "uploads", "doc-cedar-fin"),
       "stale placeholder",
     );
+    const profileRevisionBeforeSecondSeed = database
+      .prepare(
+        "SELECT revision FROM buyer_firm_profiles WHERE organization_id='org-demo-buyer'",
+      )
+      .get().revision;
     seed(database, directory);
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM deals").get().count,
@@ -190,6 +204,15 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM buyer_projects").get().count,
       2,
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT revision FROM buyer_firm_profiles WHERE organization_id='org-demo-buyer'",
+        )
+        .get().revision,
+      profileRevisionBeforeSecondSeed,
+      "re-seeding unchanged demo profile values must not invalidate open forms",
     );
     for (const document of database
       .prepare("SELECT name, storage_key, size FROM documents")
@@ -339,7 +362,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 14);
+    assert.equal(history.length, 16);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
@@ -355,6 +378,8 @@ test("an existing database upgrades to organizations without losing data", () =>
       { version: 12, name: "email_processing_lease" },
       { version: 13, name: "email_processing_token" },
       { version: 14, name: "buyer_verification" },
+      { version: 15, name: "buyer_firm_profiles" },
+      { version: 16, name: "buyer_firm_profile_revision" },
     ]);
     assert.equal(
       database
@@ -885,6 +910,236 @@ test("buyer verification schema constrains statuses, decisions, and cheque range
           `INSERT INTO verification_reviews(
              id,organization_id,reviewer_user_id,previous_status,decision,notes
            ) VALUES('review','buyer-org','reviewer','unverified','accredited','Reviewed')`,
+        )
+        .run(),
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("an existing Phase 11 database gains private buyer firm profiles without losing marketplace data", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase12-"));
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    const phaseEleven = [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+      recommendedBuyersMigration,
+      privateTeaserDistributionMigration,
+      qualifiedDiscoveryMigration,
+      buyerFunnelMigration,
+      internalDealNotesMigration,
+      notificationsMigration,
+      emailProcessingLeaseMigration,
+      emailProcessingTokenMigration,
+      buyerVerificationMigration,
+    ];
+    applyMigrations(database, phaseEleven);
+    seed(database, directory);
+    ensureInitialMatchBackfill(database);
+    database
+      .prepare(
+        "UPDATE buyer_verification_profiles SET acquisition_history='Preserve this private evidence' WHERE organization_id='org-demo-buyer'",
+      )
+      .run();
+    const before = {
+      users: database.prepare("SELECT COUNT(*) count FROM users").get().count,
+      deals: database.prepare("SELECT COUNT(*) count FROM deals").get().count,
+      projects: database
+        .prepare("SELECT COUNT(*) count FROM buyer_projects")
+        .get().count,
+      matches: database.prepare("SELECT COUNT(*) count FROM deal_matches").get()
+        .count,
+    };
+
+    applyMigrations(database, [...phaseEleven, buyerFirmProfilesMigration]);
+
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 15,
+      name: "buyer_firm_profiles",
+    });
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM buyer_firm_profiles").get()
+        .count,
+      database
+        .prepare(
+          `SELECT COUNT(*) count FROM organizations
+           WHERE organization_type IN (
+             'buyer','private_equity','family_office','search_fund',
+             'independent_sponsor','strategic'
+           )`,
+        )
+        .get().count,
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT self_reported_acquisition_count FROM buyer_firm_profiles WHERE organization_id='org-demo-buyer'",
+        )
+        .get().self_reported_acquisition_count,
+      null,
+      "migration backfill must leave an unreported acquisition count unset",
+    );
+    assert.deepEqual(
+      {
+        users: database.prepare("SELECT COUNT(*) count FROM users").get().count,
+        deals: database.prepare("SELECT COUNT(*) count FROM deals").get().count,
+        projects: database
+          .prepare("SELECT COUNT(*) count FROM buyer_projects")
+          .get().count,
+        matches: database
+          .prepare("SELECT COUNT(*) count FROM deal_matches")
+          .get().count,
+      },
+      before,
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT acquisition_history FROM buyer_verification_profiles WHERE organization_id='org-demo-buyer'",
+        )
+        .get().acquisition_history,
+      "Preserve this private evidence",
+    );
+    assert.throws(() =>
+      database
+        .prepare(
+          "UPDATE buyer_firm_profiles SET self_reported_acquisition_count=-1 WHERE organization_id='org-demo-buyer'",
+        )
+        .run(),
+    );
+    assert.doesNotThrow(() =>
+      database
+        .prepare(
+          "UPDATE buyer_firm_profiles SET self_reported_acquisition_count=NULL WHERE organization_id='org-demo-buyer'",
+        )
+        .run(),
+    );
+
+    const history = getMigrationHistory(database);
+    const schemaVersion = database
+      .prepare("PRAGMA schema_version")
+      .get().schema_version;
+    const changes = database
+      .prepare("SELECT total_changes() changes")
+      .get().changes;
+    applyMigrations(database, [...phaseEleven, buyerFirmProfilesMigration]);
+    assert.deepEqual(getMigrationHistory(database), history);
+    assert.equal(
+      database.prepare("PRAGMA schema_version").get().schema_version,
+      schemaVersion,
+    );
+    assert.equal(
+      database.prepare("SELECT total_changes() changes").get().changes,
+      changes,
+    );
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an existing Phase 12 preview profile table gains nullable counts and revisions", () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    const phaseEleven = [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+      recommendedBuyersMigration,
+      privateTeaserDistributionMigration,
+      qualifiedDiscoveryMigration,
+      buyerFunnelMigration,
+      internalDealNotesMigration,
+      notificationsMigration,
+      emailProcessingLeaseMigration,
+      emailProcessingTokenMigration,
+      buyerVerificationMigration,
+    ];
+    applyMigrations(database, phaseEleven);
+    database.exec(`
+      CREATE TABLE buyer_firm_profiles (
+        organization_id TEXT PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+        fund_structure TEXT NOT NULL DEFAULT '',
+        financing_profile TEXT NOT NULL DEFAULT '',
+        self_reported_acquisition_count INTEGER NOT NULL DEFAULT 0,
+        updated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO organizations(id,name,slug,organization_type)
+      VALUES('legacy-profile-org','Legacy Profile Co.','legacy-profile','buyer');
+      INSERT INTO organizations(id,name,slug,organization_type)
+      VALUES('legacy-empty-profile-org','Legacy Empty Profile Co.','legacy-empty-profile','buyer');
+      INSERT INTO buyer_firm_profiles(organization_id,fund_structure)
+      VALUES('legacy-profile-org','Preserve this profile');
+      INSERT INTO buyer_firm_profiles(organization_id)
+      VALUES('legacy-empty-profile-org');
+      INSERT INTO schema_migrations(version,name)
+      VALUES(15,'buyer_firm_profiles');
+    `);
+
+    applyMigrations(database, [
+      ...phaseEleven,
+      buyerFirmProfilesMigration,
+      buyerFirmProfileRevisionMigration,
+    ]);
+
+    assert.equal(
+      database
+        .prepare(
+          "SELECT fund_structure,revision FROM buyer_firm_profiles WHERE organization_id='legacy-profile-org'",
+        )
+        .get().revision,
+      1,
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT fund_structure FROM buyer_firm_profiles WHERE organization_id='legacy-profile-org'",
+        )
+        .get().fund_structure,
+      "Preserve this profile",
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT self_reported_acquisition_count FROM buyer_firm_profiles WHERE organization_id='legacy-profile-org'",
+        )
+        .get().self_reported_acquisition_count,
+      0,
+      "a zero alongside profile content is preserved",
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT self_reported_acquisition_count FROM buyer_firm_profiles WHERE organization_id='legacy-empty-profile-org'",
+        )
+        .get().self_reported_acquisition_count,
+      null,
+      "an untouched preview default is converted back to unknown",
+    );
+    assert.equal(
+      database
+        .prepare("PRAGMA table_info(buyer_firm_profiles)")
+        .all()
+        .find(
+          (column) => column.name === "self_reported_acquisition_count",
+        ).notnull,
+      0,
+    );
+    assert.doesNotThrow(() =>
+      database
+        .prepare(
+          "UPDATE buyer_firm_profiles SET self_reported_acquisition_count=NULL WHERE organization_id='legacy-profile-org'",
         )
         .run(),
     );

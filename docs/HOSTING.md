@@ -172,6 +172,30 @@ For a release that includes migration `014_buyer_verification`, use this short r
 
 3. If startup fails or the post-checks do not match expectations, stop the application and restore the complete pre-migration snapshot (the database and matching uploads) into the stopped volume, then start the previous known-good image or commit. Phase 11 has no automatic down migration; rollback is a database restore and code rollback performed together.
 
+### Phase 12 migration checks
+
+Migrations `015_buyer_firm_profiles` and `016_buyer_firm_profile_revision` add one seller-facing profile for each eligible buyer organization and a monotonic profile revision for safe concurrent edits. Before deploying them, keep the verified database-and-uploads backup from the normal runbook and record buyer-organization, buyer-project, deal-match, and verification-profile counts. After restart, run:
+
+```sql
+SELECT COUNT(*) AS buyer_firm_profiles FROM buyer_firm_profiles;
+
+SELECT COUNT(*) AS missing_buyer_firm_profiles
+FROM organizations organization
+LEFT JOIN buyer_firm_profiles profile
+  ON profile.organization_id=organization.id
+WHERE organization.organization_type IN (
+  'buyer','private_equity','family_office','search_fund',
+  'independent_sponsor','strategic'
+) AND profile.organization_id IS NULL;
+
+SELECT version,name,applied_at
+FROM schema_migrations
+WHERE version IN (15,16)
+ORDER BY version;
+```
+
+`missing_buyer_firm_profiles` should be zero and migrations 15 and 16 should each appear exactly once. Compare the pre/post buyer-project, deal-match, and verification-profile counts; the profile migrations must not rewrite them except for the deliberate buyer-project pause/recalculation when an organization is reclassified out of buyer status. If startup or validation fails, stop the application and restore the complete snapshot before starting the previous code. There is no automatic down migration.
+
 ## What changes for a larger launch
 
 The current architecture is deliberately limited to **one server and one application instance**. Do not horizontally scale it against shared SQLite files or separate local upload directories.

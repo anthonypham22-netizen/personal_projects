@@ -14,6 +14,8 @@ import { notificationsMigration } from "./011_notifications.ts";
 import { emailProcessingLeaseMigration } from "./012_email_processing_lease.ts";
 import { emailProcessingTokenMigration } from "./013_email_processing_token.ts";
 import { buyerVerificationMigration } from "./014_buyer_verification.ts";
+import { buyerFirmProfilesMigration } from "./015_buyer_firm_profiles.ts";
+import { buyerFirmProfileRevisionMigration } from "./016_buyer_firm_profile_revision.ts";
 
 export type Migration = {
   version: number;
@@ -42,6 +44,8 @@ const migrations: readonly Migration[] = [
   emailProcessingLeaseMigration,
   emailProcessingTokenMigration,
   buyerVerificationMigration,
+  buyerFirmProfilesMigration,
+  buyerFirmProfileRevisionMigration,
 ];
 
 const migrationTableSql = `

@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { matchDealToBuyerProject } from "./matching.ts";
 import { inImmediateTransaction } from "./sqlite-transaction.ts";
-import type { BuyerProject, Deal, DealMatch } from "./types";
+import {
+  BUYER_ORGANIZATION_TYPES,
+  type BuyerProject,
+  type Deal,
+  type DealMatch,
+} from "./types.ts";
 import { recordDealBuyerEvent } from "./buyer-funnel.ts";
 import { dealManagerUserIds, notifyUsers } from "./notifications.ts";
 import { tableExists } from "./sqlite-schema.ts";
@@ -93,6 +98,11 @@ function recalculatePair(
     )
     .get(deal.id, project.id) as
     { id: string; status: DealMatch["status"]; eligible: number } | undefined;
+  const buyerOrganization = database
+    .prepare("SELECT organization_type FROM organizations WHERE id=?")
+    .get(project.organization_id) as
+    | { organization_type: string }
+    | undefined;
   const result = matchDealToBuyerProject(deal, project, {
     buyerExplicitlyBlocked: buyerIsBlocked(
       database,
@@ -102,9 +112,18 @@ function recalculatePair(
     sellerExcluded: existing?.status === "excluded",
     marketplaceEnvironmentsMatch: true,
   });
+  const hardExclusions = [...result.hard_exclusions];
+  if (
+    !buyerOrganization ||
+    !BUYER_ORGANIZATION_TYPES.includes(
+      buyerOrganization.organization_type as (typeof BUYER_ORGANIZATION_TYPES)[number],
+    )
+  )
+    hardExclusions.push("The buyer organization is not currently an eligible buyer.");
+  const eligible = hardExclusions.length === 0;
   const breakdown = JSON.stringify({
     reasons: result.reasons,
-    hard_exclusions: result.hard_exclusions,
+    hard_exclusions: hardExclusions,
   });
   const matchId = existing?.id ?? randomUUID();
   database
@@ -126,11 +145,11 @@ function recalculatePair(
       project.id,
       project.organization_id,
       result.score,
-      result.eligible ? 1 : 0,
+      eligible ? 1 : 0,
       breakdown,
       existing?.status ?? "recommended",
     );
-  if (result.eligible)
+  if (eligible)
     recordDealBuyerEvent(database, {
       dealId: deal.id,
       buyerOrganizationId: project.organization_id,
@@ -138,7 +157,7 @@ function recalculatePair(
       eventType: "matched",
       sourceKey: `match:${matchId}`,
     });
-  if (result.eligible && !existing?.eligible) {
+  if (eligible && !existing?.eligible) {
     const organization = database
       .prepare("SELECT name FROM organizations WHERE id=?")
       .get(project.organization_id) as { name: string } | undefined;
