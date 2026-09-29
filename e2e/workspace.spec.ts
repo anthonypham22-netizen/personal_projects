@@ -135,6 +135,47 @@ test("advisor can inspect the event-backed buyer funnel and record a milestone",
   await expect(buyerRow).toContainText("IOI");
 });
 
+test("seller-side teams can keep private notes out of buyer workspaces", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Advisor demo" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Welcome back, Alex." }),
+  ).toBeVisible();
+  await page.goto("/app/deals/cedar");
+  await page.getByRole("button", { name: "Internal notes" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Internal notes" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/Private to the owner and advisor firms/),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/Interest is strong, but we still need confirmation/),
+  ).toBeVisible();
+
+  const note = `Confirm financing source before shortlist ${Date.now()}.`;
+  await page.getByRole("textbox", { name: "Internal note" }).fill(note);
+  await page.getByRole("button", { name: "Add internal note" }).click();
+  await expect(page.getByText(note, { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Alex Morgan", { exact: true }).first(),
+  ).toBeVisible();
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Welcome back, Taylor." }),
+  ).toBeVisible();
+  await page.goto("/app/deals/cedar");
+  await expect(
+    page.getByRole("button", { name: "Internal notes" }),
+  ).toHaveCount(0);
+  await expect(page.getByText(note, { exact: true })).toHaveCount(0);
+});
+
 test("seller shares a private teaser and sees the buyer response", async ({
   page,
 }) => {
@@ -461,6 +502,20 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
   await page
     .getByRole("button", { name: "Introduction requests", exact: true })
     .click();
+  const introductionWorkbench = page.getByRole("region", {
+    name: "Introduction requests",
+  });
+  const introductionHeader = introductionWorkbench.locator(
+    ".recommendation-header",
+  );
+  await expect(introductionHeader).toHaveCSS("display", "flex");
+  await expect(introductionHeader).toHaveCSS("padding", "20px");
+  const countRadius = await introductionHeader
+    .locator(".recommendation-count")
+    .evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element).borderRadius),
+    );
+  expect(countRadius).toBeGreaterThan(100);
   const requestCard = page.getByRole("article").filter({ hasText: buyerFirm });
   await expect(requestCard).toContainText(projectName);
   await expect(requestCard).toContainText(/\d+%/);

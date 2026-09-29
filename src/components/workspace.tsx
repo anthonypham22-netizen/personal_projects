@@ -2353,6 +2353,7 @@ function DealDetail({ deal }: { deal: Deal }) {
         ...(deal.can_manage ? ["Mandate settings"] : []),
         ...(deal.can_manage ? ["Recommended buyers"] : []),
         ...(deal.can_manage ? ["Buyer funnel"] : []),
+        ...(data.user.role !== "buyer" ? ["Internal notes"] : []),
         "Data room",
         "Messages",
         "Tasks",
@@ -2665,6 +2666,8 @@ function DealDetail({ deal }: { deal: Deal }) {
         <RecommendedBuyers deal={deal} />
       ) : tab === "Buyer funnel" ? (
         <BuyerFunnel deal={deal} />
+      ) : tab === "Internal notes" ? (
+        <InternalNotes deal={deal} />
       ) : tab === "Introduction requests" ? (
         <IntroductionRequests deal={deal} />
       ) : tab === "Data room" ? (
@@ -2782,6 +2785,102 @@ const eventTimestamp = (value: string) =>
     minute: "2-digit",
     timeZone: "America/Toronto",
   });
+
+function InternalNotes({ deal }: { deal: Deal }) {
+  const { data } = useWorkspace();
+  const notes = (data.deal_internal_notes ?? []).filter(
+    (note) => note.deal_id === deal.id,
+  );
+  return (
+    <section className="internal-notes" aria-labelledby="internal-notes-title">
+      <header className="internal-notes-heading">
+        <div>
+          <p className="eyebrow">PRIVATE DEAL-TEAM RECORD</p>
+          <h2 id="internal-notes-title">Internal notes</h2>
+          <p>
+            Capture call context, buyer signals, and follow-ups separately from
+            external conversations.
+          </p>
+        </div>
+        <span>{notes.length} notes</span>
+      </header>
+      <div className="internal-notes-privacy">
+        <LockKeyhole size={18} aria-hidden="true" />
+        <div>
+          <strong>Private to the owner and advisor firms</strong>
+          <p>
+            Buyers never see these notes. Use Messages for buyer-facing
+            communication.
+          </p>
+        </div>
+      </div>
+      {deal.can_manage ? (
+        <div className="internal-note-composer">
+          <MutationForm
+            action="createInternalNote"
+            extra={{ deal_id: deal.id }}
+            label="Add internal note"
+            reset
+          >
+            <label>
+              Internal note
+              <textarea
+                name="body"
+                rows={4}
+                maxLength={5000}
+                placeholder="Add context for the deal team…"
+                required
+              />
+            </label>
+            <p className="field-hint">
+              Record facts and next steps. Do not use this area to message a
+              buyer.
+            </p>
+          </MutationForm>
+        </div>
+      ) : (
+        <p className="internal-note-readonly">
+          Your firm role provides read-only access to this record.
+        </p>
+      )}
+      <div className="internal-note-ledger">
+        <div className="internal-note-ledger-heading">
+          <h3>Deal-team record</h3>
+          <span>Newest first</span>
+        </div>
+        {notes.map((note) => (
+          <article className="internal-note-entry" key={note.id}>
+            <span className="internal-note-avatar" aria-hidden="true">
+              {initials(note.author_name)}
+            </span>
+            <div>
+              <header>
+                <div>
+                  <strong>{note.author_name}</strong>
+                  <span>
+                    {note.author_role
+                      ? `${note.author_role[0].toUpperCase()}${note.author_role.slice(1)}`
+                      : "Former team member"}
+                  </span>
+                </div>
+                <time dateTime={note.created_at}>
+                  {eventTimestamp(note.created_at)}
+                </time>
+              </header>
+              <p>{note.body}</p>
+            </div>
+          </article>
+        ))}
+        {!notes.length && (
+          <Empty
+            title="No internal notes yet"
+            body="Add the first private update for the owner and advisor teams."
+          />
+        )}
+      </div>
+    </section>
+  );
+}
 
 function BuyerFunnel({ deal }: { deal: Deal }) {
   const { data, act, busy } = useWorkspace();

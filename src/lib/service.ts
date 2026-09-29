@@ -21,6 +21,7 @@ import {
   type Access,
   type Document,
   type Message,
+  type DealInternalNote,
   type Task,
   type Offer,
   type Activity,
@@ -1144,6 +1145,20 @@ export function workspace(user: User): WorkspaceData {
   const messages = all<Message>(
     "SELECT m.*,u.name sender_name,u.role sender_role,d.title deal_title,b.name buyer_name FROM messages m JOIN users u ON u.id=m.sender_id JOIN users b ON b.id=m.buyer_id JOIN deals d ON d.id=m.deal_id ORDER BY m.created_at,m.rowid",
   ).filter((m) => ids.has(m.deal_id) && activeThread(m.deal_id, m.buyer_id));
+  const teamDealIds = rawDeals
+    .filter((deal) => teamMemberForDeal(deal))
+    .map((deal) => deal.id);
+  const dealInternalNotes =
+    user.role !== "buyer" && teamDealIds.length
+      ? all<DealInternalNote>(
+          `SELECT n.*,COALESCE(u.name,'Former team member') author_name,u.role author_role
+           FROM deal_internal_notes n
+           LEFT JOIN users u ON u.id=n.author_user_id
+           WHERE n.deal_id IN (${teamDealIds.map(() => "?").join(",")})
+           ORDER BY n.created_at DESC,n.rowid DESC`,
+          ...teamDealIds,
+        )
+      : undefined;
   const tasks = all<Task>(
     "SELECT t.*,d.title deal_title FROM tasks t JOIN deals d ON d.id=t.deal_id ORDER BY t.due_date",
   ).filter(
@@ -1198,6 +1213,7 @@ export function workspace(user: User): WorkspaceData {
     deal_outreach: dealOutreach,
     introduction_requests: introductionRequests,
     ...(buyerFunnels ? { buyer_funnels: buyerFunnels } : {}),
+    ...(dealInternalNotes ? { deal_internal_notes: dealInternalNotes } : {}),
     qualified_discovery_min_score: qualifiedDiscoveryMinScore,
     deal_financials: dealFinancials,
     access,
@@ -2432,6 +2448,20 @@ export function mutate(
       p.body,
     );
     return { message: "Message sent." };
+  }
+  if (action === "createInternalNote") {
+    requireManager(user, deal);
+    const p = parse(z.object({ body: text(1, 5000) }), data);
+    const id = randomUUID();
+    run(
+      "INSERT INTO deal_internal_notes(id,deal_id,author_user_id,body) VALUES(?,?,?,?)",
+      id,
+      deal.id,
+      user.id,
+      p.body,
+    );
+    audit(user, deal.id, "Added an internal deal-team note");
+    return { id, message: "Internal note added." };
   }
   if (action === "createTask") {
     requireManager(user, deal);

@@ -425,11 +425,39 @@ function syncDemoMandates(d: DatabaseSync) {
   }
 }
 
+function syncDemoInternalNotes(d: DatabaseSync) {
+  const tableExists = d
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='deal_internal_notes'",
+    )
+    .get();
+  if (!tableExists) return;
+
+  const insert = d.prepare(`INSERT OR IGNORE INTO deal_internal_notes(
+    id,deal_id,author_user_id,body,created_at
+  ) VALUES(?,?,?,?,?)`);
+  insert.run(
+    "internal-note-cedar-financing",
+    "cedar",
+    "demo-advisor",
+    "Spoke with the buyer team after the management call. Interest is strong, but we still need confirmation of financing sources before the next process update.",
+    "2026-09-22 18:15:00",
+  );
+  insert.run(
+    "internal-note-cedar-confidentiality",
+    "cedar",
+    "demo-owner",
+    "Keep customer names out of the management presentation until the shortlist is confirmed.",
+    "2026-09-23 13:40:00",
+  );
+}
+
 export function seed(d: DatabaseSync, directory: string) {
   if (d.prepare("SELECT id FROM users WHERE id='demo-advisor'").get()) {
     syncDemoDocuments(d, directory);
     syncDemoBuyerProjects(d);
     syncDemoMandates(d);
+    syncDemoInternalNotes(d);
     return;
   }
   d.exec("BEGIN IMMEDIATE");
@@ -698,6 +726,7 @@ export function seed(d: DatabaseSync, directory: string) {
     ).run();
     syncDemoBuyerProjects(d);
     syncDemoMandates(d);
+    syncDemoInternalNotes(d);
     d.exec("COMMIT");
   } catch (e) {
     d.exec("ROLLBACK");

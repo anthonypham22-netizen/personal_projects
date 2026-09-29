@@ -434,6 +434,15 @@ export type Message = {
   deal_title: string;
   buyer_name: string;
 };
+export type DealInternalNote = {
+  id: string;
+  deal_id: string;
+  author_user_id: string | null;
+  body: string;
+  created_at: string;
+  author_name: string;
+  author_role: Role | null;
+};
 export type Task = {
   id: string;
   deal_id: string;
@@ -477,6 +486,7 @@ export type WorkspaceData = {
   deal_outreach: DealOutreachRecipient[];
   introduction_requests: IntroductionRequest[];
   buyer_funnels?: DealBuyerFunnel[];
+  deal_internal_notes?: DealInternalNote[];
   qualified_discovery_min_score: number;
   deal_financials: DealFinancial[];
   access: Access[];

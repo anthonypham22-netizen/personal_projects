@@ -1984,3 +1984,109 @@ test("deal managers receive an event-backed buyer funnel without exposing it to 
     /deal-team|manage/,
   );
 });
+
+test("internal deal notes stay inside the seller-side team", () => {
+  const body = "Strong interest, but financing confirmation is still required.";
+  const result = mutate(owner, {
+    action: "createInternalNote",
+    data: { deal_id: "cedar", body },
+  });
+  assert.ok(result.id);
+
+  const ownerNote = workspace(owner).deal_internal_notes?.find(
+    (note) => note.id === result.id,
+  );
+  const advisorNote = workspace(advisor).deal_internal_notes?.find(
+    (note) => note.id === result.id,
+  );
+  assert.equal(ownerNote?.body, body);
+  assert.equal(ownerNote?.author_name, owner.name);
+  assert.equal(advisorNote?.body, body);
+
+  const buyerState = workspace(buyer);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(buyerState, "deal_internal_notes"),
+    false,
+  );
+  assert.doesNotMatch(JSON.stringify(buyerState), new RegExp(body));
+
+  const unrelatedAdvisor = one<User>(
+    "SELECT * FROM users WHERE id='demo-advisor-2'",
+  )!;
+  assert.equal(
+    workspace(unrelatedAdvisor).deal_internal_notes?.some(
+      (note) => note.id === result.id,
+    ) ?? false,
+    false,
+  );
+  assert.throws(
+    () =>
+      mutate(unrelatedAdvisor, {
+        action: "createInternalNote",
+        data: { deal_id: "cedar", body: "Should not be saved." },
+      }),
+    /deal-team|manage|not found/i,
+  );
+  assert.throws(
+    () =>
+      mutate(buyer, {
+        action: "createInternalNote",
+        data: { deal_id: "cedar", body: "Buyer-only attempt." },
+      }),
+    /deal-team|manage/i,
+  );
+
+  const viewerToken = register({
+    name: "Cedar Note Viewer",
+    company: "Temporary Viewer Firm",
+    email: "cedar-note-viewer@example.test",
+    role: "owner",
+    password: "internal-notes-password-2026",
+  });
+  const viewer = sessionUser(viewerToken)!;
+  const viewerOrganization = one<{ id: string }>(
+    "SELECT organization_id id FROM organization_members WHERE user_id=?",
+    viewer.id,
+  )!;
+  run("DELETE FROM organization_members WHERE user_id=?", viewer.id);
+  run("DELETE FROM organizations WHERE id=?", viewerOrganization.id);
+  run("UPDATE users SET is_demo=1 WHERE id=?", viewer.id);
+  run(
+    "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'viewer','active')",
+    `membership-${viewer.id}-cedar-notes`,
+    "org-demo-owner",
+    viewer.id,
+  );
+  const demoViewer = one<User>("SELECT * FROM users WHERE id=?", viewer.id)!;
+  assert.equal(
+    workspace(demoViewer).deal_internal_notes?.some(
+      (note) => note.id === result.id,
+    ),
+    true,
+  );
+  assert.throws(
+    () =>
+      mutate(demoViewer, {
+        action: "createInternalNote",
+        data: { deal_id: "cedar", body: "Viewer cannot add notes." },
+      }),
+    /deal-team|manage/i,
+  );
+
+  assert.throws(
+    () =>
+      mutate(owner, {
+        action: "createInternalNote",
+        data: { deal_id: "cedar", body: "   " },
+      }),
+    /characters|invalid/i,
+  );
+  assert.throws(
+    () =>
+      mutate(owner, {
+        action: "createInternalNote",
+        data: { deal_id: "cedar", body: "x".repeat(5_001) },
+      }),
+    /characters|invalid/i,
+  );
+});

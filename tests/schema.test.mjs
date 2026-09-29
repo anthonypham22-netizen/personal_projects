@@ -19,6 +19,7 @@ import { recommendedBuyersMigration } from "../src/lib/migrations/006_recommende
 import { privateTeaserDistributionMigration } from "../src/lib/migrations/007_private_teaser_distribution.ts";
 import { qualifiedDiscoveryMigration } from "../src/lib/migrations/008_qualified_discovery.ts";
 import { buyerFunnelMigration } from "../src/lib/migrations/009_buyer_funnel.ts";
+import { internalDealNotesMigration } from "../src/lib/migrations/010_internal_deal_notes.ts";
 import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
 import { ensureBuyerFunnelBackfill } from "../src/lib/buyer-funnel.ts";
 
@@ -60,6 +61,7 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 7, name: "private_teaser_distribution" },
       { version: 8, name: "qualified_discovery" },
       { version: 9, name: "buyer_funnel" },
+      { version: 10, name: "internal_deal_notes" },
     ]);
 
     seed(database, directory);
@@ -112,6 +114,11 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       database.prepare("SELECT COUNT(*) count FROM organization_members").get()
         .count,
       5,
+    );
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_internal_notes").get()
+        .count,
+      2,
     );
     assert.equal(
       database
@@ -303,7 +310,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 9);
+    assert.equal(history.length, 10);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
@@ -314,6 +321,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       { version: 7, name: "private_teaser_distribution" },
       { version: 8, name: "qualified_discovery" },
       { version: 9, name: "buyer_funnel" },
+      { version: 10, name: "internal_deal_notes" },
     ]);
     assert.equal(
       database
@@ -394,6 +402,96 @@ test("an existing Phase 7 database adds an idempotent buyer event ledger", () =>
           )
           .run(),
       /CHECK constraint/,
+    );
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an existing Phase 8 database adds constrained internal deal notes", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "succera-phase9-"));
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    const phaseEight = [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+      recommendedBuyersMigration,
+      privateTeaserDistributionMigration,
+      qualifiedDiscoveryMigration,
+      buyerFunnelMigration,
+    ];
+    applyMigrations(database, phaseEight);
+    seed(database, directory);
+
+    applyMigrations(database, [...phaseEight, internalDealNotesMigration]);
+    seed(database, directory);
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_internal_notes").get()
+        .count,
+      2,
+      "existing demo databases receive the Phase 9 sample notes",
+    );
+    const historyAfterUpgrade = getMigrationHistory(database);
+    const changesAfterUpgrade = database
+      .prepare("SELECT total_changes() changes")
+      .get().changes;
+    applyMigrations(database, [...phaseEight, internalDealNotesMigration]);
+
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 10,
+      name: "internal_deal_notes",
+    });
+    assert.deepEqual(getMigrationHistory(database), historyAfterUpgrade);
+    assert.equal(
+      database.prepare("SELECT total_changes() changes").get().changes,
+      changesAfterUpgrade,
+      "re-running Phase 9 must not write to the database",
+    );
+    seed(database, directory);
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_internal_notes").get()
+        .count,
+      2,
+      "re-seeding keeps Phase 9 sample notes idempotent",
+    );
+    database
+      .prepare(
+        "INSERT INTO deal_internal_notes(id,deal_id,author_user_id,body) VALUES(?,?,?,?)",
+      )
+      .run(
+        "phase9-valid",
+        "cedar",
+        "demo-owner",
+        "Financing evidence requested.",
+      );
+    assert.equal(
+      database
+        .prepare("SELECT body FROM deal_internal_notes WHERE id='phase9-valid'")
+        .get().body,
+      "Financing evidence requested.",
+    );
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            "INSERT INTO deal_internal_notes(id,deal_id,author_user_id,body) VALUES('phase9-empty','cedar','demo-owner','   ')",
+          )
+          .run(),
+      /CHECK constraint/,
+    );
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            "INSERT INTO deal_internal_notes(id,deal_id,author_user_id,body) VALUES('phase9-missing','missing-deal','demo-owner','Private note')",
+          )
+          .run(),
+      /FOREIGN KEY constraint/,
     );
   } finally {
     database.close();
