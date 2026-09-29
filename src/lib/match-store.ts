@@ -4,13 +4,8 @@ import { MATCHING_CONFIG, matchDealToBuyerProject } from "./matching.ts";
 import { inImmediateTransaction } from "./sqlite-transaction.ts";
 import type { BuyerProject, Deal, DealMatch } from "./types";
 import { recordDealBuyerEvent } from "./buyer-funnel.ts";
-
-const tableExists = (database: DatabaseSync, table: string) =>
-  Boolean(
-    database
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
-      .get(table),
-  );
+import { dealManagerUserIds, notifyUsers } from "./notifications.ts";
+import { tableExists } from "./sqlite-schema.ts";
 
 const list = (database: DatabaseSync, sql: string, id: string) =>
   database
@@ -102,10 +97,10 @@ function recalculatePair(
 ) {
   const existing = database
     .prepare(
-      "SELECT id,status FROM deal_matches WHERE deal_id=? AND buyer_project_id=?",
+      "SELECT id,status,eligible FROM deal_matches WHERE deal_id=? AND buyer_project_id=?",
     )
     .get(deal.id, project.id) as
-    { id: string; status: DealMatch["status"] } | undefined;
+    { id: string; status: DealMatch["status"]; eligible: number } | undefined;
   const result = matchDealToBuyerProject(deal, project, {
     buyerVerificationStatus: verificationStatus(
       database,
@@ -157,6 +152,20 @@ function recalculatePair(
       eventType: "matched",
       sourceKey: `match:${matchId}`,
     });
+  if (result.eligible && !existing?.eligible) {
+    const organization = database
+      .prepare("SELECT name FROM organizations WHERE id=?")
+      .get(project.organization_id) as { name: string } | undefined;
+    notifyUsers(database, {
+      userIds: dealManagerUserIds(database, deal.id),
+      type: "new_match",
+      title: "New buyer match",
+      body: `${organization?.name ?? "A buyer"} matched ${deal.title} through ${project.name} at ${result.score}%.`,
+      href: `/app/deals/${deal.id}`,
+      dealId: deal.id,
+      sourceKey: `match:${matchId}:new`,
+    });
+  }
 }
 
 export function recalculateDealMatch(

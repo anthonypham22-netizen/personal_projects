@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { hashPassword } from "./passwords.ts";
+import { notifyUsers } from "./notifications.ts";
 
 type DemoDocument = {
   id: string;
@@ -452,12 +453,50 @@ function syncDemoInternalNotes(d: DatabaseSync) {
   );
 }
 
+function syncDemoNotifications(d: DatabaseSync) {
+  const tableExists = d
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='notifications'",
+    )
+    .get();
+  if (!tableExists) return;
+
+  notifyUsers(d, {
+    userIds: ["demo-owner", "demo-advisor"],
+    type: "new_match",
+    title: "New buyer match",
+    body: "Evergreen Capital matched Project Atlas through Project Northern Lights at 76%.",
+    href: "/app/deals/atlas",
+    dealId: "atlas",
+    sourceKey: "demo:atlas:new-match",
+  });
+  notifyUsers(d, {
+    userIds: ["demo-buyer"],
+    type: "new_task",
+    title: "New diligence task",
+    body: "Review the FY2025 financial overview for Project Cedar.",
+    href: "/app/deals/cedar",
+    dealId: "cedar",
+    sourceKey: "demo:cedar:new-task",
+  });
+  notifyUsers(d, {
+    userIds: ["demo-buyer"],
+    type: "opportunity_shared",
+    title: "New private opportunity",
+    body: "Project Cedar was shared with Project Northern Lights.",
+    href: "/app/deals/cedar",
+    dealId: "cedar",
+    sourceKey: "demo:cedar:opportunity-shared",
+  });
+}
+
 export function seed(d: DatabaseSync, directory: string) {
   if (d.prepare("SELECT id FROM users WHERE id='demo-advisor'").get()) {
     syncDemoDocuments(d, directory);
     syncDemoBuyerProjects(d);
     syncDemoMandates(d);
     syncDemoInternalNotes(d);
+    syncDemoNotifications(d);
     return;
   }
   d.exec("BEGIN IMMEDIATE");
@@ -727,6 +766,7 @@ export function seed(d: DatabaseSync, directory: string) {
     syncDemoBuyerProjects(d);
     syncDemoMandates(d);
     syncDemoInternalNotes(d);
+    syncDemoNotifications(d);
     d.exec("COMMIT");
   } catch (e) {
     d.exec("ROLLBACK");

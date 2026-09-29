@@ -475,6 +475,45 @@ export type Activity = {
   actor_name: string;
   deal_title: string;
 };
+export const NOTIFICATION_TYPES = [
+  "new_match",
+  "opportunity_shared",
+  "introduction_requested",
+  "introduction_approved",
+  "buyer_pursued",
+  "nda_requested",
+  "nda_approved",
+  "new_message",
+  "new_task",
+  "document_shared",
+  "ioi_received",
+  "loi_received",
+  "access_revoked",
+] as const;
+export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
+export const NOTIFICATION_FREQUENCIES = [
+  "immediate",
+  "daily_digest",
+  "weekly_digest",
+  "disabled",
+] as const;
+export type NotificationFrequency = (typeof NOTIFICATION_FREQUENCIES)[number];
+export type Notification = {
+  id: string;
+  user_id: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  href: string;
+  deal_id: string | null;
+  actor_user_id: string | null;
+  read_at: string | null;
+  created_at: string;
+};
+export type NotificationPreferences = Record<
+  NotificationType,
+  NotificationFrequency
+>;
 export type WorkspaceData = {
   user: User;
   organization: Organization;
@@ -495,6 +534,9 @@ export type WorkspaceData = {
   tasks: Task[];
   offers: Offer[];
   activity: Activity[];
+  notifications: Notification[];
+  notification_unread_count: number;
+  notification_preferences: NotificationPreferences;
   advisors: Pick<User, "id" | "name" | "company" | "province" | "bio">[];
   demo: boolean;
 };

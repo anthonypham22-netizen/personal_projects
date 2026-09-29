@@ -43,6 +43,8 @@ import {
   Handshake,
   LoaderCircle,
   RotateCcw,
+  Bell,
+  Mail,
 } from "lucide-react";
 import { Brand } from "./brand";
 import { cn } from "@/lib/utils";
@@ -60,6 +62,8 @@ import {
   DEAL_DISTRIBUTION_MODES,
   DEAL_FINANCIAL_PERIOD_TYPES,
   BUYER_FUNNEL_STAGES,
+  NOTIFICATION_TYPES,
+  NOTIFICATION_FREQUENCIES,
   type WorkspaceData,
   type Deal,
   type BuyerProject,
@@ -71,6 +75,9 @@ import {
   type IntroductionRequest,
   type BuyerFunnelEntry,
   type DealBuyerEventType,
+  type NotificationFrequency,
+  type NotificationPreferences,
+  type NotificationType,
 } from "@/lib/types";
 
 const buyerOrganizationTypes = new Set<string>(BUYER_ORGANIZATION_TYPES);
@@ -152,6 +159,16 @@ const dateLabel = (date: string) =>
   ).toLocaleDateString("en-CA", {
     month: "short",
     day: "numeric",
+    timeZone: "America/Toronto",
+  });
+const dateTimeLabel = (date: string) =>
+  new Date(
+    date.includes("T") ? date : `${date.replace(" ", "T")}Z`,
+  ).toLocaleString("en-CA", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
     timeZone: "America/Toronto",
   });
 const statusText = (value: string) =>
@@ -264,6 +281,172 @@ function Panel({
       </div>
       {children}
     </section>
+  );
+}
+
+const notificationTypeLabels: Record<NotificationType, string> = {
+  new_match: "New buyer matches",
+  opportunity_shared: "Private opportunities shared",
+  introduction_requested: "Introduction requests",
+  introduction_approved: "Approved introductions",
+  buyer_pursued: "Buyer interest",
+  nda_requested: "NDA requests",
+  nda_approved: "NDA approvals",
+  new_message: "New messages",
+  new_task: "New tasks",
+  document_shared: "Documents shared",
+  ioi_received: "IOIs received",
+  loi_received: "LOIs received",
+  access_revoked: "Access changes",
+};
+
+const notificationTypeDescriptions: Record<NotificationType, string> = {
+  new_match: "When a buyer mandate becomes a strong match",
+  opportunity_shared: "When a sell-side team shares an opportunity",
+  introduction_requested: "When a qualified buyer requests an introduction",
+  introduction_approved: "When a seller approves an introduction",
+  buyer_pursued: "When a buyer elects to pursue an opportunity",
+  nda_requested: "When an NDA review is requested",
+  nda_approved: "When NDA access is approved",
+  new_message: "When someone sends you a deal message",
+  new_task: "When a diligence task is assigned",
+  document_shared: "When a deal-room document is shared",
+  ioi_received: "When an indication of interest is recorded",
+  loi_received: "When a letter of intent is submitted",
+  access_revoked: "When deal-room access changes",
+};
+
+const notificationFrequencyLabels: Record<NotificationFrequency, string> = {
+  immediate: "Immediate",
+  daily_digest: "Daily digest",
+  weekly_digest: "Weekly digest",
+  disabled: "Email off",
+};
+
+function NotificationBell() {
+  const { data, busy, act } = useWorkspace();
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const [open, setOpen] = useState(false);
+  const unread = data.notification_unread_count;
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => {
+      const details = detailsRef.current;
+      if (details && !details.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        detailsRef.current?.querySelector("summary")?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+
+  return (
+    <details
+      className="notification-menu"
+      ref={detailsRef}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary
+        className="icon-button notification-trigger"
+        role="button"
+        aria-label={`Notifications${unread ? `, ${unread} unread` : ""}`}
+      >
+        <Bell size={18} strokeWidth={1.7} />
+        {unread > 0 && (
+          <span className="notification-badge" aria-hidden="true">
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
+      </summary>
+      {open && (
+        <section
+          className="notification-popover"
+          aria-label="Notifications"
+          role="region"
+        >
+          <div className="notification-popover-header">
+            <div>
+              <p className="eyebrow">ACTIVITY</p>
+              <h2>Notifications</h2>
+            </div>
+            {unread > 0 && (
+              <button
+                type="button"
+                className="text-button"
+                disabled={busy}
+                onClick={() => void act("markAllNotificationsRead", {})}
+              >
+                Mark all read
+              </button>
+            )}
+          </div>
+          <div className="notification-list">
+            {data.notifications.length ? (
+              data.notifications.map((notification) => (
+                <article
+                  className={cn(
+                    "notification-item",
+                    !notification.read_at && "unread",
+                  )}
+                  key={notification.id}
+                >
+                  <span className="notification-dot" aria-hidden="true" />
+                  <div>
+                    <Link
+                      href={notification.href}
+                      onClick={() => setOpen(false)}
+                    >
+                      <strong>{notification.title}</strong>
+                      <span>{notification.body}</span>
+                    </Link>
+                    <small>{dateTimeLabel(notification.created_at)}</small>
+                  </div>
+                  <button
+                    type="button"
+                    className="notification-read-toggle"
+                    disabled={busy}
+                    aria-label={
+                      notification.read_at ? "Mark as unread" : "Mark as read"
+                    }
+                    onClick={() =>
+                      void act("setNotificationRead", {
+                        notification_id: notification.id,
+                        read: !notification.read_at,
+                      })
+                    }
+                  >
+                    {notification.read_at ? "Unread" : "Read"}
+                  </button>
+                </article>
+              ))
+            ) : (
+              <div className="notification-empty">
+                <Bell size={24} strokeWidth={1.5} />
+                <strong>You’re caught up</strong>
+                <span>Transaction updates will appear here.</span>
+              </div>
+            )}
+          </div>
+          <Link
+            className="notification-settings-link"
+            href="/app/settings"
+            onClick={() => setOpen(false)}
+          >
+            Notification preferences <ChevronRight size={14} />
+          </Link>
+        </section>
+      )}
+    </details>
   );
 }
 function Field({
@@ -498,6 +681,60 @@ export function Workspace({
         window.location.assign("/login");
         return json as Result;
       }
+      if (action === "setNotificationRead") {
+        const notificationId = String(values.notification_id);
+        const read = Boolean(values.read);
+        setData((current) => {
+          const selected = current.notifications.find(
+            (notification) => notification.id === notificationId,
+          );
+          const wasUnread = selected ? !selected.read_at : false;
+          const willBeUnread = !read;
+          return {
+            ...current,
+            notifications: current.notifications.map((notification) =>
+              notification.id === notificationId
+                ? {
+                    ...notification,
+                    read_at: read ? new Date().toISOString() : null,
+                  }
+                : notification,
+            ),
+            notification_unread_count: Math.max(
+              0,
+              current.notification_unread_count +
+                Number(willBeUnread) -
+                Number(wasUnread),
+            ),
+          };
+        });
+        notify(json.message);
+        return json as Result;
+      }
+      if (action === "markAllNotificationsRead") {
+        const readAt = new Date().toISOString();
+        setData((current) => ({
+          ...current,
+          notifications: current.notifications.map((notification) => ({
+            ...notification,
+            read_at: notification.read_at ?? readAt,
+          })),
+          notification_unread_count: 0,
+        }));
+        notify(json.message);
+        return json as Result;
+      }
+      if (action === "notificationPreferences") {
+        setData((current) => ({
+          ...current,
+          notification_preferences: {
+            ...current.notification_preferences,
+            ...(values.preferences as Partial<NotificationPreferences>),
+          },
+        }));
+        notify(json.message);
+        return json as Result;
+      }
       try {
         await refresh();
         notify(json.message);
@@ -635,6 +872,7 @@ export function Workspace({
             </div>
             <div className="topbar-right">
               {busy && <span role="status">Saving…</span>}
+              <NotificationBell />
               <span className="hidden md:block">
                 {data.demo
                   ? "Fictional demonstration workspace"
@@ -4693,6 +4931,87 @@ function Network() {
     </>
   );
 }
+
+function NotificationPreferencesPanel() {
+  const { data, busy, act } = useWorkspace();
+  const [preferences, setPreferences] = useState(data.notification_preferences);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!dirty && !saving) setPreferences(data.notification_preferences);
+  }, [data.notification_preferences, dirty, saving]);
+
+  return (
+    <Panel title="Email notification preferences">
+      <form
+        className="notification-preferences"
+        aria-busy={saving}
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setSaving(true);
+          const result = await act("notificationPreferences", { preferences });
+          if (result) {
+            setDirty(false);
+            setPreferences(preferences);
+          }
+          setSaving(false);
+        }}
+      >
+        <div className="notification-preferences-intro">
+          <span className="preference-icon">
+            <Mail size={18} strokeWidth={1.7} />
+          </span>
+          <div>
+            <strong>Choose when Succera should email you.</strong>
+            <p>
+              In-app notifications always remain available. This environment
+              records outbound email safely until a production provider is
+              configured.
+            </p>
+          </div>
+        </div>
+        <div className="notification-preference-list">
+          {NOTIFICATION_TYPES.map((type) => (
+            <label className="notification-preference-row" key={type}>
+              <span>
+                <strong>{notificationTypeLabels[type]}</strong>
+                <small>{notificationTypeDescriptions[type]}</small>
+              </span>
+              <select
+                aria-label={`Email delivery for ${notificationTypeLabels[type]}`}
+                value={preferences[type]}
+                disabled={saving}
+                onChange={(event) =>
+                  setPreferences((current) => {
+                    setDirty(true);
+                    return {
+                      ...current,
+                      [type]: event.target.value as NotificationFrequency,
+                    };
+                  })
+                }
+              >
+                {NOTIFICATION_FREQUENCIES.map((frequency) => (
+                  <option key={frequency} value={frequency}>
+                    {notificationFrequencyLabels[frequency]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
+        <div className="form-actions">
+          <button className="button button-green" disabled={busy || saving}>
+            {busy || saving ? <LoaderCircle size={16} /> : <Check size={16} />}
+            Save notification preferences
+          </button>
+        </div>
+      </form>
+    </Panel>
+  );
+}
+
 function SettingsPage() {
   const { data } = useWorkspace(),
     { user, organization } = data;
@@ -4763,6 +5082,7 @@ function SettingsPage() {
               </MutationForm>
             </div>
           </Panel>
+          <NotificationPreferencesPanel />
           <Panel title="Firm profile">
             <div className="panel-body">
               {organization.can_manage ? (

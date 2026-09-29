@@ -20,6 +20,9 @@ import { privateTeaserDistributionMigration } from "../src/lib/migrations/007_pr
 import { qualifiedDiscoveryMigration } from "../src/lib/migrations/008_qualified_discovery.ts";
 import { buyerFunnelMigration } from "../src/lib/migrations/009_buyer_funnel.ts";
 import { internalDealNotesMigration } from "../src/lib/migrations/010_internal_deal_notes.ts";
+import { notificationsMigration } from "../src/lib/migrations/011_notifications.ts";
+import { emailProcessingLeaseMigration } from "../src/lib/migrations/012_email_processing_lease.ts";
+import { emailProcessingTokenMigration } from "../src/lib/migrations/013_email_processing_token.ts";
 import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
 import { ensureBuyerFunnelBackfill } from "../src/lib/buyer-funnel.ts";
 
@@ -62,6 +65,9 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 8, name: "qualified_discovery" },
       { version: 9, name: "buyer_funnel" },
       { version: 10, name: "internal_deal_notes" },
+      { version: 11, name: "notifications" },
+      { version: 12, name: "email_processing_lease" },
+      { version: 13, name: "email_processing_token" },
     ]);
 
     seed(database, directory);
@@ -310,7 +316,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 10);
+    assert.equal(history.length, 13);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
@@ -322,6 +328,9 @@ test("an existing database upgrades to organizations without losing data", () =>
       { version: 8, name: "qualified_discovery" },
       { version: 9, name: "buyer_funnel" },
       { version: 10, name: "internal_deal_notes" },
+      { version: 11, name: "notifications" },
+      { version: 12, name: "email_processing_lease" },
+      { version: 13, name: "email_processing_token" },
     ]);
     assert.equal(
       database
@@ -492,6 +501,119 @@ test("an existing Phase 8 database adds constrained internal deal notes", () => 
           )
           .run(),
       /FOREIGN KEY constraint/,
+    );
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an existing Phase 9 database adds notification infrastructure without losing private notes", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "succera-phase10-"));
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    const phaseNine = [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+      recommendedBuyersMigration,
+      privateTeaserDistributionMigration,
+      qualifiedDiscoveryMigration,
+      buyerFunnelMigration,
+      internalDealNotesMigration,
+    ];
+    applyMigrations(database, phaseNine);
+    seed(database, directory);
+    const notesBefore = database
+      .prepare("SELECT COUNT(*) count FROM deal_internal_notes")
+      .get().count;
+
+    const phaseTen = [
+      ...phaseNine,
+      notificationsMigration,
+      emailProcessingLeaseMigration,
+      emailProcessingTokenMigration,
+    ];
+    applyMigrations(database, phaseTen);
+
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_internal_notes").get()
+        .count,
+      notesBefore,
+    );
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 13,
+      name: "email_processing_token",
+    });
+    assert.deepEqual(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('notifications','notification_preferences','email_outbox') ORDER BY name",
+        )
+        .all()
+        .map(({ name }) => name),
+      ["email_outbox", "notification_preferences", "notifications"],
+    );
+    assert.ok(
+      database
+        .prepare("PRAGMA table_info(email_outbox)")
+        .all()
+        .some(({ name }) => name === "processing_at"),
+    );
+    assert.ok(
+      database
+        .prepare("PRAGMA table_info(email_outbox)")
+        .all()
+        .some(({ name }) => name === "processing_token"),
+    );
+    database
+      .prepare(
+        `INSERT INTO notifications(
+          id,user_id,type,title,body,href,source_key
+        ) VALUES('phase10-notification','demo-owner','new_message','New message','A buyer sent a message.','/app/messages','phase10:message')`,
+      )
+      .run();
+    database
+      .prepare(
+        "INSERT INTO notification_preferences(user_id,notification_type,frequency) VALUES('demo-owner','new_message','daily_digest')",
+      )
+      .run();
+    database
+      .prepare(
+        `INSERT INTO email_outbox(
+          id,notification_id,user_id,recipient_email,subject,body,frequency,status,available_at
+        ) VALUES('phase10-email','phase10-notification','demo-owner','owner@example.test','New message','A buyer sent a message.','daily_digest','recorded',CURRENT_TIMESTAMP)`,
+      )
+      .run();
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            "INSERT INTO notification_preferences(user_id,notification_type,frequency) VALUES('demo-buyer','new_message','hourly')",
+          )
+          .run(),
+      /CHECK constraint/,
+    );
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            "INSERT INTO notifications(id,user_id,type,title,body,href,source_key) VALUES('bad','demo-owner','unknown','Bad','Bad','/app','bad')",
+          )
+          .run(),
+      /CHECK constraint/,
+    );
+    const changesAfterUpgrade = database
+      .prepare("SELECT total_changes() changes")
+      .get().changes;
+    applyMigrations(database, phaseTen);
+    assert.equal(
+      database.prepare("SELECT total_changes() changes").get().changes,
+      changesAfterUpgrade,
+      "re-running Phase 10 must not write to the database",
     );
   } finally {
     database.close();

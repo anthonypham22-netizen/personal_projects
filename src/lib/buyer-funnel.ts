@@ -11,13 +11,7 @@ import {
   type DealMatchStatus,
 } from "./types.ts";
 import { inImmediateTransaction } from "./sqlite-transaction.ts";
-
-const tableExists = (database: DatabaseSync, table: string) =>
-  Boolean(
-    database
-      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
-      .get(table),
-  );
+import { tableExists } from "./sqlite-schema.ts";
 
 export type RecordBuyerEventInput = {
   dealId: string;

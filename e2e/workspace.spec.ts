@@ -176,6 +176,58 @@ test("seller-side teams can keep private notes out of buyer workspaces", async (
   await expect(page.getByText(note, { exact: true })).toHaveCount(0);
 });
 
+test("users can review notifications and control email delivery preferences", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Welcome back, Taylor." }),
+  ).toBeVisible();
+
+  const bell = page.getByRole("button", { name: /Notifications/ });
+  await expect(bell).toBeVisible();
+  await bell.click();
+  const notifications = page.getByRole("region", { name: "Notifications" });
+  await expect(notifications).toBeVisible();
+  const taskNotification = notifications
+    .getByRole("article")
+    .filter({ hasText: "Review the FY2025 financial overview" });
+  await expect(taskNotification).toContainText(
+    "Review the FY2025 financial overview",
+  );
+  await taskNotification.getByRole("button", { name: "Mark as read" }).click();
+  await expect(
+    taskNotification.getByRole("button", { name: "Mark as unread" }),
+  ).toBeVisible();
+
+  await page.goto("/app/settings");
+  await expect(
+    page.getByRole("heading", { name: "Email notification preferences" }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Email delivery for New messages")
+    .selectOption("daily_digest");
+
+  // A different workspace action refreshes shared data. The unsaved selector
+  // should remain local until the notification form is explicitly saved.
+  await page.getByLabel("Full name").fill("Taylor Buyer");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByLabel("Email delivery for New messages")).toHaveValue(
+    "daily_digest",
+  );
+
+  await page
+    .getByLabel("Email delivery for New messages")
+    .selectOption("disabled");
+  await page
+    .getByRole("button", { name: "Save notification preferences" })
+    .click();
+  await expect(page.getByLabel("Email delivery for New messages")).toHaveValue(
+    "disabled",
+  );
+});
+
 test("seller shares a private teaser and sees the buyer response", async ({
   page,
 }) => {

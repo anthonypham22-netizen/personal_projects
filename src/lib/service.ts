@@ -16,6 +16,8 @@ import {
   DEAL_FINANCIAL_PERIOD_TYPES,
   DEAL_MATCH_STATUSES,
   DEAL_BUYER_EVENT_TYPES,
+  NOTIFICATION_TYPES,
+  NOTIFICATION_FREQUENCIES,
   type User,
   type Deal,
   type Access,
@@ -36,6 +38,7 @@ import {
   type DealOutreachRecipient,
   type IntroductionRequest,
   type DealBuyerEventType,
+  type NotificationPreferences,
 } from "./types";
 import { inImmediateTransaction } from "./sqlite-transaction";
 import {
@@ -51,6 +54,16 @@ import {
   buyerOrganizationIdForUser,
   recordDealBuyerEvent,
 } from "./buyer-funnel";
+import {
+  activeOrganizationUserIds,
+  dealManagerUserIds,
+  dealTeamUserIds,
+  notificationUnreadCountForUser,
+  notificationPreferencesForUser,
+  notificationsForUser,
+  notifyUsers,
+  saveNotificationPreferences,
+} from "./notifications";
 
 export class AppError extends Error {
   constructor(
@@ -1182,6 +1195,9 @@ export function workspace(user: User): WorkspaceData {
     "SELECT id,name,company,province,bio FROM users WHERE role='advisor' AND (is_demo=0 OR ?=1)",
     user.is_demo && process.env.ALLOW_DEMO === "true" ? 1 : 0,
   );
+  const notifications = notificationsForUser(db(), user.id);
+  const notificationUnreadCount = notificationUnreadCountForUser(db(), user.id);
+  const notificationPreferences = notificationPreferencesForUser(db(), user.id);
   const buyerProjectsEnabled = isEligibleBuyerOrganization(organization);
   const canManageBuyerProjects =
     buyerProjectsEnabled && organization.membership_role !== "viewer";
@@ -1222,6 +1238,9 @@ export function workspace(user: User): WorkspaceData {
     tasks,
     offers,
     activity,
+    notifications,
+    notification_unread_count: notificationUnreadCount,
+    notification_preferences: notificationPreferences,
     advisors,
     demo: !!user.is_demo,
   };
@@ -1240,6 +1259,57 @@ export function mutate(
   );
   const { action, data } = envelope;
   limit(`mutation:${user.id}`, 180, 60);
+  if (action === "setNotificationRead") {
+    const p = parse(
+      z.object({ notification_id: idSchema, read: z.boolean() }),
+      data,
+    );
+    const result = run(
+      `UPDATE notifications
+       SET read_at=CASE WHEN ?=1 THEN COALESCE(read_at,CURRENT_TIMESTAMP) ELSE NULL END
+       WHERE id=? AND user_id=?
+         AND ((?=1 AND read_at IS NULL) OR (?=0 AND read_at IS NOT NULL))`,
+      p.read ? 1 : 0,
+      p.notification_id,
+      user.id,
+      p.read ? 1 : 0,
+      p.read ? 1 : 0,
+    );
+    if (
+      !result.changes &&
+      !one(
+        "SELECT id FROM notifications WHERE id=? AND user_id=?",
+        p.notification_id,
+        user.id,
+      )
+    )
+      throw new AppError("Notification not found.", 404);
+    return {
+      message: p.read
+        ? "Notification marked read."
+        : "Notification marked unread.",
+    };
+  }
+  if (action === "markAllNotificationsRead") {
+    run(
+      "UPDATE notifications SET read_at=CURRENT_TIMESTAMP WHERE user_id=? AND read_at IS NULL",
+      user.id,
+    );
+    return { message: "Notifications marked read." };
+  }
+  if (action === "notificationPreferences") {
+    const preferenceSchema = z.partialRecord(
+      z.enum(NOTIFICATION_TYPES),
+      z.enum(NOTIFICATION_FREQUENCIES),
+    );
+    const p = parse(z.object({ preferences: preferenceSchema }), data);
+    saveNotificationPreferences(
+      db(),
+      user.id,
+      p.preferences as Partial<NotificationPreferences>,
+    );
+    return { message: "Notification preferences saved." };
+  }
   if (action === "profile") {
     const p = parse(
       z.object({
@@ -1584,6 +1654,17 @@ export function mutate(
           deal.id,
           `Recorded buyer milestone: ${p.event_type.replaceAll("_", " ")}`,
         );
+      if (inserted && p.event_type === "ioi_received")
+        notifyUsers(database, {
+          userIds: dealManagerUserIds(database, deal.id),
+          type: "ioi_received",
+          title: "IOI received",
+          body: `${deal.title} has advanced to the IOI stage.`,
+          href: `/app/deals/${deal.id}`,
+          dealId: deal.id,
+          actorUserId: user.id,
+          sourceKey: `funnel:${deal.id}:${p.buyer_organization_id}:ioi_received`,
+        });
     });
     return {
       message: inserted
@@ -1608,7 +1689,8 @@ export function mutate(
     inImmediateTransaction(database, () => {
       const recipients = database
         .prepare(
-          `SELECT dm.id,dm.buyer_project_id,dm.buyer_organization_id
+          `SELECT dm.id,dm.buyer_project_id,dm.buyer_organization_id,
+             bp.name buyer_project_name
            FROM deal_matches dm
            JOIN buyer_projects bp
              ON bp.id=dm.buyer_project_id
@@ -1620,6 +1702,7 @@ export function mutate(
         id: string;
         buyer_project_id: string;
         buyer_organization_id: string;
+        buyer_project_name: string;
       }[];
       if (recipients.length !== matchIds.length)
         throw new AppError(
@@ -1669,6 +1752,19 @@ export function mutate(
           eventType: "teaser_sent",
           sourceKey: `outreach:${recipientId}:sent`,
           createdByUserId: user.id,
+        });
+        notifyUsers(database, {
+          userIds: activeOrganizationUserIds(
+            database,
+            recipient.buyer_organization_id,
+          ),
+          type: "opportunity_shared",
+          title: "New private opportunity",
+          body: `${deal.title} was shared with ${recipient.buyer_project_name}.`,
+          href: `/app/deals/${deal.id}`,
+          dealId: deal.id,
+          actorUserId: user.id,
+          sourceKey: `outreach:${recipientId}:shared`,
         });
       }
       database
@@ -1829,6 +1925,17 @@ export function mutate(
         sourceKey: `outreach:${recipient.id}:${targetStatus === "pursued" ? "pursued" : "passed"}`,
         createdByUserId: user.id,
       });
+      if (response === "interested")
+        notifyUsers(database, {
+          userIds: dealManagerUserIds(database, deal.id),
+          type: "buyer_pursued",
+          title: "Buyer expressed interest",
+          body: `${organization.name} is interested in ${deal.title}.`,
+          href: `/app/deals/${deal.id}`,
+          dealId: deal.id,
+          actorUserId: user.id,
+          sourceKey: `outreach:${recipient.id}:buyer-pursued`,
+        });
       audit(
         user,
         deal.id,
@@ -1934,6 +2041,16 @@ export function mutate(
         sourceKey: `introduction:${id}:requested`,
         createdByUserId: user.id,
       });
+      notifyUsers(database, {
+        userIds: dealManagerUserIds(database, deal.id),
+        type: "introduction_requested",
+        title: "Introduction requested",
+        body: `${organization.name} requested an introduction to ${deal.title}.`,
+        href: `/app/deals/${deal.id}`,
+        dealId: deal.id,
+        actorUserId: user.id,
+        sourceKey: `introduction:${id}:requested`,
+      });
       audit(user, deal.id, "Requested a Qualified Discovery introduction");
     });
     return { id, message: "Introduction request sent to the deal team." };
@@ -2035,6 +2152,20 @@ export function mutate(
         sourceKey: `introduction:${request.id}:${p.status}`,
         createdByUserId: user.id,
       });
+      if (p.status === "approved")
+        notifyUsers(database, {
+          userIds: activeOrganizationUserIds(
+            database,
+            request.buyer_organization_id,
+          ),
+          type: "introduction_approved",
+          title: "Introduction approved",
+          body: `Your introduction request for ${deal.title} was approved. Confidential access remains gated by NDA review.`,
+          href: `/app/deals/${deal.id}`,
+          dealId: deal.id,
+          actorUserId: user.id,
+          sourceKey: `introduction:${request.id}:approved-notification`,
+        });
       recalculateBuyerOrganizationDealMatches(
         database,
         request.buyer_organization_id,
@@ -2299,11 +2430,21 @@ export function mutate(
         sourceKey: `access:${accessId}:nda-requested`,
         createdByUserId: user.id,
       });
+      notifyUsers(database, {
+        userIds: [buyer.id],
+        type: "nda_requested",
+        title: "NDA requested",
+        body: `The deal team invited you to continue with ${deal.title}.`,
+        href: `/app/deals/${deal.id}`,
+        dealId: deal.id,
+        actorUserId: user.id,
+        sourceKey: `access:${accessId}:nda-requested-notification`,
+      });
       audit(user, deal.id, `Invited ${buyer.company}`);
     });
     return {
       message:
-        "Buyer invited in-app. Upload their NDA in the data room; email delivery is not configured.",
+        "Buyer invited and notified in-app. Upload their NDA in the data room when ready.",
     };
   }
   if (action === "reviewAccess") {
@@ -2375,6 +2516,16 @@ export function mutate(
               createdByUserId: document.uploaded_by,
             });
         }
+        notifyUsers(database, {
+          userIds: [p.buyer_id],
+          type: "nda_approved",
+          title: "NDA approved",
+          body: `The deal team approved your confidential access to ${deal.title}.`,
+          href: `/app/deals/${deal.id}`,
+          dealId: deal.id,
+          actorUserId: user.id,
+          sourceKey: `access:${member.id}:nda-approved-notification`,
+        });
       });
     } else {
       inImmediateTransaction(database, () => {
@@ -2400,6 +2551,17 @@ export function mutate(
             sourceKey: `access:${member.id}:nda-requested`,
             createdByUserId: user.id,
           });
+        if (p.status === "nda_pending")
+          notifyUsers(database, {
+            userIds: [p.buyer_id],
+            type: "nda_requested",
+            title: "NDA requested",
+            body: `The deal team asked you to complete the NDA step for ${deal.title}.`,
+            href: `/app/deals/${deal.id}`,
+            dealId: deal.id,
+            actorUserId: user.id,
+            sourceKey: `access:${member.id}:nda-requested-notification`,
+          });
         if (buyerOrganization && p.status === "revoked")
           recordDealBuyerEvent(database, {
             dealId: deal.id,
@@ -2409,6 +2571,23 @@ export function mutate(
             sourceKey: `access:${member.id}:revoked`,
             createdByUserId: user.id,
           });
+        if (p.status === "revoked" || p.status === "denied") {
+          database
+            .prepare("DELETE FROM notifications WHERE user_id=? AND deal_id=?")
+            .run(p.buyer_id, deal.id);
+        }
+        if (p.status === "revoked") {
+          notifyUsers(database, {
+            userIds: [p.buyer_id],
+            type: "access_revoked",
+            title: "Deal-room access revoked",
+            body: `Your access to ${deal.title} was revoked by the deal team.`,
+            href: "/app/deals",
+            dealId: deal.id,
+            actorUserId: user.id,
+            sourceKey: `access:${member.id}:revoked-notification`,
+          });
+        }
         if (buyerOrganization && p.status === "denied")
           recordDealBuyerEvent(database, {
             dealId: deal.id,
@@ -2439,14 +2618,28 @@ export function mutate(
       (!isManager(user, deal) && user.id !== p.buyer_id)
     )
       throw new AppError("You cannot access this conversation.", 403);
-    run(
-      "INSERT INTO messages(id,deal_id,buyer_id,sender_id,body) VALUES(?,?,?,?,?)",
-      randomUUID(),
-      deal.id,
-      p.buyer_id,
-      user.id,
-      p.body,
-    );
+    const messageId = randomUUID();
+    const database = db();
+    inImmediateTransaction(database, () => {
+      database
+        .prepare(
+          "INSERT INTO messages(id,deal_id,buyer_id,sender_id,body) VALUES(?,?,?,?,?)",
+        )
+        .run(messageId, deal.id, p.buyer_id, user.id, p.body);
+      notifyUsers(database, {
+        userIds:
+          user.id === p.buyer_id
+            ? dealTeamUserIds(database, deal.id)
+            : [p.buyer_id],
+        type: "new_message",
+        title: `New message · ${deal.title}`,
+        body: `${user.name}: ${p.body.slice(0, 240)}`,
+        href: `/app/deals/${deal.id}`,
+        dealId: deal.id,
+        actorUserId: user.id,
+        sourceKey: `message:${messageId}`,
+      });
+    });
     return { message: "Message sent." };
   }
   if (action === "createInternalNote") {
@@ -2475,15 +2668,25 @@ export function mutate(
     );
     if (p.buyer_id && membership(deal.id, p.buyer_id)?.status !== "approved")
       throw new AppError("Select an approved buyer or an internal task.");
-    run(
-      "INSERT INTO tasks(id,deal_id,title,due_date,buyer_id,created_by) VALUES(?,?,?,?,?,?)",
-      randomUUID(),
-      deal.id,
-      p.title,
-      p.due_date,
-      p.buyer_id || null,
-      user.id,
-    );
+    const taskId = randomUUID();
+    const database = db();
+    inImmediateTransaction(database, () => {
+      database
+        .prepare(
+          "INSERT INTO tasks(id,deal_id,title,due_date,buyer_id,created_by) VALUES(?,?,?,?,?,?)",
+        )
+        .run(taskId, deal.id, p.title, p.due_date, p.buyer_id || null, user.id);
+      notifyUsers(database, {
+        userIds: p.buyer_id ? [p.buyer_id] : dealTeamUserIds(database, deal.id),
+        type: "new_task",
+        title: "New diligence task",
+        body: `${p.title} is due ${p.due_date} for ${deal.title}.`,
+        href: `/app/deals/${deal.id}`,
+        dealId: deal.id,
+        actorUserId: user.id,
+        sourceKey: `task:${taskId}`,
+      });
+    });
     audit(user, deal.id, "Added a diligence task");
     return { message: "Task added." };
   }
@@ -2565,6 +2768,16 @@ export function mutate(
         sourceKey: `offer:${offerId}:received`,
         metadata: { offer_id: offerId, amount: p.amount },
         createdByUserId: user.id,
+      });
+      notifyUsers(database, {
+        userIds: dealManagerUserIds(database, deal.id),
+        type: "loi_received",
+        title: "LOI received",
+        body: `${organization.name} submitted an indicative LOI for ${deal.title}.`,
+        href: `/app/deals/${deal.id}`,
+        dealId: deal.id,
+        actorUserId: user.id,
+        sourceKey: `offer:${offerId}:loi-received`,
       });
       audit(user, deal.id, "Submitted an indicative LOI");
     });

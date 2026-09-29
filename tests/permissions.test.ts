@@ -18,6 +18,7 @@ import {
   membership,
 } from "../src/lib/service";
 import type { User, Document } from "../src/lib/types";
+import { notifyUsers } from "../src/lib/notifications";
 
 let directory: string;
 let buyer: User, otherBuyer: User, owner: User, advisor: User;
@@ -323,10 +324,47 @@ test("buyer conversations, offers and internal tasks do not cross parties", () =
 });
 
 test("revocation immediately removes confidential data and document access", () => {
+  run(
+    "DELETE FROM notifications WHERE user_id=? AND deal_id=?",
+    buyer.id,
+    "cedar",
+  );
+  notifyUsers(db(), {
+    userIds: [buyer.id],
+    type: "new_message",
+    title: "New message",
+    body: "Confidential message before revocation.",
+    href: "/app/deals/cedar",
+    dealId: "cedar",
+    sourceKey: "test:revocation-confidential-message",
+  });
+  assert.equal(
+    one<{ count: number }>(
+      "SELECT COUNT(*) count FROM notifications WHERE user_id=? AND deal_id=?",
+      buyer.id,
+      "cedar",
+    )?.count,
+    1,
+  );
   mutate(advisor, {
     action: "reviewAccess",
     data: { deal_id: "cedar", buyer_id: buyer.id, status: "revoked" },
   });
+  const buyerNotifications = workspace(buyer).notifications.filter(
+    (notification) => notification.deal_id === "cedar",
+  );
+  assert.equal(buyerNotifications.length, 1);
+  assert.equal(buyerNotifications[0].type, "access_revoked");
+  assert.equal(
+    one<{ count: number }>(
+      `SELECT COUNT(*) count FROM email_outbox e
+       JOIN notifications n ON n.id=e.notification_id
+       WHERE e.user_id=? AND n.deal_id=?`,
+      buyer.id,
+      "cedar",
+    )?.count,
+    1,
+  );
   assert.equal(
     workspace(buyer).deals.find((d) => d.id === "cedar")?.has_access,
     false,
@@ -346,6 +384,25 @@ test("revocation immediately removes confidential data and document access", () 
         },
       }),
     /cannot access/,
+  );
+  notifyUsers(db(), {
+    userIds: [buyer.id],
+    type: "document_shared",
+    title: "Document shared",
+    body: "Confidential document before denial.",
+    href: "/app/deals/cedar",
+    dealId: "cedar",
+    sourceKey: "test:denial-confidential-document",
+  });
+  mutate(advisor, {
+    action: "reviewAccess",
+    data: { deal_id: "cedar", buyer_id: buyer.id, status: "denied" },
+  });
+  assert.equal(
+    workspace(buyer).notifications.some(
+      (notification) => notification.deal_id === "cedar",
+    ),
+    false,
   );
   mutate(advisor, {
     action: "reviewAccess",
@@ -2088,5 +2145,107 @@ test("internal deal notes stay inside the seller-side team", () => {
         data: { deal_id: "cedar", body: "x".repeat(5_001) },
       }),
     /characters|invalid/i,
+  );
+});
+
+test("notifications stay user-scoped while email preferences control only outbox delivery", () => {
+  run("DELETE FROM email_outbox");
+  run("DELETE FROM notifications");
+  run("DELETE FROM notification_preferences");
+
+  mutate(buyer, {
+    action: "message",
+    data: {
+      deal_id: "cedar",
+      buyer_id: buyer.id,
+      body: "Can we confirm the management-call agenda?",
+    },
+  });
+
+  const ownerNotification = workspace(owner).notifications.find(
+    (notification) =>
+      notification.type === "new_message" &&
+      notification.body.includes("management-call agenda"),
+  );
+  assert.ok(ownerNotification);
+  assert.equal(ownerNotification.read_at, null);
+  assert.equal(
+    workspace(otherBuyer).notifications.some(
+      (notification) => notification.id === ownerNotification.id,
+    ),
+    false,
+  );
+  assert.equal(
+    one<{ status: string }>(
+      "SELECT status FROM email_outbox WHERE notification_id=?",
+      ownerNotification.id,
+    )?.status,
+    "recorded",
+  );
+
+  assert.throws(
+    () =>
+      mutate(otherBuyer, {
+        action: "setNotificationRead",
+        data: { notification_id: ownerNotification.id, read: true },
+      }),
+    /notification/i,
+  );
+  mutate(owner, {
+    action: "setNotificationRead",
+    data: { notification_id: ownerNotification.id, read: true },
+  });
+  assert.ok(
+    workspace(owner).notifications.find(
+      (notification) => notification.id === ownerNotification.id,
+    )?.read_at,
+  );
+  mutate(owner, {
+    action: "setNotificationRead",
+    data: { notification_id: ownerNotification.id, read: false },
+  });
+  assert.equal(
+    workspace(owner).notifications.find(
+      (notification) => notification.id === ownerNotification.id,
+    )?.read_at,
+    null,
+  );
+
+  mutate(owner, {
+    action: "notificationPreferences",
+    data: {
+      preferences: {
+        new_message: "disabled",
+        new_task: "daily_digest",
+      },
+    },
+  });
+  assert.equal(
+    workspace(owner).notification_preferences.new_message,
+    "disabled",
+  );
+  const outboxBefore = one<{ count: number }>(
+    "SELECT COUNT(*) count FROM email_outbox WHERE user_id=?",
+    owner.id,
+  )!.count;
+  mutate(buyer, {
+    action: "message",
+    data: {
+      deal_id: "cedar",
+      buyer_id: buyer.id,
+      body: "A second message should remain in-app only for Jamie.",
+    },
+  });
+  assert.equal(
+    one<{ count: number }>(
+      "SELECT COUNT(*) count FROM email_outbox WHERE user_id=?",
+      owner.id,
+    )!.count,
+    outboxBefore,
+  );
+  assert.ok(
+    workspace(owner).notifications.some((notification) =>
+      notification.body.includes("second message"),
+    ),
   );
 });

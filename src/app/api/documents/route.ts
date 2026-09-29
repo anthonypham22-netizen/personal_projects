@@ -20,6 +20,11 @@ import {
   buyerOrganizationIdForUser,
   recordDealBuyerEvent,
 } from "@/lib/buyer-funnel";
+import {
+  dealTeamUserIds,
+  documentAudienceUserIds,
+  notifyUsers,
+} from "@/lib/notifications";
 export const runtime = "nodejs";
 export async function POST(request: Request) {
   let storedPath: string | undefined;
@@ -143,6 +148,14 @@ export async function POST(request: Request) {
                     .all(deal.id) as { buyer_id: string }[]
                 ).map(({ buyer_id }) => buyer_id)
               : [];
+      const notificationUserIds = managing
+        ? documentAudienceUserIds(
+            database,
+            deal.id,
+            audience as "team" | "approved" | "buyer",
+            buyerId,
+          )
+        : dealTeamUserIds(database, deal.id);
       const organizationIds = new Set(
         recipientIds
           .map((recipientId) =>
@@ -163,6 +176,16 @@ export async function POST(request: Request) {
           sourceKey: `document:${id}`,
           createdByUserId: user.id,
         });
+      notifyUsers(database, {
+        userIds: notificationUserIds,
+        type: "document_shared",
+        title: "Document shared",
+        body: `${user.name} shared ${name} in ${deal.title}.`,
+        href: `/app/deals/${deal.id}`,
+        dealId: deal.id,
+        actorUserId: user.id,
+        sourceKey: `document:${id}:shared`,
+      });
       audit(user, deal.id, `Uploaded ${category.toLowerCase()} document`);
     });
     storedPath = undefined;
