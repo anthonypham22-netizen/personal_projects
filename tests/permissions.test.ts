@@ -130,7 +130,9 @@ test("buyer transaction tombstones remain scoped and require platform verificati
   );
 
   const sellerMatch = workspace(owner).deal_matches?.find(
-    (match) => match.buyer_organization_id === "org-demo-buyer",
+    (match) =>
+      match.deal_id === "cedar" &&
+      match.buyer_organization_id === "org-demo-buyer",
   );
   const sellerTransaction = (
     sellerMatch?.buyer_firm_profile as unknown as {
@@ -148,6 +150,16 @@ test("buyer transaction tombstones remain scoped and require platform verificati
     "verified",
   ]);
   assert.equal(sellerTransaction?.verified, 1);
+  assert.equal(
+    sellerMatch?.buyer_firm_profile.reputation.transactions_closed,
+    2,
+    "only independently verified tombstones count as completed transactions",
+  );
+  assert.equal(
+    sellerMatch?.buyer_firm_profile.reputation.relevant_transactions,
+    1,
+    "relevant experience is derived for the current mandate sector",
+  );
   assert.equal("seller_organization_id" in (sellerTransaction ?? {}), false);
   assert.equal("advisor_organization_id" in (sellerTransaction ?? {}), false);
 });
@@ -1659,6 +1671,30 @@ test("buyer firms manage a seller-visible profile without exposing verification 
         Array.isArray(project.sectors) && Array.isArray(project.provinces),
     ),
   );
+  assert.deepEqual(
+    Object.keys(sellerMatch.buyer_firm_profile.reputation).sort(),
+    [
+      "lois_submitted",
+      "median_response_hours",
+      "opportunities_pursued",
+      "relevant_transactions",
+      "response_opportunities",
+      "response_rate",
+      "transactions_closed",
+    ],
+    "seller profiles expose only aggregate reputation metrics",
+  );
+  assert.equal(
+    Number.isInteger(
+      sellerMatch.buyer_firm_profile.reputation.response_opportunities,
+    ),
+    true,
+  );
+  assert.equal(
+    sellerMatch.buyer_firm_profile.reputation.transactions_closed >= 1,
+    true,
+  );
+  assert.equal("events" in sellerMatch.buyer_firm_profile.reputation, false);
   assert.equal(
     Object.prototype.hasOwnProperty.call(
       sellerMatch.buyer_firm_profile,

@@ -256,6 +256,15 @@ export type SellerVisibleBuyerProject = {
   sectors: string[];
   provinces: string[];
 };
+export type BuyerReputationMetrics = {
+  response_rate: number | null;
+  response_opportunities: number;
+  median_response_hours: number | null;
+  opportunities_pursued: number;
+  lois_submitted: number;
+  transactions_closed: number;
+  relevant_transactions: number;
+};
 export type SellerVisibleBuyerFirmProfile = Pick<
   BuyerFirmProfile,
   | "organization_id"
@@ -266,6 +275,7 @@ export type SellerVisibleBuyerFirmProfile = Pick<
 > & {
   active_projects: SellerVisibleBuyerProject[];
   closed_transactions: SellerVisibleClosedTransaction[];
+  reputation: BuyerReputationMetrics;
 };
 export type VerificationReview = {
   id: string;
@@ -533,11 +543,41 @@ export type Access = {
   status: string;
   nda_status: string;
   nda_document_id: string | null;
+  nda_method: "external_upload" | "electronic_signature";
+  electronic_signature_envelope_id: string | null;
   notes: string;
   created_at: string;
   name: string;
   company: string;
   email: string;
+};
+export const ELECTRONIC_SIGNATURE_STATUSES = [
+  "creating",
+  "sent",
+  "buyer_signed",
+  "completed",
+  "declined",
+  "voided",
+  "failed",
+] as const;
+export type ElectronicSignatureStatus =
+  (typeof ELECTRONIC_SIGNATURE_STATUSES)[number];
+export type ElectronicSignatureEnvelope = {
+  id: string;
+  access_id: string;
+  deal_id: string;
+  buyer_id: string;
+  provider_name: string;
+  status: ElectronicSignatureStatus;
+  buyer_signed_at: string | null;
+  completed_at: string | null;
+  failure_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+export type ElectronicSignatureCapability = {
+  available: boolean;
+  provider_name: string | null;
 };
 export type Document = {
   id: string;
@@ -661,6 +701,8 @@ export type WorkspaceData = {
   qualified_discovery_min_verification_status: BuyerVerificationStatus;
   deal_financials: DealFinancial[];
   access: Access[];
+  electronic_signature: ElectronicSignatureCapability;
+  electronic_signature_envelopes: ElectronicSignatureEnvelope[];
   documents: Document[];
   messages: Message[];
   tasks: Task[];

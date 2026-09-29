@@ -27,6 +27,8 @@ import { buyerVerificationMigration } from "../src/lib/migrations/014_buyer_veri
 import { buyerFirmProfilesMigration } from "../src/lib/migrations/015_buyer_firm_profiles.ts";
 import { buyerFirmProfileRevisionMigration } from "../src/lib/migrations/016_buyer_firm_profile_revision.ts";
 import { closedTransactionsMigration } from "../src/lib/migrations/017_closed_transactions.ts";
+import { buyerReputationMigration } from "../src/lib/migrations/018_buyer_reputation.ts";
+import { electronicNdaMigration } from "../src/lib/migrations/019_electronic_nda.ts";
 import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
 import { ensureBuyerFunnelBackfill } from "../src/lib/buyer-funnel.ts";
 
@@ -76,7 +78,28 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 15, name: "buyer_firm_profiles" },
       { version: 16, name: "buyer_firm_profile_revision" },
       { version: 17, name: "closed_transactions" },
+      { version: 18, name: "buyer_reputation" },
+      { version: 19, name: "electronic_nda" },
     ]);
+
+    const accessColumns = database
+      .prepare("PRAGMA table_info(access)")
+      .all()
+      .map(({ name }) => name);
+    assert.ok(accessColumns.includes("nda_method"));
+    assert.ok(accessColumns.includes("electronic_signature_envelope_id"));
+    assert.deepEqual(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('electronic_signature_envelopes','electronic_signature_events') ORDER BY name",
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      [
+        { name: "electronic_signature_envelopes" },
+        { name: "electronic_signature_events" },
+      ],
+    );
 
     seed(database, directory);
     ensureInitialMatchBackfill(database);
@@ -369,7 +392,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 17);
+    assert.equal(history.length, 19);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
@@ -388,6 +411,8 @@ test("an existing database upgrades to organizations without losing data", () =>
       { version: 15, name: "buyer_firm_profiles" },
       { version: 16, name: "buyer_firm_profile_revision" },
       { version: 17, name: "closed_transactions" },
+      { version: 18, name: "buyer_reputation" },
+      { version: 19, name: "electronic_nda" },
     ]);
     assert.equal(
       database
@@ -1262,6 +1287,159 @@ test("an existing Phase 12 database adds constrained transaction tombstones with
         )
         .run(),
     );
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an existing Phase 13 database adds reputation indexes without inventing metrics", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase14-"));
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    const phaseThirteen = [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+      recommendedBuyersMigration,
+      privateTeaserDistributionMigration,
+      qualifiedDiscoveryMigration,
+      buyerFunnelMigration,
+      internalDealNotesMigration,
+      notificationsMigration,
+      emailProcessingLeaseMigration,
+      emailProcessingTokenMigration,
+      buyerVerificationMigration,
+      buyerFirmProfilesMigration,
+      buyerFirmProfileRevisionMigration,
+      closedTransactionsMigration,
+    ];
+    applyMigrations(database, phaseThirteen);
+    seed(database, directory);
+    ensureInitialMatchBackfill(database);
+    ensureBuyerFunnelBackfill(database);
+    const before = {
+      events: database
+        .prepare("SELECT COUNT(*) count FROM deal_buyer_events")
+        .get().count,
+      transactions: database
+        .prepare("SELECT COUNT(*) count FROM closed_transactions")
+        .get().count,
+    };
+
+    applyMigrations(database, [...phaseThirteen, buyerReputationMigration]);
+
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 18,
+      name: "buyer_reputation",
+    });
+    assert.deepEqual(
+      {
+        events: database
+          .prepare("SELECT COUNT(*) count FROM deal_buyer_events")
+          .get().count,
+        transactions: database
+          .prepare("SELECT COUNT(*) count FROM closed_transactions")
+          .get().count,
+      },
+      before,
+      "reputation remains derived from existing evidence",
+    );
+    assert.deepEqual(
+      database
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type='index' AND name IN (
+             'idx_deal_buyer_events_reputation',
+             'idx_closed_transactions_reputation'
+           ) ORDER BY name`,
+        )
+        .all()
+        .map(({ name }) => name),
+      [
+        "idx_closed_transactions_reputation",
+        "idx_deal_buyer_events_reputation",
+      ],
+    );
+    const history = getMigrationHistory(database);
+    applyMigrations(database, [...phaseThirteen, buyerReputationMigration]);
+    assert.deepEqual(getMigrationHistory(database), history);
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an existing Phase 14 database adds electronic NDA ledgers without changing access", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase15-"));
+  const database = new DatabaseSync(":memory:");
+  const phaseFourteen = [
+    initialUpgrade,
+    organizationsMigration,
+    buyerProjectsMigration,
+    sellSideMandatesMigration,
+    matchingEngineMigration,
+    recommendedBuyersMigration,
+    privateTeaserDistributionMigration,
+    qualifiedDiscoveryMigration,
+    buyerFunnelMigration,
+    internalDealNotesMigration,
+    notificationsMigration,
+    emailProcessingLeaseMigration,
+    emailProcessingTokenMigration,
+    buyerVerificationMigration,
+    buyerFirmProfilesMigration,
+    buyerFirmProfileRevisionMigration,
+    closedTransactionsMigration,
+    buyerReputationMigration,
+  ];
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    applyMigrations(database, phaseFourteen);
+    seed(database, directory);
+    const before = database
+      .prepare(
+        "SELECT id,deal_id,buyer_id,status,nda_status,nda_document_id,notes,created_at FROM access ORDER BY id",
+      )
+      .all()
+      .map((row) => ({ ...row }));
+
+    applyMigrations(database, [...phaseFourteen, electronicNdaMigration]);
+
+    const after = database
+      .prepare(
+        "SELECT id,deal_id,buyer_id,status,nda_status,nda_document_id,notes,created_at FROM access ORDER BY id",
+      )
+      .all()
+      .map((row) => ({ ...row }));
+    assert.deepEqual(after, before);
+    assert.equal(
+      database
+        .prepare(
+          "SELECT COUNT(*) count FROM access WHERE nda_method='external_upload' AND electronic_signature_envelope_id IS NULL",
+        )
+        .get().count,
+      before.length,
+    );
+    assert.equal(
+      database
+        .prepare("SELECT COUNT(*) count FROM electronic_signature_envelopes")
+        .get().count,
+      0,
+    );
+    assert.equal(
+      database
+        .prepare("SELECT COUNT(*) count FROM electronic_signature_events")
+        .get().count,
+      0,
+    );
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 19,
+      name: "electronic_nda",
+    });
   } finally {
     database.close();
     rmSync(directory, { recursive: true, force: true });

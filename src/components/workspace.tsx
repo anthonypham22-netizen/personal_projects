@@ -188,6 +188,25 @@ const closedDateLabel = (date: string) =>
   });
 const statusText = (value: string) =>
   value.replaceAll("_", " ").replace(/^./, (v) => v.toUpperCase());
+const buyerAccessMessage = (access: Access) => {
+  if (access.status === "approved")
+    return access.nda_method === "electronic_signature"
+      ? "You have access to the documents shared with your team. Your executed NDA was verified by the signing provider."
+      : "You have access to the documents shared with your team. Your externally executed NDA was approved by the deal team.";
+  if (access.status === "nda_pending")
+    return access.nda_method === "electronic_signature"
+      ? "The deal team sent your NDA through its signing provider. Check the provider email and complete its signing steps; access opens automatically only after verified completion."
+      : "The deal team has invited you to exchange an NDA. Upload your externally executed agreement in the data room for their review.";
+  if (access.status === "requested")
+    return "Your request is with the deal team. You can introduce yourself in Messages while they review it.";
+  return "The deal team has restricted your access to this opportunity.";
+};
+const electronicNdaHeading = (status?: string) => {
+  if (status === "buyer_signed") return "Buyer signed — awaiting completion";
+  if (status === "sent") return "Awaiting buyer signature";
+  if (status === "failed") return "Electronic request failed";
+  return "Electronic NDA in progress";
+};
 function Status({ value }: { value: string }) {
   return (
     <span
@@ -204,6 +223,7 @@ function Status({ value }: { value: string }) {
           "Shortlisted",
           "selected",
           "contacted",
+          "completed",
           "Succera verified",
         ].includes(value)
           ? "badge-green"
@@ -214,6 +234,8 @@ function Status({ value }: { value: string }) {
                 "LOI review",
                 "Under review",
                 "Self-reported",
+                "sent",
+                "buyer_signed",
               ].includes(value)
             ? "badge-amber"
             : [
@@ -222,6 +244,9 @@ function Status({ value }: { value: string }) {
                   "rejected",
                   "Not proceeding",
                   "excluded",
+                  "declined",
+                  "voided",
+                  "failed",
                 ].includes(value)
               ? "badge-red"
               : "badge-blue",
@@ -725,7 +750,11 @@ export function Workspace({
     setBusy(true);
     setFeedback(null);
     try {
-      const response = await fetch("/api/workspace", {
+      const endpoint =
+        action === "requestElectronicNda"
+          ? "/api/signatures"
+          : "/api/workspace";
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, data: values }),
@@ -2505,13 +2534,7 @@ function BuyerNextStep({
       <>
         <Status value={access.status} />
         <p className="mt-4 text-sm leading-relaxed text-slate-600">
-          {access.status === "approved"
-            ? "You have access to the documents shared with your team. Review the data room and coordinate your next steps."
-            : access.status === "nda_pending"
-              ? "The deal team has invited you to exchange an NDA. Upload your externally executed agreement in the data room for their review."
-              : access.status === "requested"
-                ? "Your request is with the deal team. You can introduce yourself in Messages while they review it."
-                : "The deal team has restricted your access to this opportunity."}
+          {buyerAccessMessage(access)}
         </p>
         {access.status === "approved" && (
           <button
@@ -4298,6 +4321,10 @@ function BuyerRecommendation({
   const primaryProject = match.buyer_firm_profile.active_projects.find(
     (project) => project.id === match.buyer_project_id,
   );
+  const reputation = match.buyer_firm_profile.reputation;
+  const responseSampleLabel = reputation.response_opportunities
+    ? `${reputation.response_opportunities} private invitation${reputation.response_opportunities === 1 ? "" : "s"}`
+    : "No private invitations yet";
   return (
     <article
       className={cn(
@@ -4503,6 +4530,49 @@ function BuyerRecommendation({
               </section>
 
               <section>
+                <h4>Marketplace reputation</h4>
+                <dl className="buyer-profile-facts buyer-reputation-metrics">
+                  <div>
+                    <dt>Response rate</dt>
+                    <dd>
+                      {funnelRate(reputation.response_rate)}
+                      <small> {responseSampleLabel}</small>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Median response</dt>
+                    <dd>
+                      {responseTimeLabel(reputation.median_response_hours)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Opportunities pursued</dt>
+                    <dd>{reputation.opportunities_pursued}</dd>
+                  </div>
+                  <div>
+                    <dt>LOIs submitted</dt>
+                    <dd>{reputation.lois_submitted}</dd>
+                  </div>
+                  <div>
+                    <dt>Verified transactions</dt>
+                    <dd>{reputation.transactions_closed}</dd>
+                  </div>
+                  <div>
+                    <dt>Relevant transactions</dt>
+                    <dd>
+                      {reputation.relevant_transactions}{" "}
+                      <small>verified in this sector</small>
+                    </dd>
+                  </div>
+                </dl>
+                <p className="buyer-reputation-note">
+                  Derived from recorded Succera marketplace activity and
+                  verified transaction history. Informational only and not
+                  included in the match score.
+                </p>
+              </section>
+
+              <section>
                 <h4>Closed transaction history</h4>
                 {match.buyer_firm_profile.closed_transactions.length ? (
                   <TransactionTombstones
@@ -4648,6 +4718,9 @@ function BuyerAccess({ deal }: { deal: Deal }) {
 }
 function AccessCard({ access: a, deal }: { access: Access; deal: Deal }) {
   const { data, act, busy } = useWorkspace();
+  const envelope = data.electronic_signature_envelopes.find(
+    (candidate) => candidate.id === a.electronic_signature_envelope_id,
+  );
   const docs = data.documents.filter(
     (d) =>
       d.deal_id === deal.id &&
@@ -4679,8 +4752,22 @@ function AccessCard({ access: a, deal }: { access: Access; deal: Deal }) {
               })
             }
           >
-            Proceed to NDA
+            Use external NDA
           </button>
+          {data.electronic_signature.available && (
+            <button
+              className="button button-quiet button-small"
+              disabled={busy}
+              onClick={() =>
+                void act("requestElectronicNda", {
+                  deal_id: deal.id,
+                  buyer_id: a.buyer_id,
+                })
+              }
+            >
+              <Send size={15} /> Send electronic NDA
+            </button>
+          )}
           <button
             className="button button-quiet button-small"
             disabled={busy}
@@ -4698,70 +4785,113 @@ function AccessCard({ access: a, deal }: { access: Access; deal: Deal }) {
       )}
       {a.status === "nda_pending" && (
         <div>
-          <p className="muted mb-4">
-            Exchange and sign the NDA outside Succera, then upload the executed
-            copy with this buyer selected.
-          </p>
-          {docs.length ? (
-            <MutationForm
-              action="reviewAccess"
-              extra={{
-                deal_id: deal.id,
-                buyer_id: a.buyer_id,
-                status: "approved",
-              }}
-              label="Verify NDA & grant access"
-            >
-              <label>
-                Executed NDA document
-                <select name="nda_document_id" required>
-                  {docs.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name} · v{d.version}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="checkbox-label">
-                <input name="confirm_reviewed" type="checkbox" required />I
-                reviewed this document and confirm the required parties have
-                signed it externally.
-              </label>
-            </MutationForm>
+          {a.nda_method === "electronic_signature" ? (
+            <div className="nda-provider-state">
+              <div className="nda-provider-heading">
+                <div>
+                  <strong>{electronicNdaHeading(envelope?.status)}</strong>
+                  <p className="muted">
+                    {envelope?.provider_name || "Electronic signature provider"}
+                  </p>
+                </div>
+                {envelope && <Status value={envelope.status} />}
+              </div>
+              <p className="muted">
+                Signing takes place with the provider. Succera grants access
+                only after the provider verifies completion and returns the
+                executed PDF.
+              </p>
+              <button
+                type="button"
+                className="button button-quiet button-small"
+                disabled={busy}
+                onClick={() =>
+                  void act("reviewAccess", {
+                    deal_id: deal.id,
+                    buyer_id: a.buyer_id,
+                    status: "nda_pending",
+                  })
+                }
+              >
+                Use external upload instead
+              </button>
+            </div>
           ) : (
-            <p className="notice">
-              No NDA document uploaded for this buyer yet. Add it in the Data
-              room tab.
-            </p>
+            <>
+              <p className="muted mb-4">
+                Exchange and sign the NDA outside Succera, then upload the
+                executed copy with this buyer selected.
+              </p>
+              {docs.length ? (
+                <MutationForm
+                  action="reviewAccess"
+                  extra={{
+                    deal_id: deal.id,
+                    buyer_id: a.buyer_id,
+                    status: "approved",
+                  }}
+                  label="Verify NDA & grant access"
+                >
+                  <label>
+                    Executed NDA document
+                    <select name="nda_document_id" required>
+                      {docs.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name} · v{d.version}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="checkbox-label">
+                    <input name="confirm_reviewed" type="checkbox" required />I
+                    reviewed this document and confirm the required parties have
+                    signed it externally.
+                  </label>
+                </MutationForm>
+              ) : (
+                <p className="notice">
+                  No NDA document uploaded for this buyer yet. Add it in the
+                  Data room tab.
+                </p>
+              )}
+            </>
           )}
         </div>
       )}
       {a.status === "approved" && (
-        <details className="mt-4 text-sm">
-          <summary className="cursor-pointer text-slate-500">
-            Manage access
-          </summary>
-          <div className="mt-3">
-            <p className="muted mb-3">
-              Revocation blocks future document access. Previously downloaded
-              copies cannot be recalled.
-            </p>
-            <MutationForm
-              action="reviewAccess"
-              extra={{
-                deal_id: deal.id,
-                buyer_id: a.buyer_id,
-                status: "revoked",
-              }}
-              label="Revoke portal access"
-            >
-              <label className="checkbox-label">
-                <input type="checkbox" required />
-                Revoke this buyer’s confidential access
-              </label>
-            </MutationForm>
-          </div>
-        </details>
+        <>
+          <p className="muted mt-4 text-sm">
+            NDA method:{" "}
+            {a.nda_method === "electronic_signature"
+              ? envelope?.provider_name || "Electronic signature"
+              : "External upload and review"}
+          </p>
+          <details className="mt-4 text-sm">
+            <summary className="cursor-pointer text-slate-500">
+              Manage access
+            </summary>
+            <div className="mt-3">
+              <p className="muted mb-3">
+                Revocation blocks future document access. Previously downloaded
+                copies cannot be recalled.
+              </p>
+              <MutationForm
+                action="reviewAccess"
+                extra={{
+                  deal_id: deal.id,
+                  buyer_id: a.buyer_id,
+                  status: "revoked",
+                }}
+                label="Revoke portal access"
+              >
+                <label className="checkbox-label">
+                  <input type="checkbox" required />
+                  Revoke this buyer’s confidential access
+                </label>
+              </MutationForm>
+            </div>
+          </details>
+        </>
       )}
       {["revoked", "denied"].includes(a.status) && (
         <button

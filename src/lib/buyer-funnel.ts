@@ -453,7 +453,7 @@ export function buyerFunnelsForDeals(
        LEFT JOIN buyer_projects project ON project.id=e.buyer_project_id
        LEFT JOIN users creator ON creator.id=e.created_by_user_id
        WHERE e.deal_id IN (${placeholders})
-       ORDER BY e.created_at,e.id`,
+       ORDER BY e.created_at,e.rowid`,
     )
     .all(...dealIds) as Array<
     Omit<DealBuyerEvent, "metadata"> & {

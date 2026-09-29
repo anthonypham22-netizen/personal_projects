@@ -17,6 +17,8 @@ import { buyerVerificationMigration } from "./014_buyer_verification.ts";
 import { buyerFirmProfilesMigration } from "./015_buyer_firm_profiles.ts";
 import { buyerFirmProfileRevisionMigration } from "./016_buyer_firm_profile_revision.ts";
 import { closedTransactionsMigration } from "./017_closed_transactions.ts";
+import { buyerReputationMigration } from "./018_buyer_reputation.ts";
+import { electronicNdaMigration } from "./019_electronic_nda.ts";
 
 export type Migration = {
   version: number;
@@ -48,6 +50,8 @@ const migrations: readonly Migration[] = [
   buyerFirmProfilesMigration,
   buyerFirmProfileRevisionMigration,
   closedTransactionsMigration,
+  buyerReputationMigration,
+  electronicNdaMigration,
 ];
 
 const migrationTableSql = `

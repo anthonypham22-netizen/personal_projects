@@ -48,7 +48,9 @@ import {
   type VerificationAdminEntry,
   type VerificationReview,
   type BuyerVerificationStatus,
+  type ElectronicSignatureEnvelope,
 } from "./types";
+import { electronicSignatureCapability } from "./electronic-signature-provider";
 import { inImmediateTransaction } from "./sqlite-transaction";
 import {
   recalculateDealMatch,
@@ -69,6 +71,11 @@ import {
   buyerOrganizationIdForUser,
   recordDealBuyerEvent,
 } from "./buyer-funnel";
+import {
+  deriveBuyerReputationMetrics,
+  type BuyerReputationEvent,
+  type VerifiedTransactionEvidence,
+} from "./buyer-reputation";
 import {
   activeOrganizationUserIds,
   dealManagerUserIds,
@@ -403,6 +410,7 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
     buyer_firm_financing_profile: string;
     buyer_firm_acquisition_count: number | null;
     buyer_firm_profile_updated_at: string;
+    deal_sector: string;
   };
   const rows = all<DealMatchRow>(
     `SELECT dm.*,
@@ -427,6 +435,7 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
        COALESCE(profile.financing_profile,'') buyer_firm_financing_profile,
        profile.self_reported_acquisition_count buyer_firm_acquisition_count,
        COALESCE(profile.updated_at,o.updated_at) buyer_firm_profile_updated_at,
+       d.sector deal_sector,
        (
          SELECT COUNT(DISTINCT previous.id)
          FROM deals previous
@@ -511,6 +520,8 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
     string,
     SellerVisibleClosedTransaction[]
   >();
+  const reputationEvents = new Map<string, BuyerReputationEvent[]>();
+  const verifiedTransactions = new Map<string, VerifiedTransactionEvidence[]>();
   if (buyerOrganizationIds.length) {
     const organizationPlaceholders = buyerOrganizationIds
       .map(() => "?")
@@ -539,7 +550,59 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
       organizationTransactions.push(transaction);
       closedTransactions.set(buyer_organization_id, organizationTransactions);
     }
+    for (const event of all<
+      BuyerReputationEvent & { buyer_organization_id: string }
+    >(
+      `SELECT buyer_organization_id,deal_id,event_type,created_at
+       FROM deal_buyer_events
+       WHERE buyer_organization_id IN (${organizationPlaceholders})
+         AND event_type IN (
+           'teaser_sent','pursued','passed','intro_requested','loi_received'
+         )
+       ORDER BY buyer_organization_id,created_at,rowid`,
+      ...buyerOrganizationIds,
+    )) {
+      const organizationEvents =
+        reputationEvents.get(event.buyer_organization_id) ?? [];
+      const { buyer_organization_id, ...safeEvent } = event;
+      organizationEvents.push(safeEvent);
+      reputationEvents.set(buyer_organization_id, organizationEvents);
+    }
+    for (const transaction of all<
+      VerifiedTransactionEvidence & { buyer_organization_id: string }
+    >(
+      `SELECT buyer_organization_id,industry
+       FROM closed_transactions
+       WHERE verified=1
+         AND buyer_organization_id IN (${organizationPlaceholders})
+       ORDER BY buyer_organization_id,closed_date DESC,id`,
+      ...buyerOrganizationIds,
+    )) {
+      const organizationTransactions =
+        verifiedTransactions.get(transaction.buyer_organization_id) ?? [];
+      organizationTransactions.push({ industry: transaction.industry });
+      verifiedTransactions.set(
+        transaction.buyer_organization_id,
+        organizationTransactions,
+      );
+    }
   }
+  const reputationCache = new Map<
+    string,
+    ReturnType<typeof deriveBuyerReputationMetrics>
+  >();
+  const reputationFor = (organizationId: string, sector: string) => {
+    const cacheKey = `${organizationId}\0${sector.trim().toLocaleLowerCase("en-CA")}`;
+    const cached = reputationCache.get(cacheKey);
+    if (cached) return cached;
+    const reputation = deriveBuyerReputationMetrics(
+      reputationEvents.get(organizationId) ?? [],
+      verifiedTransactions.get(organizationId) ?? [],
+      sector,
+    );
+    reputationCache.set(cacheKey, reputation);
+    return reputation;
+  };
   return rows.map(
     ({
       score_breakdown_json,
@@ -556,6 +619,7 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
       buyer_firm_financing_profile,
       buyer_firm_acquisition_count,
       buyer_firm_profile_updated_at,
+      deal_sector,
       ...row
     }) => ({
       ...row,
@@ -570,6 +634,7 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
           [],
         closed_transactions:
           closedTransactions.get(row.buyer_organization_id) ?? [],
+        reputation: reputationFor(row.buyer_organization_id, deal_sector),
       },
       score_breakdown: JSON.parse(
         score_breakdown_json,
@@ -1557,6 +1622,17 @@ export function workspace(user: User): WorkspaceData {
       !previewIds.has(a.deal_id) &&
       (teamMember(a.deal_id) || a.buyer_id === user.id),
   );
+  const visibleAccessIds = new Set(access.map((entry) => entry.id));
+  const electronicSignatureEnvelopes = visibleAccessIds.size
+    ? all<ElectronicSignatureEnvelope>(
+        `SELECT id,access_id,deal_id,buyer_id,provider_name,status,buyer_signed_at,
+           completed_at,failure_reason,created_at,updated_at
+         FROM electronic_signature_envelopes
+         WHERE access_id IN (${[...visibleAccessIds].map(() => "?").join(",")})
+         ORDER BY created_at DESC,rowid DESC`,
+        ...visibleAccessIds,
+      )
+    : [];
   const documents = all<Document>(
     "SELECT d.id,d.deal_id,d.name,d.category,d.size,d.version,d.audience,d.buyer_id,d.uploaded_by,d.created_at,u.name uploader_name,p.title deal_title FROM documents d JOIN users u ON u.id=d.uploaded_by JOIN deals p ON p.id=d.deal_id ORDER BY d.created_at DESC",
   ).filter((doc) => {
@@ -1663,6 +1739,8 @@ export function workspace(user: User): WorkspaceData {
       qualifiedDiscoveryMinVerificationStatus,
     deal_financials: dealFinancials,
     access,
+    electronic_signature: electronicSignatureCapability(),
+    electronic_signature_envelopes: electronicSignatureEnvelopes,
     documents,
     messages,
     tasks,
@@ -3403,6 +3481,10 @@ export function mutate(
           ?.buyer_project_id ?? null)
       : null;
     if (p.status === "approved") {
+      if (member.nda_method === "electronic_signature")
+        throw new AppError(
+          "Electronic NDA access is granted only after verified provider completion. Use external upload first if you need to review the agreement manually.",
+        );
       const doc = one<Document>(
         "SELECT * FROM documents WHERE id=? AND deal_id=? AND category='NDA' AND audience='buyer' AND buyer_id=?",
         p.nda_document_id || "",
@@ -3418,7 +3500,9 @@ export function mutate(
       inImmediateTransaction(database, () => {
         database
           .prepare(
-            "UPDATE access SET status='approved',nda_status='verified',nda_document_id=? WHERE id=?",
+            `UPDATE access SET status='approved',nda_status='verified',
+               nda_document_id=?,nda_method='external_upload',
+               electronic_signature_envelope_id=NULL WHERE id=?`,
           )
           .run(doc.id, member.id);
         if (buyerOrganization)
@@ -3467,7 +3551,10 @@ export function mutate(
     } else {
       inImmediateTransaction(database, () => {
         database
-          .prepare("UPDATE access SET status=?,nda_status=? WHERE id=?")
+          .prepare(
+            `UPDATE access SET status=?,nda_status=?,nda_method='external_upload',
+               electronic_signature_envelope_id=NULL WHERE id=?`,
+          )
           .run(
             p.status,
             p.status === "nda_pending" ? "requested" : member.nda_status,

@@ -8,7 +8,7 @@ The first deployment should be a staging environment with fictional data. A succ
 
 ## 1. Complete local verification
 
-Local installation, TypeScript checking, the production build, 76 backend tests, and 21 Chromium checks passed. Repeat verification after changes and before deployment:
+Local installation, TypeScript checking, the production build, 81 backend tests, and 21 Chromium checks passed. Repeat verification after changes and before deployment:
 
 ```sh
 npm ci
@@ -71,6 +71,9 @@ Create a server-side `.env` file in the repository directory with:
 APP_DOMAIN=app.your-domain.ca
 ALLOW_DEMO=false
 ALLOW_REGISTRATION=true
+# Leave unset until an established provider adapter is implemented.
+# ELECTRONIC_SIGNATURE_PROVIDER=
+# ELECTRONIC_SIGNATURE_WEBHOOK_SECRET=
 ```
 
 Replace the example domain with the actual DNS name. Do not include `https://` in `APP_DOMAIN`. Docker Compose constructs the exact `APP_URL` from it and enables secure cookies. `ALLOW_DEMO` defaults to `false` when omitted. Ensure `.env` is readable only by the deployment administrator.
@@ -218,10 +221,46 @@ WHERE (verified=0 AND (verified_by_user_id IS NOT NULL OR verified_at IS NOT NUL
 
 Migration 17 should appear exactly once and `invalid_verified_records` should be zero. The migration creates no historical transaction claims by itself; demo seeding adds fictional examples only when demo data is enabled. Compare all pre/post marketplace counts—the migration must not rewrite organizations, projects, matches, profiles, deals, documents, or funnel events. If startup or validation fails, stop the application and restore the complete snapshot before starting the previous code. There is no automatic down migration.
 
+### Phase 14 migration checks
+
+Migration `018_buyer_reputation` adds only query indexes over the existing marketplace-event ledger and verified transaction history. Reputation values remain derived at request time and are not editable or stored as scores. After restart, run:
+
+```sql
+SELECT version,name,applied_at
+FROM schema_migrations
+WHERE version=18;
+
+SELECT name
+FROM sqlite_master
+WHERE type='index' AND name IN (
+  'idx_deal_buyer_events_reputation',
+  'idx_closed_transactions_reputation'
+)
+ORDER BY name;
+
+SELECT COUNT(*) AS buyer_events FROM deal_buyer_events;
+SELECT COUNT(*) AS closed_transactions FROM closed_transactions;
+```
+
+Migration 18 and both indexes should each appear exactly once. Compare the event and transaction counts with the pre-deployment backup; Phase 14 must not insert, update, or delete reputation evidence. A buyer with no eligible invitation history should display an unavailable response rate and median rather than fabricated zero values. If startup or validation fails, stop the application and restore the complete snapshot before starting the previous code. There is no automatic down migration.
+
+### Phase 15 migration checks
+
+Migration `019_electronic_nda` adds two access columns plus provider-neutral envelope and webhook-event ledgers. Existing access records are retained and default to the external-upload workflow. After restart, run:
+
+```sql
+SELECT version,name,applied_at FROM schema_migrations WHERE version=19;
+SELECT nda_method,COUNT(*) FROM access GROUP BY nda_method;
+SELECT COUNT(*) AS envelopes FROM electronic_signature_envelopes;
+SELECT COUNT(*) AS provider_events FROM electronic_signature_events;
+```
+
+Migration 19 should appear once, every pre-existing access row should report `external_upload`, and both new ledger counts should be zero before anyone starts an electronic request. Production deliberately reports electronic signing as unavailable until an established provider adapter is implemented, its webhook verification is mapped to that provider’s documented contract, and its secret is stored outside source control. Never enable the development adapter in production. Back up the database and uploads together before upgrading; there is no automatic down migration.
+
 ## What changes for a larger launch
 
 The current architecture is deliberately limited to **one server and one application instance**. Do not horizontally scale it against shared SQLite files or separate local upload directories.
 
-For multiple instances, replace the persistence layer with managed PostgreSQL, store documents in a private object-storage service, add an appropriate job queue and shared rate-limit storage, and expand organization membership/authorization. Add monitoring, audited support access, disaster recovery, and the missing identity, email, signature, and billing integrations before broader rollout.
+For multiple instances, replace the persistence layer with managed PostgreSQL, store documents in a private object-storage service, add an appropriate job queue and shared rate-limit storage, and expand organization membership/authorization. Add monitoring, audited support access, disaster recovery, and production identity, email, electronic-signature-provider, and billing integrations before broader rollout.
 
 For framework deployment behavior, consult the official [Next.js self-hosting guide](https://nextjs.org/docs/app/guides/self-hosting).

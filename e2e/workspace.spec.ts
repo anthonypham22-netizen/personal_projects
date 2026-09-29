@@ -108,6 +108,13 @@ test("owner can inspect and curate recommended buyers", async ({ page }) => {
   await expect(recommendation).toContainText("Acquisition criteria");
   await expect(recommendation).toContainText("Capital");
   await expect(recommendation).toContainText("Experience");
+  await expect(recommendation).toContainText("Marketplace reputation");
+  await expect(recommendation).toContainText("Response rate");
+  await expect(recommendation).toContainText("Median response");
+  await expect(recommendation).toContainText("Verified transactions");
+  await expect(recommendation).toContainText(
+    "Informational only and not included in the match score",
+  );
   await expect(recommendation).toContainText("Active acquisition projects");
   await expect(recommendation).toContainText("Project Northern Lights");
   await expect(recommendation).not.toContainText(
@@ -826,6 +833,29 @@ test("buyer sees approved documents but cannot download seller-only files", asyn
   await expect(
     page.getByText("Your request is with the deal team.", { exact: false }),
   ).toBeVisible();
+});
+
+test("owner can send a provider-managed electronic NDA without granting early access", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Owner demo" }).click();
+  await page.goto("/app/deals/harbour");
+  await page.getByRole("button", { name: "Buyer access" }).click();
+  const buyerCard = page.getByRole("article").filter({
+    hasText: "Evergreen Capital",
+  });
+  await buyerCard.getByRole("button", { name: "Send electronic NDA" }).click();
+  await expect(
+    page.getByRole("status").getByText(/Electronic NDA sent through/),
+  ).toBeVisible();
+  await expect(buyerCard).toContainText("Awaiting buyer signature");
+  await expect(buyerCard).toContainText("Development signature provider");
+  await expect(buyerCard).toContainText(
+    "Succera grants access only after the provider verifies completion",
+  );
+  await expect(buyerCard).toContainText("Nda pending");
+  await expect(buyerCard).not.toContainText("Approved");
 });
 
 test("buyer demo cannot enumerate registered Qualified Discovery inventory", async ({

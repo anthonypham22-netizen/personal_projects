@@ -1335,6 +1335,12 @@
   .buyer-profile-facts dd small {
     @apply font-normal text-slate-400;
   }
+  .buyer-reputation-metrics {
+    @apply rounded-lg border border-slate-200 bg-slate-50 p-4;
+  }
+  .buyer-reputation-note {
+    @apply mt-3 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs leading-relaxed text-emerald-900;
+  }
   .buyer-profile-projects {
     @apply grid gap-2 sm:grid-cols-2;
   }
@@ -1664,6 +1670,18 @@
   }
   .inline-buttons {
     @apply flex flex-wrap gap-2;
+  }
+  .nda-provider-state {
+    @apply space-y-4 rounded-lg border border-emerald-200 bg-emerald-50/60 p-4;
+  }
+  .nda-provider-heading {
+    @apply flex flex-wrap items-start justify-between gap-3;
+  }
+  .nda-provider-heading strong {
+    @apply text-sm font-semibold text-slate-900;
+  }
+  .nda-provider-heading p {
+    @apply mt-1 text-xs;
   }
   .checkbox-label {
     @apply flex-row items-start text-sm font-normal;
