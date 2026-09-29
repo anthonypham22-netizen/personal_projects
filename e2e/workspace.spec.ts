@@ -98,6 +98,43 @@ test("owner can inspect and curate recommended buyers", async ({ page }) => {
   await expect(recommendation).toContainText("Recommended");
 });
 
+test("advisor can inspect the event-backed buyer funnel and record a milestone", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Advisor demo" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Welcome back, Alex." }),
+  ).toBeVisible();
+  await page.goto("/app/deals/cedar");
+  await page.getByRole("button", { name: "Buyer funnel" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Buyer funnel" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Recommended", { exact: true }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Interested", { exact: true }).first(),
+  ).toBeVisible();
+  const buyerRow = page.getByRole("row").filter({
+    hasText: "Evergreen Capital",
+  });
+  await expect(buyerRow).toContainText(/NDA|CIM|LOI|IOI/);
+  await buyerRow
+    .getByRole("button", { name: /Inspect Evergreen Capital/ })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Buyer event history" }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Record milestone for Evergreen Capital")
+    .selectOption("ioi_received");
+  await page.getByRole("button", { name: "Record milestone" }).click();
+  await expect(buyerRow).toContainText("IOI");
+});
+
 test("seller shares a private teaser and sees the buyer response", async ({
   page,
 }) => {

@@ -7,6 +7,7 @@ import {
   ensureInitialMatchBackfill,
   recalculateBuyerProjectMatches,
 } from "./match-store";
+import { ensureBuyerFunnelBackfill } from "./buyer-funnel";
 
 export const dataDirectory = () =>
   path.resolve(process.env.DATA_DIR || "./data");
@@ -45,11 +46,11 @@ export function db() {
         : new Map<string, string>();
     if (process.env.ALLOW_DEMO === "true") seed(d, dataDirectory());
     ensureInitialMatchBackfill(d);
+    ensureBuyerFunnelBackfill(d);
     for (const projectId of demoProjectIds)
       if (
         demoFingerprints.has(projectId) &&
-        demoFingerprints.get(projectId) !==
-          demoProjectFingerprint(d, projectId)
+        demoFingerprints.get(projectId) !== demoProjectFingerprint(d, projectId)
       )
         recalculateBuyerProjectMatches(d, projectId);
     globalDb.northlaneDb = d;

@@ -1,6 +1,6 @@
 # Validation status
 
-Date: 2026-09-23
+Date: 2026-09-28
 
 ## Phase 4 — deterministic matching engine
 
@@ -30,6 +30,14 @@ The Opportunities navigation is now presented as **Discover**. A buyer organizat
 
 Buyers submit an interest-and-credibility statement against the matched project. Deal managers review the organization, project, score, reasons, verification state, experience count, and message before approving or declining. Approval creates the existing `requested` access record for the requesting user and leaves every confidential field gated. The old direct Qualified Discovery access mutation is rejected, and declined organizations cannot bypass the decision.
 
+## Phase 8 — Buyer Funnel
+
+Migration `009_buyer_funnel` adds an append-only `deal_buyer_events` ledger for match, selection, teaser, response, introduction, NDA, CIM, IOI, LOI, shortlist, exclusivity, closing, and access-revocation milestones. A one-time transactional backfill translates existing match, outreach, introduction, access, document, and offer records without changing or deleting the source data. A unique source key makes initialization and repeated workflow calls idempotent; the migration history remains inspectable through `schema_migrations`.
+
+Authorized owners and advisors now receive a deal-scoped Buyer funnel. Its Recommended, Contacted, Interested, NDA, CIM, IOI, LOI, Exclusive, and Closed counts are derived from the event history rather than stored as a second mutable stage. The table exposes every participating buyer's current stage, outcome, match context, latest activity, and chronological event history. Pursuit, NDA, CIM, IOI, and LOI conversion metrics and average response time appear only when the required source events exist; unavailable denominators render as unavailable rather than invented values.
+
+Existing actions record funnel events within the same database transaction where applicable. Deal managers may manually record only milestones that commonly happen outside the portal: CIM shared, IOI received, exclusivity, and closing. Buyer workspaces receive no seller-side funnel payload, and the service rejects unauthorized or unrelated-organization milestone writes.
+
 ## Resolved environment blocker
 
 The original `npm install` was rejected by automatic approval review with the reason: **“Your workspace is out of credits. Add credits to continue.”** The same installation succeeded on an approved retry. No alternate dependency installation path was used. The account usage tool reports ordinary usage allowed; the underlying reason for the earlier approval error is not established, so purchasing credits is not a confirmed remedy.
@@ -47,11 +55,11 @@ Dependencies and `package-lock.json` are present. TypeScript, backend tests, pro
 
 - `npm install`: succeeded; npm reported zero known vulnerabilities at installation time (not a security certification).
 - `npm run typecheck`: passed.
-- `npm test`: **47 passed, 0 failed**. Coverage includes deterministic scoring, explanations, hard exclusions, match, outreach, and introduction persistence constraints, upgrades through Phase 7, idempotency, thresholded discovery, seller decisions, direct-access bypass prevention, targeted recalculation, recommendation curation, private recipient isolation, redaction, documents, buyer isolation, revocation, organizations, buyer projects, sessions, password hashing, and backups.
+- `npm test`: **49 passed, 0 failed**. Coverage includes deterministic scoring, explanations, hard exclusions, match, outreach, introduction, and buyer-event persistence constraints, upgrades through Phase 8, idempotent funnel backfill, derived metrics, buyer non-exposure, milestone authorization, thresholded discovery, seller decisions, direct-access bypass prevention, targeted recalculation, recommendation curation, private recipient isolation, redaction, documents, buyer isolation, revocation, organizations, buyer projects, sessions, password hashing, and backups.
 - `npm run build`: passed using Next.js 16's documented Webpack build mode. Turbopack's PostCSS evaluator attempted to bind a local worker port that this execution host prohibits, so the production script is pinned to `next build --webpack`; application compilation, type checking, prerendering, and build tracing completed successfully.
-- `npm run test:e2e`: **15 passed, 0 failed** in Chromium. This includes the complete Qualified Discovery introduction and seller-approval flow, the private teaser workflow, Recommended Buyers curation, and the existing website, organization, buyer-project, authorization, task, download, environment-isolation, and mobile checks.
+- `npm run test:e2e`: **16 passed, 0 failed** in Chromium. This includes buyer-funnel inspection and offline IOI recording, the complete Qualified Discovery introduction and seller-approval flow, the private teaser workflow, Recommended Buyers curation, and the existing website, organization, buyer-project, authorization, task, download, environment-isolation, and mobile checks.
 - The test runner's IPC socket initially required permissions outside the sandbox. Running the same check through the approval mechanism succeeded.
-- `npm run test:core`: **20 passed, 0 failed**. Covers salted password hashes, exact-password verification, malformed-hash rejection, session digests, migration ordering and rollback, fresh/existing database upgrades through Phase 7, recommendation-status translation, matching, outreach, and introduction persistence constraints, database constraints, demo initialization, successful backup contents, and rejection of backups with missing referenced uploads.
+- `npm run test:core`: **21 passed, 0 failed**. Covers salted password hashes, exact-password verification, malformed-hash rejection, session digests, migration ordering and rollback, fresh/existing database upgrades through Phase 8, buyer-funnel backfill and event constraints, recommendation-status translation, matching, outreach, and introduction persistence constraints, database constraints, demo initialization, successful backup contents, and rejection of backups with missing referenced uploads.
 - `package.json` and `tsconfig.json`: valid JSON.
 - Git ignore checks confirm `.env.local`, the SQLite data path, and uploaded-file paths are ignored.
 

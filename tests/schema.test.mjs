@@ -18,7 +18,9 @@ import { matchingEngineMigration } from "../src/lib/migrations/005_matching_engi
 import { recommendedBuyersMigration } from "../src/lib/migrations/006_recommended_buyers.ts";
 import { privateTeaserDistributionMigration } from "../src/lib/migrations/007_private_teaser_distribution.ts";
 import { qualifiedDiscoveryMigration } from "../src/lib/migrations/008_qualified_discovery.ts";
+import { buyerFunnelMigration } from "../src/lib/migrations/009_buyer_funnel.ts";
 import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
+import { ensureBuyerFunnelBackfill } from "../src/lib/buyer-funnel.ts";
 
 const legacySchemaSql = readFileSync(
   new URL("./fixtures/legacy-schema-v0.sql", import.meta.url),
@@ -57,10 +59,12 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 6, name: "recommended_buyers" },
       { version: 7, name: "private_teaser_distribution" },
       { version: 8, name: "qualified_discovery" },
+      { version: 9, name: "buyer_funnel" },
     ]);
 
     seed(database, directory);
     ensureInitialMatchBackfill(database);
+    ensureBuyerFunnelBackfill(database);
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM deals").get().count,
       6,
@@ -299,7 +303,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 8);
+    assert.equal(history.length, 9);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
@@ -309,6 +313,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       { version: 6, name: "recommended_buyers" },
       { version: 7, name: "private_teaser_distribution" },
       { version: 8, name: "qualified_discovery" },
+      { version: 9, name: "buyer_funnel" },
     ]);
     assert.equal(
       database
@@ -329,6 +334,70 @@ test("an existing database upgrades to organizations without losing data", () =>
     assert.match(history[1].applied_at, /^\d{4}-\d{2}-\d{2} /);
   } finally {
     database.close();
+  }
+});
+
+test("an existing Phase 7 database adds an idempotent buyer event ledger", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase8-"));
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    const phaseSeven = [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+      recommendedBuyersMigration,
+      privateTeaserDistributionMigration,
+      qualifiedDiscoveryMigration,
+    ];
+    applyMigrations(database, phaseSeven);
+    seed(database, directory);
+    ensureInitialMatchBackfill(database);
+
+    applyMigrations(database, [...phaseSeven, buyerFunnelMigration]);
+    ensureBuyerFunnelBackfill(database);
+    const firstCount = database
+      .prepare("SELECT COUNT(*) count FROM deal_buyer_events")
+      .get().count;
+    ensureBuyerFunnelBackfill(database);
+
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_buyer_events").get()
+        .count,
+      firstCount,
+    );
+    assert.ok(firstCount > 0);
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 9,
+      name: "buyer_funnel",
+    });
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            `INSERT INTO deal_buyer_events(
+              id,deal_id,buyer_organization_id,event_type,metadata_json,source_key
+            ) VALUES('bad-event','cedar','org-demo-buyer','invented','{}','bad')`,
+          )
+          .run(),
+      /CHECK constraint/,
+    );
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            `INSERT INTO deal_buyer_events(
+              id,deal_id,buyer_organization_id,event_type,metadata_json,source_key
+            ) VALUES('bad-json','cedar','org-demo-buyer','matched','not-json','bad-json')`,
+          )
+          .run(),
+      /CHECK constraint/,
+    );
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

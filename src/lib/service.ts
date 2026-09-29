@@ -15,6 +15,7 @@ import {
   DEAL_DISTRIBUTION_MODES,
   DEAL_FINANCIAL_PERIOD_TYPES,
   DEAL_MATCH_STATUSES,
+  DEAL_BUYER_EVENT_TYPES,
   type User,
   type Deal,
   type Access,
@@ -33,6 +34,7 @@ import {
   type DealMatch,
   type DealOutreachRecipient,
   type IntroductionRequest,
+  type DealBuyerEventType,
 } from "./types";
 import { inImmediateTransaction } from "./sqlite-transaction";
 import {
@@ -42,6 +44,12 @@ import {
   recalculateDealMatches,
 } from "./match-store";
 import { qualifiedDiscoveryMinimumScore } from "./discovery";
+import {
+  bestBuyerProjectForDeal,
+  buyerFunnelsForDeals,
+  buyerOrganizationIdForUser,
+  recordDealBuyerEvent,
+} from "./buyer-funnel";
 
 export class AppError extends Error {
   constructor(
@@ -1173,6 +1181,10 @@ export function workspace(user: User): WorkspaceData {
     organization.id,
     managedDealIds,
   );
+  const buyerFunnels =
+    user.role !== "buyer" && managedDealIds.length
+      ? buyerFunnelsForDeals(db(), managedDealIds)
+      : undefined;
   return {
     user,
     organization,
@@ -1185,6 +1197,7 @@ export function workspace(user: User): WorkspaceData {
     ...(dealMatches ? { deal_matches: dealMatches } : {}),
     deal_outreach: dealOutreach,
     introduction_requests: introductionRequests,
+    ...(buyerFunnels ? { buyer_funnels: buyerFunnels } : {}),
     qualified_discovery_min_score: qualifiedDiscoveryMinScore,
     deal_financials: dealFinancials,
     access,
@@ -1353,12 +1366,13 @@ export function mutate(
     inImmediateTransaction(database, () => {
       const available = database
         .prepare(
-          `SELECT id,buyer_project_id,eligible FROM deal_matches
+          `SELECT id,buyer_project_id,buyer_organization_id,eligible FROM deal_matches
            WHERE deal_id=? AND id IN (${placeholders})`,
         )
         .all(p.deal_id, ...matchIds) as {
         id: string;
         buyer_project_id: string;
+        buyer_organization_id: string;
         eligible: number;
       }[];
       if (available.length !== matchIds.length)
@@ -1377,8 +1391,21 @@ export function mutate(
            WHERE deal_id=? AND id IN (${placeholders})`,
         )
         .run(p.status, p.deal_id, ...matchIds);
-      for (const match of available)
+      for (const match of available) {
+        if (p.status === "selected" || p.status === "excluded")
+          recordDealBuyerEvent(database, {
+            dealId: p.deal_id,
+            buyerOrganizationId: match.buyer_organization_id,
+            buyerProjectId: match.buyer_project_id,
+            eventType: p.status,
+            sourceKey:
+              p.status === "selected"
+                ? `match-selection:${match.id}`
+                : `match-exclusion:${match.id}`,
+            createdByUserId: user.id,
+          });
         recalculateDealMatch(database, p.deal_id, match.buyer_project_id);
+      }
       audit(
         user,
         p.deal_id,
@@ -1480,6 +1507,74 @@ export function mutate(
   );
   if (!dealOwner || !!dealOwner.is_demo !== !!user.is_demo)
     throw new AppError("This deal is not available.", 404);
+  if (action === "recordBuyerFunnelEvent") {
+    requireManager(user, deal);
+    const p = parse(
+      z.object({
+        buyer_organization_id: idSchema,
+        buyer_project_id: idSchema.nullish(),
+        event_type: z.enum(DEAL_BUYER_EVENT_TYPES),
+      }),
+      data,
+    );
+    const allowed: DealBuyerEventType[] = [
+      "cim_shared",
+      "ioi_received",
+      "exclusive",
+      "closed",
+    ];
+    if (!allowed.includes(p.event_type))
+      throw new AppError(
+        "This milestone is recorded by its existing workflow.",
+      );
+    const database = db();
+    const relationship = database
+      .prepare(
+        `SELECT 1 FROM deal_buyer_events
+         WHERE deal_id=? AND buyer_organization_id=? LIMIT 1`,
+      )
+      .get(deal.id, p.buyer_organization_id);
+    if (!relationship)
+      throw new AppError("This buyer is not part of the deal funnel.", 404);
+    if (
+      p.buyer_project_id &&
+      !database
+        .prepare(
+          `SELECT 1 FROM buyer_projects
+           WHERE id=? AND organization_id=?`,
+        )
+        .get(p.buyer_project_id, p.buyer_organization_id)
+    )
+      throw new AppError(
+        "The acquisition project does not belong to this buyer.",
+      );
+    let inserted = false;
+    inImmediateTransaction(database, () => {
+      inserted = recordDealBuyerEvent(database, {
+        dealId: deal.id,
+        buyerOrganizationId: p.buyer_organization_id,
+        buyerProjectId:
+          p.buyer_project_id ??
+          bestBuyerProjectForDeal(database, deal.id, p.buyer_organization_id)
+            ?.buyer_project_id ??
+          null,
+        eventType: p.event_type,
+        sourceKey: `manual:${p.event_type}`,
+        createdByUserId: user.id,
+      });
+      if (inserted)
+        audit(
+          user,
+          deal.id,
+          `Recorded buyer milestone: ${p.event_type.replaceAll("_", " ")}`,
+        );
+    });
+    return {
+      message: inserted
+        ? "Buyer milestone recorded."
+        : "Milestone already recorded.",
+    };
+  }
   if (action === "shareTeaser") {
     requireManager(user, deal);
     const p = parse(
@@ -1543,13 +1638,23 @@ export function mutate(
           id,outreach_id,buyer_organization_id,buyer_project_id,status,sent_at
         ) VALUES(?,?,?,?,'sent',CURRENT_TIMESTAMP)`,
       );
-      for (const recipient of recipients)
+      for (const recipient of recipients) {
+        const recipientId = randomUUID();
         insertRecipient.run(
-          randomUUID(),
+          recipientId,
           outreachId,
           recipient.buyer_organization_id,
           recipient.buyer_project_id,
         );
+        recordDealBuyerEvent(database, {
+          dealId: deal.id,
+          buyerOrganizationId: recipient.buyer_organization_id,
+          buyerProjectId: recipient.buyer_project_id,
+          eventType: "teaser_sent",
+          sourceKey: `outreach:${recipientId}:sent`,
+          createdByUserId: user.id,
+        });
+      }
       database
         .prepare(
           `UPDATE deal_matches
@@ -1591,8 +1696,9 @@ export function mutate(
         id: string;
         status: string;
         buyer_organization_id: string;
+        buyer_project_id: string;
       }>(
-        `SELECT dor.id,dor.status,dor.buyer_organization_id
+        `SELECT dor.id,dor.status,dor.buyer_organization_id,dor.buyer_project_id
          FROM deal_outreach_recipients dor
          JOIN deal_outreach o ON o.id=dor.outreach_id
          WHERE dor.id IN (${placeholders}) AND o.deal_id=?`,
@@ -1606,22 +1712,35 @@ export function mutate(
         )
       )
         throw new AppError("This private outreach is not available.", 404);
-      const sentIds = recipients
-        .filter((recipient) => recipient.status === "sent")
-        .map((recipient) => recipient.id);
-      if (sentIds.length) {
-        const sentPlaceholders = sentIds.map(() => "?").join(",");
-        run(
-          `UPDATE deal_outreach_recipients
-           SET status='viewed',viewed_at=CURRENT_TIMESTAMP
-           WHERE id IN (${sentPlaceholders}) AND status='sent'`,
-          ...sentIds,
-        );
-        audit(
-          user,
-          deal.id,
-          `Viewed ${sentIds.length} private teaser recipient${sentIds.length === 1 ? "" : "s"}`,
-        );
+      const sentRecipients = recipients.filter(
+        (recipient) => recipient.status === "sent",
+      );
+      if (sentRecipients.length) {
+        const sentPlaceholders = sentRecipients.map(() => "?").join(",");
+        const database = db();
+        inImmediateTransaction(database, () => {
+          database
+            .prepare(
+              `UPDATE deal_outreach_recipients
+               SET status='viewed',viewed_at=CURRENT_TIMESTAMP
+               WHERE id IN (${sentPlaceholders}) AND status='sent'`,
+            )
+            .run(...sentRecipients.map((recipient) => recipient.id));
+          for (const recipient of sentRecipients)
+            recordDealBuyerEvent(database, {
+              dealId: deal.id,
+              buyerOrganizationId: recipient.buyer_organization_id,
+              buyerProjectId: recipient.buyer_project_id,
+              eventType: "teaser_viewed",
+              sourceKey: `outreach:${recipient.id}:teaser_viewed`,
+              createdByUserId: user.id,
+            });
+          audit(
+            user,
+            deal.id,
+            `Viewed ${sentRecipients.length} private teaser recipient${sentRecipients.length === 1 ? "" : "s"}`,
+          );
+        });
       }
       return { message: "Opportunity marked as viewed." };
     }
@@ -1630,8 +1749,9 @@ export function mutate(
       id: string;
       status: string;
       buyer_organization_id: string;
+      buyer_project_id: string;
     }>(
-      `SELECT dor.id,dor.status,dor.buyer_organization_id
+      `SELECT dor.id,dor.status,dor.buyer_organization_id,dor.buyer_project_id
        FROM deal_outreach_recipients dor
        JOIN deal_outreach o ON o.id=dor.outreach_id
        WHERE dor.id=? AND o.deal_id=?`,
@@ -1685,6 +1805,14 @@ export function mutate(
             "INSERT INTO access(id,deal_id,buyer_id,status,nda_status,notes) VALUES(?,?,?,'requested','not_requested','Interest submitted from private teaser outreach')",
           )
           .run(randomUUID(), deal.id, user.id);
+      recordDealBuyerEvent(database, {
+        dealId: deal.id,
+        buyerOrganizationId: recipient.buyer_organization_id,
+        buyerProjectId: recipient.buyer_project_id,
+        eventType: targetStatus === "pursued" ? "pursued" : "passed",
+        sourceKey: `outreach:${recipient.id}:${targetStatus === "pursued" ? "pursued" : "passed"}`,
+        createdByUserId: user.id,
+      });
       audit(
         user,
         deal.id,
@@ -1766,18 +1894,32 @@ export function mutate(
         409,
       );
     const id = randomUUID();
-    run(
-      `INSERT INTO introduction_requests(
-        id,deal_id,buyer_organization_id,buyer_project_id,requested_by_user_id,message
-      ) VALUES(?,?,?,?,?,?)`,
-      id,
-      deal.id,
-      organization.id,
-      p.buyer_project_id,
-      user.id,
-      p.message,
-    );
-    audit(user, deal.id, "Requested a Qualified Discovery introduction");
+    const database = db();
+    inImmediateTransaction(database, () => {
+      database
+        .prepare(
+          `INSERT INTO introduction_requests(
+            id,deal_id,buyer_organization_id,buyer_project_id,requested_by_user_id,message
+          ) VALUES(?,?,?,?,?,?)`,
+        )
+        .run(
+          id,
+          deal.id,
+          organization.id,
+          p.buyer_project_id,
+          user.id,
+          p.message,
+        );
+      recordDealBuyerEvent(database, {
+        dealId: deal.id,
+        buyerOrganizationId: organization.id,
+        buyerProjectId: p.buyer_project_id,
+        eventType: "intro_requested",
+        sourceKey: `introduction:${id}:requested`,
+        createdByUserId: user.id,
+      });
+      audit(user, deal.id, "Requested a Qualified Discovery introduction");
+    });
     return { id, message: "Introduction request sent to the deal team." };
   }
   if (action === "withdrawIntroduction") {
@@ -1863,6 +2005,20 @@ export function mutate(
              VALUES(?,?,?,'requested','not_requested','Approved Qualified Discovery introduction')`,
           )
           .run(randomUUID(), deal.id, request.requested_by_user_id);
+      const requestProject = database
+        .prepare(
+          "SELECT buyer_project_id FROM introduction_requests WHERE id=?",
+        )
+        .get(request.id) as { buyer_project_id: string };
+      recordDealBuyerEvent(database, {
+        dealId: deal.id,
+        buyerOrganizationId: request.buyer_organization_id,
+        buyerProjectId: requestProject.buyer_project_id,
+        eventType:
+          p.status === "approved" ? "intro_approved" : "intro_declined",
+        sourceKey: `introduction:${request.id}:${p.status}`,
+        createdByUserId: user.id,
+      });
       recalculateBuyerOrganizationDealMatches(
         database,
         request.buyer_organization_id,
@@ -2106,13 +2262,29 @@ export function mutate(
       );
     if (membership(deal.id, buyer.id))
       throw new AppError("This buyer already has a request or invitation.");
-    run(
-      "INSERT INTO access(id,deal_id,buyer_id,status,nda_status,notes) VALUES(?,?,?,'nda_pending','requested','Invited by the deal team')",
-      randomUUID(),
-      deal.id,
-      buyer.id,
-    );
-    audit(user, deal.id, `Invited ${buyer.company}`);
+    const buyerOrganization = organizationFor(buyer.id);
+    if (!buyerOrganization)
+      throw new AppError("The buyer is not connected to an organization.");
+    const database = db();
+    const accessId = randomUUID();
+    inImmediateTransaction(database, () => {
+      database
+        .prepare(
+          "INSERT INTO access(id,deal_id,buyer_id,status,nda_status,notes) VALUES(?,?,?,'nda_pending','requested','Invited by the deal team')",
+        )
+        .run(accessId, deal.id, buyer.id);
+      recordDealBuyerEvent(database, {
+        dealId: deal.id,
+        buyerOrganizationId: buyerOrganization.id,
+        buyerProjectId:
+          bestBuyerProjectForDeal(database, deal.id, buyerOrganization.id)
+            ?.buyer_project_id ?? null,
+        eventType: "nda_requested",
+        sourceKey: `access:${accessId}:nda-requested`,
+        createdByUserId: user.id,
+      });
+      audit(user, deal.id, `Invited ${buyer.company}`);
+    });
     return {
       message:
         "Buyer invited in-app. Upload their NDA in the data room; email delivery is not configured.",
@@ -2132,6 +2304,10 @@ export function mutate(
     if (!member) throw new AppError("Request not found.", 404);
     const buyerOrganization = organizationFor(p.buyer_id);
     const database = db();
+    const buyerProjectId = buyerOrganization
+      ? (bestBuyerProjectForDeal(database, deal.id, buyerOrganization.id)
+          ?.buyer_project_id ?? null)
+      : null;
     if (p.status === "approved") {
       const doc = one<Document>(
         "SELECT * FROM documents WHERE id=? AND deal_id=? AND category='NDA' AND audience='buyer' AND buyer_id=?",
@@ -2157,6 +2333,32 @@ export function mutate(
             buyerOrganization.id,
             deal.id,
           );
+        if (buyerOrganization) {
+          recordDealBuyerEvent(database, {
+            dealId: deal.id,
+            buyerOrganizationId: buyerOrganization.id,
+            buyerProjectId,
+            eventType: "nda_approved",
+            sourceKey: `access:${member.id}:nda-approved`,
+            createdByUserId: user.id,
+          });
+          const sharedCims = database
+            .prepare(
+              `SELECT id,uploaded_by FROM documents
+               WHERE deal_id=? AND category='Company overview'
+                 AND audience='approved'`,
+            )
+            .all(deal.id) as { id: string; uploaded_by: string }[];
+          for (const document of sharedCims)
+            recordDealBuyerEvent(database, {
+              dealId: deal.id,
+              buyerOrganizationId: buyerOrganization.id,
+              buyerProjectId,
+              eventType: "cim_shared",
+              sourceKey: `document:${document.id}`,
+              createdByUserId: document.uploaded_by,
+            });
+        }
       });
     } else {
       inImmediateTransaction(database, () => {
@@ -2173,6 +2375,33 @@ export function mutate(
             buyerOrganization.id,
             deal.id,
           );
+        if (buyerOrganization && p.status === "nda_pending")
+          recordDealBuyerEvent(database, {
+            dealId: deal.id,
+            buyerOrganizationId: buyerOrganization.id,
+            buyerProjectId,
+            eventType: "nda_requested",
+            sourceKey: `access:${member.id}:nda-requested`,
+            createdByUserId: user.id,
+          });
+        if (buyerOrganization && p.status === "revoked")
+          recordDealBuyerEvent(database, {
+            dealId: deal.id,
+            buyerOrganizationId: buyerOrganization.id,
+            buyerProjectId,
+            eventType: "access_revoked",
+            sourceKey: `access:${member.id}:revoked`,
+            createdByUserId: user.id,
+          });
+        if (buyerOrganization && p.status === "denied")
+          recordDealBuyerEvent(database, {
+            dealId: deal.id,
+            buyerOrganizationId: buyerOrganization.id,
+            buyerProjectId,
+            eventType: "not_proceeding",
+            sourceKey: `access:${member.id}:denied`,
+            createdByUserId: user.id,
+          });
       });
     }
     audit(
@@ -2277,17 +2506,38 @@ export function mutate(
       throw new AppError(
         "Upload your LOI document before submitting the offer.",
       );
-    run(
-      "INSERT INTO offers(id,deal_id,buyer_id,amount,structure,notes,document_id) VALUES(?,?,?,?,?,?,?)",
-      randomUUID(),
-      deal.id,
-      user.id,
-      p.amount,
-      p.structure,
-      p.notes,
-      p.document_id,
-    );
-    audit(user, deal.id, "Submitted an indicative LOI");
+    const organization = organizationFor(user.id);
+    if (!organization)
+      throw new AppError("Your account is not connected to an organization.");
+    const database = db();
+    const offerId = randomUUID();
+    inImmediateTransaction(database, () => {
+      database
+        .prepare(
+          "INSERT INTO offers(id,deal_id,buyer_id,amount,structure,notes,document_id) VALUES(?,?,?,?,?,?,?)",
+        )
+        .run(
+          offerId,
+          deal.id,
+          user.id,
+          p.amount,
+          p.structure,
+          p.notes,
+          p.document_id,
+        );
+      recordDealBuyerEvent(database, {
+        dealId: deal.id,
+        buyerOrganizationId: organization.id,
+        buyerProjectId:
+          bestBuyerProjectForDeal(database, deal.id, organization.id)
+            ?.buyer_project_id ?? null,
+        eventType: "loi_received",
+        sourceKey: `offer:${offerId}:received`,
+        metadata: { offer_id: offerId, amount: p.amount },
+        createdByUserId: user.id,
+      });
+      audit(user, deal.id, "Submitted an indicative LOI");
+    });
     return { message: "LOI submitted to the deal team." };
   }
   if (action === "reviewOffer") {
@@ -2299,16 +2549,36 @@ export function mutate(
       }),
       data,
     );
-    if (
-      !one(
-        "SELECT id FROM offers WHERE id=? AND deal_id=?",
-        p.offer_id,
-        deal.id,
-      )
-    )
-      throw new AppError("Offer not found.", 404);
-    run("UPDATE offers SET status=? WHERE id=?", p.status, p.offer_id);
-    audit(user, deal.id, `Marked LOI as ${p.status}`);
+    const offer = one<{ id: string; buyer_id: string; amount: number }>(
+      "SELECT id,buyer_id,amount FROM offers WHERE id=? AND deal_id=?",
+      p.offer_id,
+      deal.id,
+    );
+    if (!offer) throw new AppError("Offer not found.", 404);
+    const buyerOrganizationId = buyerOrganizationIdForUser(
+      db(),
+      offer.buyer_id,
+    );
+    const database = db();
+    inImmediateTransaction(database, () => {
+      database
+        .prepare("UPDATE offers SET status=? WHERE id=?")
+        .run(p.status, p.offer_id);
+      if (buyerOrganizationId && p.status !== "Under review")
+        recordDealBuyerEvent(database, {
+          dealId: deal.id,
+          buyerOrganizationId,
+          buyerProjectId:
+            bestBuyerProjectForDeal(database, deal.id, buyerOrganizationId)
+              ?.buyer_project_id ?? null,
+          eventType:
+            p.status === "Shortlisted" ? "shortlisted" : "not_proceeding",
+          sourceKey: `offer:${offer.id}:${p.status === "Shortlisted" ? "shortlisted" : "not-proceeding"}`,
+          metadata: { offer_id: offer.id, amount: offer.amount },
+          createdByUserId: user.id,
+        });
+      audit(user, deal.id, `Marked LOI as ${p.status}`);
+    });
     return {
       message:
         "Offer review status saved. This does not execute or accept a legal agreement.",

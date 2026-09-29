@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { MATCHING_CONFIG, matchDealToBuyerProject } from "./matching.ts";
 import { inImmediateTransaction } from "./sqlite-transaction.ts";
 import type { BuyerProject, Deal, DealMatch } from "./types";
+import { recordDealBuyerEvent } from "./buyer-funnel.ts";
 
 const tableExists = (database: DatabaseSync, table: string) =>
   Boolean(
@@ -124,6 +125,7 @@ function recalculatePair(
     reasons: result.reasons,
     hard_exclusions: result.hard_exclusions,
   });
+  const matchId = existing?.id ?? randomUUID();
   database
     .prepare(
       `INSERT INTO deal_matches(
@@ -138,7 +140,7 @@ function recalculatePair(
         updated_at=strftime('%Y-%m-%d %H:%M:%f','now')`,
     )
     .run(
-      existing?.id ?? randomUUID(),
+      matchId,
       deal.id,
       project.id,
       project.organization_id,
@@ -147,6 +149,14 @@ function recalculatePair(
       breakdown,
       existing?.status ?? "recommended",
     );
+  if (result.eligible)
+    recordDealBuyerEvent(database, {
+      dealId: deal.id,
+      buyerOrganizationId: project.organization_id,
+      buyerProjectId: project.id,
+      eventType: "matched",
+      sourceKey: `match:${matchId}`,
+    });
 }
 
 export function recalculateDealMatch(

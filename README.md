@@ -4,7 +4,7 @@ A standalone website and SaaS MVP for Canadian M&A, targeting businesses with ap
 
 ## Current delivery status
 
-The local MVP now installs and builds successfully. TypeScript checking, all 47 backend tests, and all 15 Chromium browser checks pass. `package-lock.json` is present. The local preview is available while `npm run dev` is running. This is not a publicly deployed or production-ready release; Docker deployment, broader security review, and live-launch requirements remain outstanding. See [validation status](docs/VALIDATION.md).
+The local MVP now installs and builds successfully. TypeScript checking, all 49 backend tests, and all 16 Chromium browser checks pass. `package-lock.json` is present. The local preview is available while `npm run dev` is running. This is not a publicly deployed or production-ready release; Docker deployment, broader security review, and live-launch requirements remain outstanding. See [validation status](docs/VALIDATION.md).
 
 ## Start locally
 
@@ -39,7 +39,7 @@ After the initial successful `npm install`, keep and commit the generated `packa
 | `/app/projects`       | Buyer acquisition projects with normalized sector, province, keyword, and financial criteria |
 | `/app/deals`          | List and board views of mandates or acquisition pipeline                                     |
 | `/app/new`            | Grouped private sell-side mandate creation by owners or advisors                             |
-| `/app/deals/:id`      | Mandate settings, financial history, documents, conversations, tasks, LOIs, and buyer access |
+| `/app/deals/:id`      | Mandate settings, buyer funnel, financials, documents, messages, tasks, LOIs, and access     |
 | `/app/documents`      | Permission-filtered document library with search and download                                |
 | `/app/messages`       | Buyer-specific conversations with the seller's deal team                                     |
 | `/app/tasks`          | Open/completed diligence tasks                                                               |
@@ -55,12 +55,13 @@ After the initial successful `npm install`, keep and commit the generated `packa
 4. Register a **buyer** and activate an acquisition project with its sector, geography, financial, and transaction criteria.
 5. In **Recommended buyers**, the owner/advisor selects eligible projects, previews a non-identifying message, and shares the teaser. Only the selected buyer organizations receive the private opportunity in-app.
 6. A private-outreach buyer can pass or express interest. A Qualified Discovery buyer instead submits an introduction request explaining its interest and credibility. The seller approves or declines that request; approval creates a normal pending access record but does not reveal the company identity or bypass NDA review. Existing buyers may also be invited from Buyer access.
-7. As owner/advisor, choose **Proceed to NDA**. Exchange and sign the agreement outside the app. Either participant can upload the externally executed NDA for the specific buyer.
-8. The seller's team selects the uploaded NDA, explicitly confirms their review, and grants confidential access. Uploading alone never grants access or represents a signature.
-9. Share financial documents with all approved buyers or one specific buyer. Internal documents stay within the seller's team. Subsequent uploads with the same filename and audience create versions.
-10. Use the private conversation and shared diligence tasks. Each buyer sees only their own threads, offers, and assigned tasks.
-11. The buyer uploads an LOI, then submits its indicative price, transaction structure, and conditions. The owner/advisor can review and shortlist the offer. Status changes are workflow records, not legal acceptance.
-12. Update the mandate stage as the parties complete diligence and closing outside the software. Revoke portal access when appropriate; already downloaded copies cannot be recalled.
+7. In **Buyer funnel**, the owner/advisor can inspect every buyer's chronological activity, current stage, outcome, and conversion metrics. Workflow actions create events automatically; use the milestone control only for an offline CIM share, IOI, exclusivity, or closing event.
+8. As owner/advisor, choose **Proceed to NDA**. Exchange and sign the agreement outside the app. Either participant can upload the externally executed NDA for the specific buyer.
+9. The seller's team selects the uploaded NDA, explicitly confirms their review, and grants confidential access. Uploading alone never grants access or represents a signature.
+10. Share financial documents with all approved buyers or one specific buyer. Internal documents stay within the seller's team. Subsequent uploads with the same filename and audience create versions.
+11. Use the private conversation and shared diligence tasks. Each buyer sees only their own threads, offers, and assigned tasks.
+12. The buyer uploads an LOI, then submits its indicative price, transaction structure, and conditions. The owner/advisor can review and shortlist the offer. Status changes are workflow records, not legal acceptance.
+13. Update the mandate stage as the parties complete diligence and closing outside the software. Revoke portal access when appropriate; already downloaded copies cannot be recalled.
 
 ## Technical design
 
@@ -78,10 +79,11 @@ After the initial successful `npm install`, keep and commit the generated `packa
 - Authorized sell-side deal managers can review those matches in a ranked Recommended Buyers workbench, filter and inspect the rationale, select buyers individually or in batches, and exclude or restore recommendations. Recommendation status never grants deal access; access and NDA review remain separate human-controlled steps.
 - Migration `007_private_teaser_distribution` adds durable outreach and recipient records. Deal managers can share an anonymized teaser only with eligible, selected buyer projects. Recipient organizations see only their own in-app invitations; the seller receives sent, viewed, pursued, and passed status updates. Expressing interest creates a gated access request without granting confidential access.
 - Migration `008_qualified_discovery` adds organization-scoped introduction requests with pending, approved, declined, and withdrawn states. Discover admits a published teaser only when the signed-in buyer organization owns an active, eligible project scoring at least `QUALIFIED_DISCOVERY_MIN_SCORE` (70 by default). Buyers receive only their best qualifying project, score, and positive match dimensions. Seller approval moves the requesting user into the existing pending access workflow; it never grants confidential access or approves an NDA.
+- Migration `009_buyer_funnel` adds an append-only buyer-event ledger and a one-time, idempotent upgrade backfill from existing matches, outreach, introductions, access, documents, and offers. The seller/advisor Buyer funnel derives its nine stages, outcomes, response time, and pursuit/NDA/CIM/IOI/LOI conversions from those events. Existing workflow actions record milestones automatically; deal managers can add only offline CIM, IOI, exclusivity, and closing events.
 - Database-backed rate limits are basic per-account protection, not a complete anti-abuse system.
 - Project-level match records remain private by default. Discover returns only the best eligible match for the signed-in buyer organization, while a private recipient receives only the score and positive reasons for the project selected for outreach. A score is criteria fit, not investment suitability or a statistical probability.
 
-Each account belongs to an organization with an `owner`, `admin`, `member`, or read-only `viewer` membership. Existing and demo accounts are migrated into one-person organizations without merging firms that happen to share a name. Owner and advisor mandates are organization-scoped while retaining their original user creator/representative fields for compatibility and audit context. Firm owners and administrators can edit the firm profile; membership invitations and role administration are intentionally not included yet. Buyer organizations can create multiple private acquisition projects with normalized filters and draft/active/paused/archived lifecycle states. Buyer deal access remains individual. Phase 3 adds structured sell-side mandates and historical financial periods. Phase 4 adds the private, explainable matching engine and persistence layer. Phase 5 adds the private Recommended Buyers workflow. Phase 6 adds buyer-organization-scoped teaser distribution and response tracking. Phase 7 adds thresholded Qualified Discovery and seller-controlled introduction requests; confidential access still requires the existing NDA approval workflow.
+Each account belongs to an organization with an `owner`, `admin`, `member`, or read-only `viewer` membership. Existing and demo accounts are migrated into one-person organizations without merging firms that happen to share a name. Owner and advisor mandates are organization-scoped while retaining their original user creator/representative fields for compatibility and audit context. Firm owners and administrators can edit the firm profile; membership invitations and role administration are intentionally not included yet. Buyer organizations can create multiple private acquisition projects with normalized filters and draft/active/paused/archived lifecycle states. Buyer deal access remains individual. Phase 3 adds structured sell-side mandates and historical financial periods. Phase 4 adds the private, explainable matching engine and persistence layer. Phase 5 adds the private Recommended Buyers workflow. Phase 6 adds buyer-organization-scoped teaser distribution and response tracking. Phase 7 adds thresholded Qualified Discovery and seller-controlled introduction requests. Phase 8 adds the event-backed seller/advisor buyer funnel; confidential access still requires the existing NDA approval workflow.
 
 ## Verification
 
@@ -94,7 +96,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-`test:core` uses only Node and can run without npm dependencies. The broader service tests cover migration backfill, matching scores and explanations, hard exclusions, thresholded discovery, introduction decisions, recommendation curation, private outreach isolation and responses, targeted recalculation, authorization, redaction, document permissions, buyer isolation, NDA approval, revocation, shared mandates, sessions, and environment boundaries. Browser tests exercise navigation, Qualified Discovery introductions, private teaser distribution, the Recommended Buyers workbench, private match boundaries, tasks, downloads, origin checks, and a mobile viewport. Stop any development server on port 3000 before the browser suite; it starts an isolated instance with its own test data.
+`test:core` uses only Node and can run without npm dependencies. The broader service tests cover migration and funnel backfill, matching scores and explanations, hard exclusions, thresholded discovery, introduction decisions, recommendation curation, private outreach isolation and responses, buyer-event authorization, targeted recalculation, redaction, document permissions, buyer isolation, NDA approval, revocation, shared mandates, sessions, and environment boundaries. Browser tests exercise navigation, the Buyer funnel, Qualified Discovery introductions, private teaser distribution, the Recommended Buyers workbench, private match boundaries, tasks, downloads, origin checks, and a mobile viewport. Stop any development server on port 3000 before the browser suite; it starts an isolated instance with its own test data.
 
 Use `npm run format` after dependencies are installed to format the source with Prettier.
 

@@ -8,6 +8,7 @@ import { matchingEngineMigration } from "./005_matching_engine.ts";
 import { recommendedBuyersMigration } from "./006_recommended_buyers.ts";
 import { privateTeaserDistributionMigration } from "./007_private_teaser_distribution.ts";
 import { qualifiedDiscoveryMigration } from "./008_qualified_discovery.ts";
+import { buyerFunnelMigration } from "./009_buyer_funnel.ts";
 
 export type Migration = {
   version: number;
@@ -30,6 +31,7 @@ const migrations: readonly Migration[] = [
   recommendedBuyersMigration,
   privateTeaserDistributionMigration,
   qualifiedDiscoveryMigration,
+  buyerFunnelMigration,
 ];
 
 const migrationTableSql = `

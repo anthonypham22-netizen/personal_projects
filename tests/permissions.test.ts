@@ -1379,6 +1379,16 @@ test("deal managers can curate recommended buyers without granting access", () =
     )?.status,
     "recommended",
   );
+  assert.equal(
+    workspace(owner)
+      .buyer_funnels?.find((funnel) => funnel.deal_id === "cedar")
+      ?.buyers.find(
+        (entry) =>
+          entry.buyer_organization_id === ownerMatches[0].buyer_organization_id,
+      )?.outcome,
+    "Active",
+    "restoring a recommendation must supersede its historical exclusion outcome",
+  );
   mutate(advisor, {
     action: "updateDealMatchStatus",
     data: { deal_id: "cedar", match_ids: [matchIds[1]], status: "recommended" },
@@ -1549,6 +1559,21 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
     },
   });
   assert.equal(workspace(seller).deal_outreach[0].status, "pursued");
+  const pursuedFunnel = workspace(seller).buyer_funnels?.find(
+    (candidate) => candidate.deal_id === deal.id,
+  );
+  const pursuedBuyer = pursuedFunnel?.buyers.find(
+    (candidate) =>
+      candidate.buyer_organization_id === workspace(buyerA).organization.id,
+  );
+  assert.ok(pursuedBuyer);
+  assert.ok(
+    ["teaser_sent", "teaser_viewed", "pursued"].every((eventType) =>
+      pursuedBuyer.events.some((event) => event.event_type === eventType),
+    ),
+  );
+  assert.equal(pursuedBuyer.current_stage, "Interested");
+  assert.notEqual(pursuedFunnel?.metrics.average_response_hours, null);
   assert.equal(
     workspace(buyerA).access.find((item) => item.deal_id === deal.id)?.status,
     "requested",
@@ -1879,5 +1904,83 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
       (candidate) => candidate.id === approvedRequest.id,
     )?.status,
     "approved",
+  );
+  const approvedFunnel = workspace(seller).buyer_funnels?.find(
+    (candidate) => candidate.deal_id === approvedDealId,
+  );
+  const introducedBuyer = approvedFunnel?.buyers.find(
+    (candidate) =>
+      candidate.buyer_organization_id ===
+      workspace(qualifiedBuyer).organization.id,
+  );
+  assert.ok(introducedBuyer);
+  assert.ok(
+    introducedBuyer.events.some(
+      (event) => event.event_type === "intro_requested",
+    ),
+  );
+  assert.ok(
+    introducedBuyer.events.some(
+      (event) => event.event_type === "intro_approved",
+    ),
+  );
+  assert.equal(introducedBuyer.current_stage, "Interested");
+});
+
+test("deal managers receive an event-backed buyer funnel without exposing it to buyers", () => {
+  const ownerState = workspace(owner);
+  const cedarFunnel = ownerState.buyer_funnels?.find(
+    (funnel) => funnel.deal_id === "cedar",
+  );
+  assert.ok(cedarFunnel);
+  assert.ok(cedarFunnel.metrics.stage_counts.Recommended > 0);
+  assert.ok(cedarFunnel.metrics.stage_counts.NDA > 0);
+  assert.ok(
+    cedarFunnel.metrics.stage_counts.Recommended >=
+      cedarFunnel.metrics.stage_counts.Contacted,
+  );
+  const evergreen = cedarFunnel.buyers.find(
+    (entry) => entry.buyer_organization_id === "org-demo-buyer",
+  );
+  assert.ok(evergreen);
+  assert.ok(evergreen.events.some((event) => event.event_type === "matched"));
+  assert.ok(
+    evergreen.events.some((event) => event.event_type === "nda_approved"),
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(workspace(buyer), "buyer_funnels"),
+    false,
+  );
+
+  mutate(owner, {
+    action: "recordBuyerFunnelEvent",
+    data: {
+      deal_id: "cedar",
+      buyer_organization_id: "org-demo-buyer",
+      buyer_project_id: evergreen.buyer_project_id,
+      event_type: "ioi_received",
+    },
+  });
+  const updated = workspace(owner).buyer_funnels?.find(
+    (funnel) => funnel.deal_id === "cedar",
+  );
+  assert.equal(
+    updated?.buyers.find(
+      (entry) => entry.buyer_organization_id === "org-demo-buyer",
+    )?.current_stage,
+    "IOI",
+  );
+  assert.equal(updated?.metrics.stage_counts.IOI, 1);
+  assert.throws(
+    () =>
+      mutate(buyer, {
+        action: "recordBuyerFunnelEvent",
+        data: {
+          deal_id: "cedar",
+          buyer_organization_id: "org-demo-buyer",
+          event_type: "closed",
+        },
+      }),
+    /deal-team|manage/,
   );
 });

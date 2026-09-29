@@ -5,6 +5,7 @@ import {
   useEffect,
   useRef,
   useState,
+  Fragment,
   type ReactNode,
   type FormEvent,
 } from "react";
@@ -58,6 +59,7 @@ import {
   DEAL_TRANSACTION_TYPES,
   DEAL_DISTRIBUTION_MODES,
   DEAL_FINANCIAL_PERIOD_TYPES,
+  BUYER_FUNNEL_STAGES,
   type WorkspaceData,
   type Deal,
   type BuyerProject,
@@ -67,6 +69,8 @@ import {
   type DealMatch,
   type DealOutreachRecipient,
   type IntroductionRequest,
+  type BuyerFunnelEntry,
+  type DealBuyerEventType,
 } from "@/lib/types";
 
 const buyerOrganizationTypes = new Set<string>(BUYER_ORGANIZATION_TYPES);
@@ -2348,6 +2352,7 @@ function DealDetail({ deal }: { deal: Deal }) {
         "Overview",
         ...(deal.can_manage ? ["Mandate settings"] : []),
         ...(deal.can_manage ? ["Recommended buyers"] : []),
+        ...(deal.can_manage ? ["Buyer funnel"] : []),
         "Data room",
         "Messages",
         "Tasks",
@@ -2658,6 +2663,8 @@ function DealDetail({ deal }: { deal: Deal }) {
         <MandateSettings deal={deal} />
       ) : tab === "Recommended buyers" ? (
         <RecommendedBuyers deal={deal} />
+      ) : tab === "Buyer funnel" ? (
+        <BuyerFunnel deal={deal} />
       ) : tab === "Introduction requests" ? (
         <IntroductionRequests deal={deal} />
       ) : tab === "Data room" ? (
@@ -2725,6 +2732,310 @@ function DealDetail({ deal }: { deal: Deal }) {
           </details>
         )}
     </>
+  );
+}
+
+const funnelEventLabel = (event: DealBuyerEventType) =>
+  ({
+    matched: "Matched",
+    selected: "Selected for outreach",
+    excluded: "Excluded from recommendations",
+    teaser_sent: "Teaser sent",
+    teaser_viewed: "Teaser viewed",
+    pursued: "Buyer expressed interest",
+    passed: "Buyer passed",
+    intro_requested: "Introduction requested",
+    intro_approved: "Introduction approved",
+    intro_declined: "Introduction declined",
+    nda_requested: "NDA requested",
+    nda_uploaded: "Executed NDA uploaded",
+    nda_approved: "NDA approved",
+    cim_shared: "CIM shared",
+    ioi_received: "IOI received",
+    loi_received: "LOI received",
+    shortlisted: "LOI shortlisted",
+    not_proceeding: "Marked not proceeding",
+    exclusive: "Entered exclusivity",
+    closed: "Transaction closed",
+    access_revoked: "Access revoked",
+  })[event];
+
+const funnelRate = (value: number | null) =>
+  value === null ? "—" : `${value}%`;
+
+const responseTimeLabel = (hours: number | null) => {
+  if (hours === null) return "—";
+  if (hours < 1) return "<1h";
+  if (hours < 24) return `${hours.toFixed(hours % 1 ? 1 : 0)}h`;
+  const days = hours / 24;
+  return `${days.toFixed(days % 1 ? 1 : 0)}d`;
+};
+
+const eventTimestamp = (value: string) =>
+  new Date(
+    value.replace(" ", "T") + (value.includes("Z") ? "" : "Z"),
+  ).toLocaleString("en-CA", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "America/Toronto",
+  });
+
+function BuyerFunnel({ deal }: { deal: Deal }) {
+  const { data, act, busy } = useWorkspace();
+  const funnel = data.buyer_funnels?.find(
+    (candidate) => candidate.deal_id === deal.id,
+  );
+  const [query, setQuery] = useState("");
+  const [stage, setStage] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [milestones, setMilestones] = useState<Record<string, string>>({});
+  if (!funnel)
+    return (
+      <Empty
+        title="No buyer activity yet"
+        body="Eligible matches and buyer activity will appear here as the process develops."
+      />
+    );
+  const buyers = funnel.buyers.filter(
+    (buyer) =>
+      (!query ||
+        `${buyer.buyer_organization_name} ${buyer.buyer_project_name || ""}`
+          .toLowerCase()
+          .includes(query.toLowerCase())) &&
+      (!stage || buyer.current_stage === stage),
+  );
+  const metricItems = [
+    ["Pursuit rate", funnelRate(funnel.metrics.pursuit_rate)],
+    ["NDA conversion", funnelRate(funnel.metrics.nda_conversion)],
+    ["CIM conversion", funnelRate(funnel.metrics.cim_conversion)],
+    ["IOI conversion", funnelRate(funnel.metrics.ioi_conversion)],
+    ["LOI conversion", funnelRate(funnel.metrics.loi_conversion)],
+    [
+      "Average response",
+      responseTimeLabel(funnel.metrics.average_response_hours),
+    ],
+  ];
+  const recordMilestone = async (buyer: BuyerFunnelEntry) => {
+    const eventType = milestones[buyer.buyer_organization_id] || "ioi_received";
+    await act("recordBuyerFunnelEvent", {
+      deal_id: deal.id,
+      buyer_organization_id: buyer.buyer_organization_id,
+      buyer_project_id: buyer.buyer_project_id,
+      event_type: eventType,
+    });
+  };
+  return (
+    <section className="buyer-funnel" aria-labelledby="buyer-funnel-title">
+      <div className="funnel-heading">
+        <div>
+          <p className="eyebrow">DEAL PROCESS LEDGER</p>
+          <h2 id="buyer-funnel-title">Buyer funnel</h2>
+          <p>
+            Follow each organization from recommendation through closing. Every
+            count is derived from recorded marketplace activity.
+          </p>
+        </div>
+        <span>{funnel.buyers.length} buyers</span>
+      </div>
+      <div className="funnel-stage-strip" aria-label="Buyer funnel stages">
+        {BUYER_FUNNEL_STAGES.map((funnelStage, index) => (
+          <div key={funnelStage}>
+            <span>{funnelStage}</span>
+            <strong>{funnel.metrics.stage_counts[funnelStage]}</strong>
+            {index < BUYER_FUNNEL_STAGES.length - 1 && (
+              <ChevronRight aria-hidden="true" size={15} />
+            )}
+          </div>
+        ))}
+      </div>
+      <dl className="funnel-metrics">
+        {metricItems.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className="funnel-controls">
+        <label className="search-field">
+          <span className="sr-only">Search buyer funnel</span>
+          <Search size={17} />
+          <input
+            placeholder="Search buyer or project…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+        <select
+          aria-label="Filter buyer funnel by stage"
+          value={stage}
+          onChange={(event) => setStage(event.target.value)}
+        >
+          <option value="">All stages</option>
+          {BUYER_FUNNEL_STAGES.map((funnelStage) => (
+            <option key={funnelStage}>{funnelStage}</option>
+          ))}
+        </select>
+      </div>
+      {buyers.length ? (
+        <div className="panel funnel-table-wrap">
+          <div className="table-scroll">
+            <table className="data-table funnel-table">
+              <thead>
+                <tr>
+                  <th>Buyer</th>
+                  <th>Current stage</th>
+                  <th>Match</th>
+                  <th>Last activity</th>
+                  <th>Outcome</th>
+                  <th>
+                    <span className="sr-only">Inspect</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {buyers.map((buyer) => {
+                  const isExpanded = expanded === buyer.buyer_organization_id;
+                  return (
+                    <Fragment key={buyer.buyer_organization_id}>
+                      <tr>
+                        <td>
+                          <strong>{buyer.buyer_organization_name}</strong>
+                          <small>
+                            {buyer.buyer_project_name ||
+                              "No acquisition project"}
+                          </small>
+                        </td>
+                        <td>
+                          <Status value={buyer.current_stage} />
+                        </td>
+                        <td className="numeric">
+                          {buyer.match_score === null
+                            ? "—"
+                            : `${buyer.match_score}%`}
+                        </td>
+                        <td>
+                          <span className="funnel-date">
+                            {eventTimestamp(buyer.last_event_at)}
+                          </span>
+                        </td>
+                        <td>
+                          <Status value={buyer.outcome} />
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="button button-quiet button-small"
+                            aria-expanded={isExpanded}
+                            aria-label={`Inspect ${buyer.buyer_organization_name}`}
+                            onClick={() =>
+                              setExpanded(
+                                isExpanded ? null : buyer.buyer_organization_id,
+                              )
+                            }
+                          >
+                            {isExpanded ? "Close" : "Inspect"}
+                          </button>
+                        </td>
+                      </tr>
+                      {isExpanded && (
+                        <tr
+                          className="funnel-history-row"
+                          key={`${buyer.buyer_organization_id}-history`}
+                        >
+                          <td colSpan={6}>
+                            <div className="funnel-history">
+                              <div>
+                                <h3>Buyer event history</h3>
+                                <p>
+                                  An append-only record of the milestones that
+                                  support this buyer’s funnel position.
+                                </p>
+                                <ol>
+                                  {[...buyer.events].reverse().map((event) => (
+                                    <li key={event.id}>
+                                      <span aria-hidden="true" />
+                                      <div>
+                                        <strong>
+                                          {funnelEventLabel(event.event_type)}
+                                        </strong>
+                                        <small>
+                                          {eventTimestamp(event.created_at)}
+                                          {event.created_by_user_name
+                                            ? ` · ${event.created_by_user_name}`
+                                            : " · System"}
+                                          {event.buyer_project_name
+                                            ? ` · ${event.buyer_project_name}`
+                                            : ""}
+                                        </small>
+                                      </div>
+                                    </li>
+                                  ))}
+                                </ol>
+                              </div>
+                              <div className="funnel-milestone">
+                                <h3>Record an offline milestone</h3>
+                                <p>
+                                  Use this only when the milestone happened
+                                  outside Succera. In-app activity is recorded
+                                  automatically.
+                                </p>
+                                <label>
+                                  Milestone
+                                  <select
+                                    aria-label={`Record milestone for ${buyer.buyer_organization_name}`}
+                                    value={
+                                      milestones[buyer.buyer_organization_id] ||
+                                      "ioi_received"
+                                    }
+                                    onChange={(event) =>
+                                      setMilestones((current) => ({
+                                        ...current,
+                                        [buyer.buyer_organization_id]:
+                                          event.target.value,
+                                      }))
+                                    }
+                                  >
+                                    <option value="cim_shared">
+                                      CIM shared
+                                    </option>
+                                    <option value="ioi_received">
+                                      IOI received
+                                    </option>
+                                    <option value="exclusive">Exclusive</option>
+                                    <option value="closed">Closed</option>
+                                  </select>
+                                </label>
+                                <button
+                                  type="button"
+                                  className="button button-green"
+                                  disabled={busy}
+                                  onClick={() => void recordMilestone(buyer)}
+                                >
+                                  Record milestone
+                                </button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <Empty
+          title="No buyers match these filters"
+          body="Clear the search or stage filter to see the complete funnel."
+        />
+      )}
+    </section>
   );
 }
 

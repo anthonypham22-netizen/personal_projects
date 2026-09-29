@@ -734,6 +734,135 @@
   .introduction-actions {
     @apply mt-5 flex flex-wrap gap-2 border-t border-slate-100 pt-5;
   }
+  .buyer-funnel {
+    @apply space-y-5;
+  }
+  .funnel-heading {
+    @apply flex flex-col gap-4 border-b border-slate-200 pb-5 sm:flex-row sm:items-end sm:justify-between;
+  }
+  .funnel-heading .eyebrow {
+    @apply mb-2 text-emerald-800;
+  }
+  .funnel-heading h2 {
+    @apply text-2xl font-semibold tracking-tight text-slate-950;
+  }
+  .funnel-heading p:last-child {
+    @apply mt-2 max-w-2xl text-sm leading-relaxed text-slate-500;
+  }
+  .funnel-heading > span {
+    @apply shrink-0 text-sm font-semibold tabular-nums text-slate-500;
+  }
+  .funnel-stage-strip {
+    @apply grid overflow-x-auto rounded-xl border border-slate-200 bg-white;
+    grid-template-columns: repeat(9, minmax(7rem, 1fr));
+  }
+  .funnel-stage-strip > div {
+    @apply relative min-h-24 border-r border-slate-100 px-4 py-4 last:border-r-0;
+  }
+  .funnel-stage-strip > div::before {
+    content: "";
+    @apply absolute inset-x-0 top-0 h-1 bg-emerald-800;
+    opacity: calc(1 - var(--funnel-fade, 0));
+  }
+  .funnel-stage-strip > div:nth-child(n + 5)::before {
+    @apply bg-emerald-600;
+  }
+  .funnel-stage-strip > div:nth-child(n + 8)::before {
+    @apply bg-emerald-400;
+  }
+  .funnel-stage-strip span {
+    @apply block text-[11px] font-semibold uppercase tracking-wide text-slate-500;
+  }
+  .funnel-stage-strip strong {
+    @apply mt-3 block text-2xl font-semibold tabular-nums text-slate-950;
+  }
+  .funnel-stage-strip svg {
+    @apply absolute right-[-8px] top-10 z-10 rounded-full bg-white text-slate-300;
+  }
+  .funnel-metrics {
+    @apply grid overflow-hidden rounded-xl border border-slate-200 bg-slate-50 sm:grid-cols-3 xl:grid-cols-6;
+  }
+  .funnel-metrics > div {
+    @apply border-b border-r border-slate-200 px-4 py-3 last:border-r-0 sm:border-b-0;
+  }
+  .funnel-metrics dt {
+    @apply text-[11px] font-semibold uppercase tracking-wide text-slate-500;
+  }
+  .funnel-metrics dd {
+    @apply mt-1 text-lg font-semibold tabular-nums text-slate-900;
+  }
+  .funnel-controls {
+    @apply flex flex-col gap-3 sm:flex-row;
+  }
+  .funnel-controls select {
+    @apply text-sm sm:w-auto;
+  }
+  .funnel-table-wrap {
+    @apply overflow-visible;
+  }
+  .funnel-table td > strong,
+  .funnel-table td > small {
+    @apply block;
+  }
+  .funnel-table td > strong {
+    @apply whitespace-nowrap font-semibold text-slate-900;
+  }
+  .funnel-table td > small {
+    @apply mt-1 max-w-56 truncate text-xs text-slate-500;
+  }
+  .funnel-date {
+    @apply block min-w-32 text-xs leading-relaxed text-slate-500;
+  }
+  .funnel-history-row > td {
+    @apply bg-slate-50 p-0;
+  }
+  .funnel-history {
+    @apply grid gap-8 p-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(16rem,0.7fr)];
+  }
+  .funnel-history h3 {
+    @apply text-sm font-semibold text-slate-900;
+  }
+  .funnel-history > div > p {
+    @apply mt-1 text-xs leading-relaxed text-slate-500;
+  }
+  .funnel-history ol {
+    @apply mt-5 space-y-0;
+  }
+  .funnel-history li {
+    @apply relative flex gap-3 pb-5 last:pb-0;
+  }
+  .funnel-history li::before {
+    content: "";
+    @apply absolute bottom-0 left-[5px] top-3 w-px bg-slate-200;
+  }
+  .funnel-history li:last-child::before {
+    @apply hidden;
+  }
+  .funnel-history li > span {
+    @apply mt-1 size-3 shrink-0 rounded-full border-2 border-white bg-emerald-700 ring-1 ring-emerald-700;
+  }
+  .funnel-history li strong,
+  .funnel-history li small {
+    @apply block;
+  }
+  .funnel-history li strong {
+    @apply text-sm font-semibold text-slate-800;
+  }
+  .funnel-history li small {
+    @apply mt-1 text-xs text-slate-500;
+  }
+  .funnel-milestone {
+    @apply self-start rounded-lg border border-slate-200 bg-white p-4;
+  }
+  .funnel-milestone label {
+    @apply mt-4 text-xs;
+  }
+  .funnel-milestone select {
+    @apply text-sm font-normal;
+  }
+  .funnel-milestone .button {
+    @apply mt-3 w-full;
+  }
   .project-overview {
     @apply flex flex-wrap items-center justify-between gap-4 p-5;
   }

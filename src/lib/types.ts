@@ -317,6 +317,84 @@ export type IntroductionRequest = {
   match_reasons: string[];
   relevant_acquisitions: number;
 };
+export const DEAL_BUYER_EVENT_TYPES = [
+  "matched",
+  "selected",
+  "excluded",
+  "teaser_sent",
+  "teaser_viewed",
+  "pursued",
+  "passed",
+  "intro_requested",
+  "intro_approved",
+  "intro_declined",
+  "nda_requested",
+  "nda_uploaded",
+  "nda_approved",
+  "cim_shared",
+  "ioi_received",
+  "loi_received",
+  "shortlisted",
+  "not_proceeding",
+  "exclusive",
+  "closed",
+  "access_revoked",
+] as const;
+export type DealBuyerEventType = (typeof DEAL_BUYER_EVENT_TYPES)[number];
+export const BUYER_FUNNEL_STAGES = [
+  "Recommended",
+  "Contacted",
+  "Interested",
+  "NDA",
+  "CIM",
+  "IOI",
+  "LOI",
+  "Exclusive",
+  "Closed",
+] as const;
+export type BuyerFunnelStage = (typeof BUYER_FUNNEL_STAGES)[number];
+export type DealBuyerEvent = {
+  id: string;
+  deal_id: string;
+  buyer_organization_id: string;
+  buyer_project_id: string | null;
+  buyer_project_name: string | null;
+  event_type: DealBuyerEventType;
+  metadata: Record<string, unknown>;
+  created_by_user_id: string | null;
+  created_by_user_name: string | null;
+  created_at: string;
+};
+export type BuyerFunnelEntry = {
+  deal_id: string;
+  buyer_organization_id: string;
+  buyer_organization_name: string;
+  buyer_organization_verification_status: string;
+  buyer_project_id: string | null;
+  buyer_project_name: string | null;
+  match_score: number | null;
+  match_status: DealMatchStatus | null;
+  current_stage: BuyerFunnelStage;
+  outcome: string;
+  first_contacted_at: string | null;
+  last_event_at: string;
+  response_hours: number | null;
+  events: DealBuyerEvent[];
+};
+export type BuyerFunnelMetrics = {
+  stage_counts: Record<BuyerFunnelStage, number>;
+  pursuit_rate: number | null;
+  nda_conversion: number | null;
+  cim_conversion: number | null;
+  ioi_conversion: number | null;
+  loi_conversion: number | null;
+  average_response_hours: number | null;
+};
+export type DealBuyerFunnel = {
+  deal_id: string;
+  buyers: BuyerFunnelEntry[];
+  metrics: BuyerFunnelMetrics;
+};
 export type Access = {
   id: string;
   deal_id: string;
@@ -398,6 +476,7 @@ export type WorkspaceData = {
   deal_matches?: DealMatch[];
   deal_outreach: DealOutreachRecipient[];
   introduction_requests: IntroductionRequest[];
+  buyer_funnels?: DealBuyerFunnel[];
   qualified_discovery_min_score: number;
   deal_financials: DealFinancial[];
   access: Access[];
