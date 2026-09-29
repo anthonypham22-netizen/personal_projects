@@ -76,9 +76,7 @@ test("matching weights are centralized and total 100", () => {
 });
 
 test("a fully aligned active mandate earns a perfect explainable match", () => {
-  const result = matchDealToBuyerProject(deal, project, {
-    buyerVerificationStatus: "verified",
-  });
+  const result = matchDealToBuyerProject(deal, project);
   assert.equal(result.score, 100);
   assert.equal(result.eligible, true);
   assert.equal(
@@ -131,7 +129,7 @@ test("inactive mandates and same-organization deals are hard exclusions", () => 
   );
 });
 
-test("closed, blocked, excluded, and unverified discovery matches are ineligible", () => {
+test("closed, blocked, and excluded matches are ineligible without a verification gate", () => {
   const closed = matchDealToBuyerProject({ ...deal, stage: "closed" }, project);
   assert.equal(closed.eligible, false);
 
@@ -145,16 +143,16 @@ test("closed, blocked, excluded, and unverified discovery matches are ineligible
   });
   assert.equal(excluded.eligible, false);
 
-  const unverified = matchDealToBuyerProject(
+  const qualifiedDiscovery = matchDealToBuyerProject(
     { ...deal, distribution_mode: "qualified_discovery" },
     project,
-    {
-      buyerVerificationStatus: "unverified",
-      requiresDiscoveryVerification: true,
-    },
   );
-  assert.equal(unverified.eligible, false);
-  assert.match(unverified.hard_exclusions.join(" "), /verified/i);
+  assert.equal(
+    qualifiedDiscovery.eligible,
+    true,
+    "persisted matching must remain neutral to the discovery verification channel",
+  );
+  assert.deepEqual(qualifiedDiscovery.hard_exclusions, []);
 
   const crossEnvironment = matchDealToBuyerProject(deal, project, {
     marketplaceEnvironmentsMatch: false,

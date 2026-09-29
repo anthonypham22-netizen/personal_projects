@@ -39,6 +39,10 @@ import {
   type IntroductionRequest,
   type DealBuyerEventType,
   type NotificationPreferences,
+  type BuyerVerificationProfile,
+  type VerificationAdminEntry,
+  type VerificationReview,
+  type BuyerVerificationStatus,
 } from "./types";
 import { inImmediateTransaction } from "./sqlite-transaction";
 import {
@@ -48,6 +52,11 @@ import {
   recalculateDealMatches,
 } from "./match-store";
 import { qualifiedDiscoveryMinimumScore } from "./discovery";
+import {
+  qualifiedDiscoveryEligibleVerificationStatuses,
+  qualifiedDiscoveryMinimumVerificationStatus,
+  verificationStatusMeets,
+} from "./verification";
 import {
   bestBuyerProjectForDeal,
   buyerFunnelsForDeals,
@@ -74,7 +83,7 @@ export class AppError extends Error {
   }
 }
 export const userColumns =
-  "id,email,name,company,role,province,bio,sectors,min_revenue,max_revenue,is_demo";
+  "id,email,name,company,role,province,bio,sectors,min_revenue,max_revenue,is_demo,is_platform_admin";
 const text = (min = 1, max = 200) => z.string().trim().min(min).max(max);
 const idSchema = text(1, 100);
 const amount = z.coerce.number().int().min(0).max(10000000000);
@@ -135,6 +144,96 @@ const organizationMembers = (organizationId: string) =>
   FROM organization_members om JOIN users u ON u.id=om.user_id
   WHERE om.organization_id=? ORDER BY CASE om.role WHEN 'owner' THEN 1 WHEN 'admin' THEN 2 WHEN 'member' THEN 3 ELSE 4 END,u.name`,
     organizationId,
+  );
+const isPlatformAdmin = (user: User) => {
+  return Boolean(user.is_platform_admin);
+};
+const buyerVerificationProfileFor = (
+  organization: Organization,
+): BuyerVerificationProfile | undefined => {
+  const profile = one<Omit<BuyerVerificationProfile, "can_manage">>(
+    `SELECT profile.*,organization.website,
+       organization.organization_type buyer_type
+     FROM buyer_verification_profiles profile
+     JOIN organizations organization ON organization.id=profile.organization_id
+     WHERE profile.organization_id=?`,
+    organization.id,
+  );
+  return profile
+    ? { ...profile, can_manage: organization.can_manage }
+    : undefined;
+};
+const verificationAdminQueue = (reviewer: User): VerificationAdminEntry[] =>
+  all<VerificationAdminEntry>(
+    `SELECT profile.*,organization.name organization_name,
+       organization.website,organization.organization_type buyer_type,
+       organization.province,organization.verification_status,
+       submitter.name submitted_by_name,
+       review.decision latest_decision,
+       review.notes latest_review_notes,
+       review.created_at latest_reviewed_at,
+       0 can_manage
+     FROM buyer_verification_profiles profile
+     JOIN organizations organization ON organization.id=profile.organization_id
+     LEFT JOIN users submitter ON submitter.id=profile.submitted_by_user_id
+     LEFT JOIN verification_reviews review ON review.id=(
+       SELECT latest.id FROM verification_reviews latest
+     WHERE latest.organization_id=profile.organization_id
+       ORDER BY latest.created_at DESC,latest.rowid DESC LIMIT 1
+     )
+     WHERE profile.submitted_at IS NOT NULL
+       AND EXISTS (
+         SELECT 1
+         FROM organization_members realm_owner_members
+         JOIN users realm_owner ON realm_owner.id=realm_owner_members.user_id
+         WHERE realm_owner_members.organization_id=profile.organization_id
+           AND realm_owner_members.role='owner'
+           AND realm_owner_members.status='active'
+           AND realm_owner.is_demo=?
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM organization_members cross_realm_members
+         JOIN users cross_realm_user ON cross_realm_user.id=cross_realm_members.user_id
+         WHERE cross_realm_members.organization_id=profile.organization_id
+           AND cross_realm_members.status='active'
+           AND cross_realm_user.is_demo<>?
+       )
+     ORDER BY profile.submitted_at,organization.name
+     LIMIT ?`,
+    reviewer.is_demo,
+    reviewer.is_demo,
+    // The queue is intentionally bounded so a reviewer workspace cannot grow
+    // without limit as buyer organizations accumulate.
+    100,
+  ).map((entry) => ({ ...entry, can_manage: false }));
+const verificationReviews = (reviewer: User): VerificationReview[] =>
+  all<VerificationReview>(
+    `SELECT review.*,reviewer.name reviewer_name,
+       organization.name organization_name
+     FROM verification_reviews review
+     JOIN users reviewer ON reviewer.id=review.reviewer_user_id
+     JOIN organizations organization ON organization.id=review.organization_id
+     WHERE EXISTS (
+       SELECT 1
+       FROM organization_members realm_owner_members
+       JOIN users realm_owner ON realm_owner.id=realm_owner_members.user_id
+       WHERE realm_owner_members.organization_id=review.organization_id
+         AND realm_owner_members.role='owner'
+         AND realm_owner_members.status='active'
+         AND realm_owner.is_demo=?
+     )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM organization_members cross_realm_members
+         JOIN users cross_realm_user ON cross_realm_user.id=cross_realm_members.user_id
+         WHERE cross_realm_members.organization_id=review.organization_id
+           AND cross_realm_members.status='active'
+           AND cross_realm_user.is_demo<>?
+       )
+     ORDER BY review.created_at DESC,review.rowid DESC LIMIT 20`,
+    reviewer.is_demo,
+    reviewer.is_demo,
   );
 const dealOrganizationMembership = (userId: string, deal: Deal) =>
   one<{ role: "owner" | "admin" | "member" | "viewer" }>(
@@ -282,7 +381,15 @@ type QualifiedDiscoveryMatch = {
 function qualifiedDiscoveryMatchesFor(
   organizationId: string,
   minimumScore: number,
+  minimumVerificationStatus: BuyerVerificationStatus,
 ) {
+  const eligibleVerificationStatuses =
+    qualifiedDiscoveryEligibleVerificationStatuses(minimumVerificationStatus);
+  if (!eligibleVerificationStatuses.length)
+    return new Map<string, QualifiedDiscoveryMatch>();
+  const verificationPlaceholders = eligibleVerificationStatuses
+    .map(() => "?")
+    .join(",");
   const rows = all<{
     deal_id: string;
     buyer_project_id: string;
@@ -296,12 +403,17 @@ function qualifiedDiscoveryMatchesFor(
      JOIN buyer_projects bp
        ON bp.id=dm.buyer_project_id
       AND bp.organization_id=dm.buyer_organization_id
+     JOIN organizations buyer_organization
+       ON buyer_organization.id=dm.buyer_organization_id
      JOIN deals d ON d.id=dm.deal_id
-     WHERE dm.buyer_organization_id=? AND dm.eligible=1 AND dm.score>=?
+     WHERE dm.buyer_organization_id=?
+       AND buyer_organization.verification_status IN (${verificationPlaceholders})
+       AND dm.eligible=1 AND dm.score>=?
        AND bp.status='active' AND d.published=1
        AND d.distribution_mode='qualified_discovery'
      ORDER BY dm.deal_id,dm.score DESC,bp.name,bp.id`,
     organizationId,
+    ...eligibleVerificationStatuses,
     minimumScore,
   );
   const bestByDeal = new Map<string, QualifiedDiscoveryMatch>();
@@ -548,6 +660,14 @@ export function register(input: unknown) {
         "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'owner','active')",
       )
       .run(randomUUID(), organizationId, id);
+    if (data.role === "buyer")
+      database
+        .prepare(
+          `INSERT INTO buyer_verification_profiles(
+             organization_id,legal_name,updated_by_user_id
+           ) VALUES(?,?,?)`,
+        )
+        .run(organizationId, data.company, id);
   });
   return createSession(id);
 }
@@ -654,6 +774,33 @@ const buyerProjectNumber = (maximum: number, integer = true) =>
       .max(maximum)
       .nullable(),
   );
+const buyerVerificationProfileSchema = z.object({
+  legal_name: text(2, 200),
+  website: z.url().max(300),
+  buyer_type: z.enum(BUYER_ORGANIZATION_TYPES),
+  principals: text(5, 4000),
+  acquisition_history: text(10, 5000),
+  capital_source: text(10, 3000),
+  min_equity_check: buyerProjectNumber(10_000_000_000),
+  max_equity_check: buyerProjectNumber(10_000_000_000),
+  financing_approach: text(10, 3000),
+});
+type BuyerVerificationProfileInput = z.infer<
+  typeof buyerVerificationProfileSchema
+>;
+const validateBuyerVerificationProfile = (
+  profile: BuyerVerificationProfileInput,
+) => {
+  if (
+    profile.min_equity_check !== null &&
+    profile.max_equity_check !== null &&
+    profile.min_equity_check > profile.max_equity_check
+  )
+    throw new AppError(
+      "Minimum equity cheque must not exceed maximum equity cheque.",
+    );
+  return profile;
+};
 const buyerProjectSectorList = z.preprocess(
   (value) =>
     Array.isArray(value)
@@ -751,8 +898,10 @@ const normalizedBuyerProject = (
   validateBuyerProjectRanges(normalized);
   return normalized;
 };
+const isEligibleBuyerOrganizationType = (organizationType: OrganizationType) =>
+  buyerOrganizationTypes.has(organizationType);
 const isEligibleBuyerOrganization = (organization: Organization) =>
-  buyerOrganizationTypes.has(organization.organization_type);
+  isEligibleBuyerOrganizationType(organization.organization_type);
 const requireBuyerProjectManager = (user: User) => {
   const organization = organizationFor(user.id);
   if (!organization)
@@ -1027,11 +1176,26 @@ export function workspace(user: User): WorkspaceData {
     );
   };
   const qualifiedDiscoveryMinScore = qualifiedDiscoveryMinimumScore();
+  const qualifiedDiscoveryMinVerificationStatus =
+    qualifiedDiscoveryMinimumVerificationStatus();
+  const qualifiedDiscoveryVerificationStatuses =
+    qualifiedDiscoveryEligibleVerificationStatuses(
+      qualifiedDiscoveryMinVerificationStatus,
+    );
+  const qualifiedDiscoveryVerificationStatusPlaceholders =
+    qualifiedDiscoveryVerificationStatuses.map(() => "?").join(",");
+  const qualifiedDiscoveryVerificationEligible =
+    isEligibleBuyerOrganization(organization) &&
+    verificationStatusMeets(
+      organization.verification_status,
+      qualifiedDiscoveryMinVerificationStatus,
+    );
   const qualifiedDiscoveryMatches =
-    user.role === "buyer"
+    user.role === "buyer" && qualifiedDiscoveryVerificationEligible
       ? qualifiedDiscoveryMatchesFor(
           organization.id,
           qualifiedDiscoveryMinScore,
+          qualifiedDiscoveryMinVerificationStatus,
         )
       : new Map<string, QualifiedDiscoveryMatch>();
   const rawDeals = all<Deal & { owner_is_demo: number }>(
@@ -1040,12 +1204,16 @@ export function workspace(user: User): WorkspaceData {
     AND ((d.owner_id=? AND d.owner_organization_id IS NULL) OR (d.advisor_id=? AND d.advisor_organization_id IS NULL)
       OR (?<>'buyer' AND EXISTS (SELECT 1 FROM organization_members om WHERE om.user_id=? AND om.status='active' AND om.organization_id IN (d.owner_organization_id,d.advisor_organization_id)))
       OR (?='buyer' AND ((d.published=1 AND d.distribution_mode='qualified_discovery'
+          AND ?=1
           AND EXISTS (
             SELECT 1 FROM deal_matches dm
             JOIN buyer_projects bp
               ON bp.id=dm.buyer_project_id
              AND bp.organization_id=dm.buyer_organization_id
+            JOIN organizations buyer_discovery_organization
+              ON buyer_discovery_organization.id=dm.buyer_organization_id
             WHERE dm.deal_id=d.id AND dm.buyer_organization_id=?
+              AND buyer_discovery_organization.verification_status IN (${qualifiedDiscoveryVerificationStatusPlaceholders})
               AND dm.eligible=1 AND dm.score>=? AND bp.status='active'
           ))
         OR d.id IN (SELECT deal_id FROM access WHERE buyer_id=?)
@@ -1062,7 +1230,9 @@ export function workspace(user: User): WorkspaceData {
     user.role,
     user.id,
     user.role,
+    qualifiedDiscoveryVerificationEligible ? 1 : 0,
     organization.id,
+    ...qualifiedDiscoveryVerificationStatuses,
     qualifiedDiscoveryMinScore,
     user.id,
     organization.id,
@@ -1216,6 +1386,10 @@ export function workspace(user: User): WorkspaceData {
     user.role !== "buyer" && managedDealIds.length
       ? buyerFunnelsForDeals(db(), managedDealIds)
       : undefined;
+  const platformAdmin = isPlatformAdmin(user);
+  const buyerVerificationProfile = isEligibleBuyerOrganization(organization)
+    ? buyerVerificationProfileFor(organization)
+    : undefined;
   return {
     user,
     organization,
@@ -1231,6 +1405,8 @@ export function workspace(user: User): WorkspaceData {
     ...(buyerFunnels ? { buyer_funnels: buyerFunnels } : {}),
     ...(dealInternalNotes ? { deal_internal_notes: dealInternalNotes } : {}),
     qualified_discovery_min_score: qualifiedDiscoveryMinScore,
+    qualified_discovery_min_verification_status:
+      qualifiedDiscoveryMinVerificationStatus,
     deal_financials: dealFinancials,
     access,
     documents,
@@ -1241,6 +1417,16 @@ export function workspace(user: User): WorkspaceData {
     notifications,
     notification_unread_count: notificationUnreadCount,
     notification_preferences: notificationPreferences,
+    ...(buyerVerificationProfile
+      ? { buyer_verification_profile: buyerVerificationProfile }
+      : {}),
+    is_platform_admin: platformAdmin,
+    ...(platformAdmin
+      ? {
+          verification_admin_queue: verificationAdminQueue(user),
+          verification_reviews: verificationReviews(user),
+        }
+      : {}),
     advisors,
     demo: !!user.is_demo,
   };
@@ -1309,6 +1495,217 @@ export function mutate(
       p.preferences as Partial<NotificationPreferences>,
     );
     return { message: "Notification preferences saved." };
+  }
+  if (action === "updateBuyerVerificationProfile") {
+    const organization = organizationFor(user.id);
+    if (
+      !organization ||
+      !isEligibleBuyerOrganization(organization) ||
+      !organization.can_manage
+    )
+      throw new AppError(
+        "Only buyer organization owners and administrators can update verification information.",
+        403,
+      );
+    const profile = validateBuyerVerificationProfile(
+      parse(buyerVerificationProfileSchema, data),
+    );
+    const database = db();
+    inImmediateTransaction(database, () => {
+      database
+        .prepare(
+          `INSERT INTO buyer_verification_profiles(
+             organization_id,legal_name,principals,acquisition_history,
+             capital_source,min_equity_check,max_equity_check,
+             financing_approach,updated_by_user_id
+           ) VALUES(?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(organization_id) DO UPDATE SET
+             legal_name=excluded.legal_name,
+             principals=excluded.principals,
+             acquisition_history=excluded.acquisition_history,
+             capital_source=excluded.capital_source,
+             min_equity_check=excluded.min_equity_check,
+             max_equity_check=excluded.max_equity_check,
+             financing_approach=excluded.financing_approach,
+             submitted_at=NULL,
+             submitted_by_user_id=NULL,
+             updated_by_user_id=excluded.updated_by_user_id,
+             updated_at=CURRENT_TIMESTAMP`,
+        )
+        .run(
+          organization.id,
+          profile.legal_name,
+          profile.principals,
+          profile.acquisition_history,
+          profile.capital_source,
+          profile.min_equity_check,
+          profile.max_equity_check,
+          profile.financing_approach,
+          user.id,
+        );
+      database
+        .prepare(
+          `UPDATE organizations SET website=?,organization_type=?,
+             verification_status=CASE
+               WHEN verification_status IN ('unverified','rejected')
+                 THEN verification_status
+               ELSE 'unverified'
+             END,
+             updated_at=CURRENT_TIMESTAMP
+           WHERE id=?`,
+        )
+        .run(profile.website, profile.buyer_type, organization.id);
+    });
+    return {
+      message:
+        organization.verification_status === "unverified" ||
+        organization.verification_status === "rejected"
+          ? "Verification profile saved."
+          : "Verification profile saved. Prior verification was reset for review.",
+    };
+  }
+  if (action === "submitBuyerVerification") {
+    const organization = organizationFor(user.id);
+    if (
+      !organization ||
+      !isEligibleBuyerOrganization(organization) ||
+      !organization.can_manage
+    )
+      throw new AppError(
+        "Only buyer organization owners and administrators can submit verification information.",
+        403,
+      );
+    const profile = buyerVerificationProfileFor(organization);
+    if (!profile)
+      throw new AppError("Complete the verification profile first.", 409);
+    validateBuyerVerificationProfile(
+      parse(buyerVerificationProfileSchema, profile),
+    );
+    const result = run(
+      `UPDATE buyer_verification_profiles
+       SET submitted_at=CURRENT_TIMESTAMP,submitted_by_user_id=?,
+           submission_revision=submission_revision+1,
+           updated_at=CURRENT_TIMESTAMP
+       WHERE organization_id=? AND submitted_at IS NULL`,
+      user.id,
+      organization.id,
+    );
+    if (!result.changes)
+      throw new AppError(
+        "This verification profile is already under review.",
+        409,
+      );
+    return { message: "Verification profile submitted for internal review." };
+  }
+  if (action === "reviewBuyerVerification") {
+    if (!isPlatformAdmin(user))
+      throw new AppError(
+        "Only platform verification reviewers can make this decision.",
+        403,
+      );
+    const p = parse(
+      z.object({
+        organization_id: idSchema,
+        submission_revision: z.coerce.number().int().positive(),
+        decision: z.enum([
+          "email_verified",
+          "firm_verified",
+          "capital_reviewed",
+          "verified_acquirer",
+          "rejected",
+        ]),
+        notes: text(3, 5000),
+      }),
+      data,
+    );
+    const target = one<{
+      organization_id: string;
+      organization_type: OrganizationType;
+      verification_status: BuyerVerificationStatus;
+      submitted_at: string | null;
+      submission_revision: number;
+    }>(
+      `SELECT profile.organization_id,organization.organization_type,
+         organization.verification_status,profile.submitted_at,
+         profile.submission_revision
+       FROM buyer_verification_profiles profile
+       JOIN organizations organization ON organization.id=profile.organization_id
+       JOIN organization_members realm_owner_members
+         ON realm_owner_members.organization_id=profile.organization_id
+        AND realm_owner_members.role='owner'
+        AND realm_owner_members.status='active'
+       JOIN users realm_owner ON realm_owner.id=realm_owner_members.user_id
+       WHERE profile.organization_id=? AND realm_owner.is_demo=?
+         AND NOT EXISTS (
+           SELECT 1
+           FROM organization_members cross_realm_members
+           JOIN users cross_realm_user ON cross_realm_user.id=cross_realm_members.user_id
+           WHERE cross_realm_members.organization_id=profile.organization_id
+             AND cross_realm_members.status='active'
+             AND cross_realm_user.is_demo<>?
+         )`,
+      p.organization_id,
+      user.is_demo,
+      user.is_demo,
+    );
+    if (!target || !isEligibleBuyerOrganizationType(target.organization_type))
+      throw new AppError("Buyer verification profile not found.", 404);
+    if (!target.submitted_at)
+      throw new AppError(
+        "This buyer has not submitted a profile for review.",
+        409,
+      );
+    const database = db();
+    inImmediateTransaction(database, () => {
+      const claimed = database
+        .prepare(
+          `UPDATE buyer_verification_profiles
+           SET submitted_at=NULL,submitted_by_user_id=NULL,
+             updated_at=CURRENT_TIMESTAMP
+           WHERE organization_id=? AND submitted_at IS NOT NULL
+             AND submission_revision=?`,
+        )
+        .run(target.organization_id, p.submission_revision);
+      if (!claimed.changes) {
+        const current = database
+          .prepare(
+            `SELECT submitted_at,submission_revision
+             FROM buyer_verification_profiles WHERE organization_id=?`,
+          )
+          .get(target.organization_id) as
+          | { submitted_at: string | null; submission_revision: number }
+          | undefined;
+        throw new AppError(
+          current?.submitted_at &&
+            current.submission_revision !== p.submission_revision
+            ? "This verification submission has been replaced. Refresh the review queue and try again."
+            : "This verification submission was already reviewed.",
+          409,
+        );
+      }
+      database
+        .prepare(
+          `INSERT INTO verification_reviews(
+             id,organization_id,reviewer_user_id,submission_revision,
+             previous_status,decision,notes
+           ) VALUES(?,?,?,?,?,?,?)`,
+        )
+        .run(
+          randomUUID(),
+          target.organization_id,
+          user.id,
+          target.submission_revision,
+          target.verification_status,
+          p.decision,
+          p.notes,
+        );
+      database
+        .prepare(
+          "UPDATE organizations SET verification_status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        )
+        .run(p.decision, target.organization_id);
+    });
+    return { message: "Buyer verification decision recorded." };
   }
   if (action === "profile") {
     const p = parse(
@@ -1385,6 +1782,14 @@ export function mutate(
         "Only organization owners and administrators can update firm settings.",
         403,
       );
+    const verificationRelevantChange =
+      p.name !== organization.name ||
+      p.organization_type !== organization.organization_type ||
+      p.website !== organization.website;
+    const wasBuyerOrganization = isEligibleBuyerOrganization(organization);
+    const remainsBuyerOrganization = isEligibleBuyerOrganizationType(
+      p.organization_type,
+    );
     const database = db();
     inImmediateTransaction(database, () => {
       database
@@ -1404,6 +1809,37 @@ export function mutate(
           "UPDATE users SET company=? WHERE id IN (SELECT user_id FROM organization_members WHERE organization_id=? AND status='active')",
         )
         .run(p.name, organization.id);
+      if (remainsBuyerOrganization)
+        database
+          .prepare(
+            `INSERT OR IGNORE INTO buyer_verification_profiles(
+               organization_id,legal_name,updated_by_user_id
+             ) VALUES(?,?,?)`,
+          )
+          .run(organization.id, p.name, user.id);
+      if (
+        verificationRelevantChange &&
+        (wasBuyerOrganization || remainsBuyerOrganization)
+      ) {
+        database
+          .prepare(
+            `UPDATE organizations SET
+               verification_status=CASE
+                 WHEN verification_status='rejected' THEN 'rejected'
+                 ELSE 'unverified'
+               END
+             WHERE id=?`,
+          )
+          .run(organization.id);
+        database
+          .prepare(
+            `UPDATE buyer_verification_profiles
+             SET submitted_at=NULL,submitted_by_user_id=NULL,
+               updated_by_user_id=?,updated_at=CURRENT_TIMESTAMP
+             WHERE organization_id=?`,
+          )
+          .run(user.id, organization.id);
+      }
     });
     return { message: "Firm settings saved." };
   }
@@ -1964,6 +2400,18 @@ export function mutate(
     const organization = organizationFor(user.id);
     if (!organization || !isEligibleBuyerOrganization(organization))
       throw new AppError("A buyer organization is required.", 403);
+    const minimumVerificationStatus =
+      qualifiedDiscoveryMinimumVerificationStatus();
+    if (
+      !verificationStatusMeets(
+        organization.verification_status,
+        minimumVerificationStatus,
+      )
+    )
+      throw new AppError(
+        "Your buyer organization has not reached the verification level required for Qualified Discovery.",
+        403,
+      );
     if (organization.membership_role === "viewer")
       throw new AppError(
         "Read-only organization members cannot request introductions.",
@@ -1986,8 +2434,20 @@ export function mutate(
       `SELECT dm.buyer_project_id,bp.organization_id,bp.status project_status,
          dm.score,dm.eligible
        FROM deal_matches dm
-       JOIN buyer_projects bp ON bp.id=dm.buyer_project_id
+       JOIN buyer_projects bp
+         ON bp.id=dm.buyer_project_id
+        AND bp.organization_id=dm.buyer_organization_id
+       JOIN organizations buyer_organization
+         ON buyer_organization.id=dm.buyer_organization_id
+        AND buyer_organization.verification_status IN (${qualifiedDiscoveryEligibleVerificationStatuses(
+          minimumVerificationStatus,
+        )
+          .map(() => "?")
+          .join(",")})
        WHERE dm.deal_id=? AND dm.buyer_project_id=?`,
+      ...qualifiedDiscoveryEligibleVerificationStatuses(
+        minimumVerificationStatus,
+      ),
       deal.id,
       p.buyer_project_id,
     );
@@ -2106,6 +2566,23 @@ export function mutate(
     if (request.status !== "pending")
       throw new AppError(
         "This introduction request was already reviewed.",
+        409,
+      );
+    const buyerVerificationStatus = one<{
+      verification_status: BuyerVerificationStatus;
+    }>(
+      "SELECT verification_status FROM organizations WHERE id=?",
+      request.buyer_organization_id,
+    )?.verification_status;
+    if (
+      p.status === "approved" &&
+      !verificationStatusMeets(
+        buyerVerificationStatus || "unverified",
+        qualifiedDiscoveryMinimumVerificationStatus(),
+      )
+    )
+      throw new AppError(
+        "The buyer organization no longer meets the Qualified Discovery verification requirement.",
         409,
       );
     const existingAccess = membership(deal.id, request.requested_by_user_id);

@@ -14,7 +14,7 @@ This list records concrete gaps in the implemented MVP. It is not a claim of com
 - Add verified email, password recovery, MFA or managed authentication, session/device management, and administrator invitation controls.
 - Add administrator invitations, role changes, membership removal, and recovery rules around the implemented organization membership model.
 - Define owner representation authority, advisor assignment/acceptance, member removal, and conflict-of-interest handling.
-- Add actual identity and buyer-capital verification before describing participants as verified or vetted.
+- The app now includes an internal buyer-firm evidence review and audit trail. Add independent identity, authority, and buyer-capital verification before describing participants as legally accredited, independently verified, or guaranteed to have funds.
 
 ## Documents and transactions
 
@@ -27,7 +27,7 @@ This list records concrete gaps in the implemented MVP. It is not a claim of com
 
 ## Operations and commercial launch
 
-- Add email notifications, delivery failure handling, and appropriate consent controls; current messages and invitations appear only in-app.
+- Connect a production email provider and digest scheduler, then validate delivery failures and consent controls. The app currently records development/test deliveries without sending external email.
 - Add subscription billing, entitlements, tax/invoicing treatment, and customer support. No payments are implemented.
 - Define the platform's contractual role and review applicable privacy, commercial, and transaction-facilitation requirements with counsel.
 - Publish real operator identity, terms, privacy notices, and a contact/support process; the About this release page is not a substitute.

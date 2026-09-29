@@ -30,6 +30,27 @@ export const BUYER_ORGANIZATION_TYPES = [
   "independent_sponsor",
   "strategic",
 ] as const satisfies readonly OrganizationType[];
+export const BUYER_VERIFICATION_STATUSES = [
+  "unverified",
+  "email_verified",
+  "firm_verified",
+  "capital_reviewed",
+  "verified_acquirer",
+  "rejected",
+] as const;
+export type BuyerVerificationStatus =
+  (typeof BUYER_VERIFICATION_STATUSES)[number];
+export const BUYER_VERIFICATION_STATUS_LABELS: Record<
+  BuyerVerificationStatus,
+  string
+> = {
+  unverified: "Unverified",
+  email_verified: "Email verified",
+  firm_verified: "Firm verified",
+  capital_reviewed: "Capital reviewed",
+  verified_acquirer: "Verified acquirer",
+  rejected: "Needs attention",
+};
 export const BUYER_PROJECT_STATUSES = [
   "draft",
   "active",
@@ -143,6 +164,7 @@ export type User = {
   min_revenue: number;
   max_revenue: number;
   is_demo: number;
+  is_platform_admin: number;
 };
 export type Organization = {
   id: string;
@@ -152,11 +174,49 @@ export type Organization = {
   website: string;
   province: string;
   description: string;
-  verification_status: string;
+  verification_status: BuyerVerificationStatus;
   created_at: string;
   updated_at: string;
   membership_role: OrganizationMemberRole;
   can_manage: boolean;
+};
+export type BuyerVerificationProfile = {
+  organization_id: string;
+  legal_name: string;
+  website: string;
+  buyer_type: OrganizationType;
+  principals: string;
+  acquisition_history: string;
+  capital_source: string;
+  min_equity_check: number | null;
+  max_equity_check: number | null;
+  financing_approach: string;
+  submitted_at: string | null;
+  submitted_by_user_id: string | null;
+  submission_revision: number;
+  updated_at: string;
+  can_manage: boolean;
+};
+export type VerificationReview = {
+  id: string;
+  organization_id: string;
+  organization_name: string;
+  reviewer_user_id: string;
+  reviewer_name: string;
+  submission_revision: number;
+  previous_status: BuyerVerificationStatus;
+  decision: Exclude<BuyerVerificationStatus, "unverified">;
+  notes: string;
+  created_at: string;
+};
+export type VerificationAdminEntry = BuyerVerificationProfile & {
+  organization_name: string;
+  province: string;
+  verification_status: BuyerVerificationStatus;
+  submitted_by_name: string | null;
+  latest_decision: Exclude<BuyerVerificationStatus, "unverified"> | null;
+  latest_review_notes: string | null;
+  latest_reviewed_at: string | null;
 };
 export type OrganizationMember = {
   id: string;
@@ -239,7 +299,7 @@ export type DealMatch = {
   buyer_organization_name: string;
   buyer_organization_type: OrganizationType;
   buyer_organization_province: string;
-  buyer_organization_verification_status: string;
+  buyer_organization_verification_status: BuyerVerificationStatus;
   buyer_organization_website: string;
   buyer_organization_description: string;
   relevant_acquisitions: number;
@@ -303,7 +363,7 @@ export type IntroductionRequest = {
   deal_title: string;
   buyer_organization_id: string;
   buyer_organization_name: string;
-  buyer_organization_verification_status: string;
+  buyer_organization_verification_status: BuyerVerificationStatus;
   buyer_project_id: string;
   buyer_project_name: string;
   requested_by_user_id: string;
@@ -369,7 +429,7 @@ export type BuyerFunnelEntry = {
   deal_id: string;
   buyer_organization_id: string;
   buyer_organization_name: string;
-  buyer_organization_verification_status: string;
+  buyer_organization_verification_status: BuyerVerificationStatus;
   buyer_project_id: string | null;
   buyer_project_name: string | null;
   match_score: number | null;
@@ -527,6 +587,7 @@ export type WorkspaceData = {
   buyer_funnels?: DealBuyerFunnel[];
   deal_internal_notes?: DealInternalNote[];
   qualified_discovery_min_score: number;
+  qualified_discovery_min_verification_status: BuyerVerificationStatus;
   deal_financials: DealFinancial[];
   access: Access[];
   documents: Document[];
@@ -537,6 +598,10 @@ export type WorkspaceData = {
   notifications: Notification[];
   notification_unread_count: number;
   notification_preferences: NotificationPreferences;
+  buyer_verification_profile?: BuyerVerificationProfile;
+  is_platform_admin: boolean;
+  verification_admin_queue?: VerificationAdminEntry[];
+  verification_reviews?: VerificationReview[];
   advisors: Pick<User, "id" | "name" | "company" | "province" | "bio">[];
   demo: boolean;
 };

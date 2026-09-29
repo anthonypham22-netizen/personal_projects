@@ -1,4 +1,4 @@
-import type { BuyerProject, Deal } from "./types";
+import type { BuyerProject, BuyerVerificationStatus, Deal } from "./types";
 
 export const MATCH_WEIGHTS = Object.freeze({
   industry: 25,
@@ -9,11 +9,6 @@ export const MATCH_WEIGHTS = Object.freeze({
   enterprise_value: 10,
   ownership: 5,
   keywords: 5,
-});
-
-export const MATCHING_CONFIG = Object.freeze({
-  // Enforcement remains opt-in until the product has a verification workflow.
-  qualifiedDiscoveryRequiresVerification: false,
 });
 
 export type MatchDimension = keyof typeof MATCH_WEIGHTS;
@@ -33,10 +28,12 @@ export type MatchResult = {
 };
 
 export type MatchContext = {
-  buyerVerificationStatus?: string;
+  /** @deprecated Verification is enforced at Qualified Discovery boundaries, not in persisted matching. */
+  buyerVerificationStatus?: BuyerVerificationStatus | string;
   buyerExplicitlyBlocked?: boolean;
   sellerExcluded?: boolean;
-  requiresDiscoveryVerification?: boolean;
+  /** @deprecated Verification is enforced at Qualified Discovery boundaries, not in persisted matching. */
+  minimumBuyerVerificationStatus?: BuyerVerificationStatus;
   marketplaceEnvironmentsMatch?: boolean;
 };
 
@@ -300,15 +297,6 @@ export function matchDealToBuyerProject(
     hardExclusions.push(
       "Demo and registered-account marketplace records cannot be matched.",
     );
-  if (
-    deal.distribution_mode === "qualified_discovery" &&
-    context.requiresDiscoveryVerification &&
-    context.buyerVerificationStatus !== "verified"
-  )
-    hardExclusions.push(
-      "Qualified Discovery requires a verified buyer organization.",
-    );
-
   return {
     score: reasons.reduce((sum, item) => sum + item.score, 0),
     eligible: hardExclusions.length === 0,

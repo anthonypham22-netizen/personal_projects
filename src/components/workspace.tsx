@@ -48,6 +48,7 @@ import {
 } from "lucide-react";
 import { Brand } from "./brand";
 import { cn } from "@/lib/utils";
+import { verificationStatusMeets } from "@/lib/verification";
 import {
   money,
   PROVINCES,
@@ -64,6 +65,8 @@ import {
   BUYER_FUNNEL_STAGES,
   NOTIFICATION_TYPES,
   NOTIFICATION_FREQUENCIES,
+  BUYER_VERIFICATION_STATUSES,
+  BUYER_VERIFICATION_STATUS_LABELS,
   type WorkspaceData,
   type Deal,
   type BuyerProject,
@@ -78,9 +81,14 @@ import {
   type NotificationFrequency,
   type NotificationPreferences,
   type NotificationType,
+  type BuyerVerificationStatus,
 } from "@/lib/types";
 
 const buyerOrganizationTypes = new Set<string>(BUYER_ORGANIZATION_TYPES);
+const buyerVerificationStatusLabel = (value: BuyerVerificationStatus) =>
+  BUYER_VERIFICATION_STATUS_LABELS[value];
+const isFirmVerified = (value: BuyerVerificationStatus) =>
+  verificationStatusMeets(value, "firm_verified");
 const projectTransactionLabel = (value: string) =>
   ({
     full_acquisition: "Full acquisition",
@@ -180,7 +188,9 @@ function Status({ value }: { value: string }) {
         "badge",
         [
           "approved",
-          "verified",
+          "firm_verified",
+          "capital_reviewed",
+          "verified_acquirer",
           "done",
           "Closed",
           "Due diligence",
@@ -197,9 +207,13 @@ function Status({ value }: { value: string }) {
                 "Under review",
               ].includes(value)
             ? "badge-amber"
-            : ["revoked", "denied", "Not proceeding", "excluded"].includes(
-                  value,
-                )
+            : [
+                  "revoked",
+                  "denied",
+                  "rejected",
+                  "Not proceeding",
+                  "excluded",
+                ].includes(value)
               ? "badge-red"
               : "badge-blue",
       )}
@@ -773,6 +787,19 @@ export function Workspace({
     { id: "messages", label: "Messages", Icon: MessagesSquare },
     { id: "tasks", label: "Tasks", Icon: ListTodo },
     { id: "network", label: "Advisor network", Icon: Users },
+    ...(buyerOrganizationTypes.has(data.organization.organization_type) ||
+    data.is_platform_admin
+      ? [
+          {
+            id: "verification",
+            label:
+              data.is_platform_admin && data.user.role !== "buyer"
+                ? "Buyer reviews"
+                : "Verification",
+            Icon: ShieldCheck,
+          },
+        ]
+      : []),
     { id: "settings", label: "Settings", Icon: Settings },
   ];
   const current = nav.find((n) => n.id === section)?.label || "Workspace";
@@ -951,6 +978,8 @@ export function Workspace({
               <TasksPage />
             ) : section === "network" ? (
               <Network />
+            ) : section === "verification" ? (
+              <VerificationPage />
             ) : section === "settings" ? (
               <SettingsPage />
             ) : (
@@ -1774,6 +1803,12 @@ function Opportunities() {
     data.user.role === "buyer"
       ? deals.filter((deal) => !privateOutreachByDeal.has(deal.id))
       : deals;
+  const discoveryVerificationRequired =
+    data.user.role === "buyer" &&
+    !verificationStatusMeets(
+      data.organization.verification_status,
+      data.qualified_discovery_min_verification_status,
+    );
   const cards = (items: Deal[]) => (
     <div className="deal-grid">
       {items.map((d) => {
@@ -1872,6 +1907,18 @@ function Opportunities() {
           Acquisition criteria
         </Link>
       </Heading>
+      {discoveryVerificationRequired && (
+        <div className="notice mb-5" role="status">
+          <strong>Complete buyer verification for Qualified Discovery.</strong>{" "}
+          Your firm must reach at least{" "}
+          {buyerVerificationStatusLabel(
+            data.qualified_discovery_min_verification_status,
+          ).toLowerCase()}{" "}
+          before matched public-network teasers appear. Private invitations from
+          sellers remain available.{" "}
+          <Link href="/app/verification">Review verification requirements</Link>
+        </div>
+      )}
       <div className="filters">
         <label className="search-field">
           <span className="sr-only">Search opportunities</span>
@@ -1944,10 +1991,28 @@ function Opportunities() {
       )}
       {!deals.length && (
         <Empty
-          title="No qualified matches yet"
-          body="Activate an acquisition project or refine its criteria. New opportunities appear only when they meet the discovery threshold."
-          href={data.user.role === "buyer" ? "/app/projects" : undefined}
-          label="Review acquisition projects"
+          title={
+            discoveryVerificationRequired
+              ? "Qualified Discovery is not active yet"
+              : "No qualified matches yet"
+          }
+          body={
+            discoveryVerificationRequired
+              ? "Submit your firm profile for internal review. Once the required trust level is approved, eligible matches will appear here automatically."
+              : "Activate an acquisition project or refine its criteria. New opportunities appear only when they meet the discovery threshold."
+          }
+          href={
+            data.user.role === "buyer"
+              ? discoveryVerificationRequired
+                ? "/app/verification"
+                : "/app/projects"
+              : undefined
+          }
+          label={
+            discoveryVerificationRequired
+              ? "Open buyer verification"
+              : "Review acquisition projects"
+          }
         />
       )}
     </>
@@ -3426,7 +3491,9 @@ function IntroductionRequests({ deal }: { deal: Deal }) {
               <div className="introduction-proof">
                 <span>
                   <ShieldCheck size={15} />
-                  {request.buyer_organization_verification_status === "verified"
+                  {isFirmVerified(
+                    request.buyer_organization_verification_status,
+                  )
                     ? "Verified firm"
                     : "Verification pending"}
                 </span>
@@ -3837,7 +3904,7 @@ function RecommendedBuyers({ deal }: { deal: Deal }) {
           match.buyer_organization_type === organizationType) &&
         (!province || match.buyer_organization_province === province) &&
         (!verifiedOnly ||
-          match.buyer_organization_verification_status === "verified") &&
+          isFirmVerified(match.buyer_organization_verification_status)) &&
         (!experiencedOnly || match.relevant_acquisitions > 0) &&
         (statusFilter === "all" ||
           (statusFilter === "active"
@@ -4230,7 +4297,7 @@ function BuyerRecommendation({
             <MapPin size={14} />
             {match.buyer_organization_province || "Canada"}
           </span>
-          {match.buyer_organization_verification_status === "verified" && (
+          {isFirmVerified(match.buyer_organization_verification_status) && (
             <span>
               <ShieldCheck size={14} /> Verified
             </span>
@@ -5012,6 +5079,445 @@ function NotificationPreferencesPanel() {
   );
 }
 
+const verificationLadder = BUYER_VERIFICATION_STATUSES.filter(
+  (status) => status !== "rejected",
+);
+
+function BuyerVerificationPanel() {
+  const { data } = useWorkspace();
+  const profile = data.buyer_verification_profile;
+  if (!profile) return null;
+  const status = data.organization.verification_status;
+  const currentIndex = verificationLadder.findIndex(
+    (level) => level === status,
+  );
+  const underReview = Boolean(profile.submitted_at);
+  return (
+    <div className="verification-buyer-stack">
+      <Panel title="Buyer verification">
+        <div className="verification-summary">
+          <div>
+            <p className="eyebrow">CURRENT TRUST LEVEL</p>
+            <div className="verification-status-title">
+              <ShieldCheck size={24} strokeWidth={1.6} />
+              <div>
+                <h2>{buyerVerificationStatusLabel(status)}</h2>
+                <p>
+                  Qualified Discovery requires at least{" "}
+                  <strong>
+                    {buyerVerificationStatusLabel(
+                      data.qualified_discovery_min_verification_status,
+                    )}
+                  </strong>
+                  .
+                </p>
+              </div>
+            </div>
+          </div>
+          <Status value={status} />
+        </div>
+        <ol className="verification-ladder" aria-label="Verification levels">
+          {verificationLadder.map((level, index) => (
+            <li
+              key={level}
+              className={cn(
+                currentIndex >= index && status !== "rejected" && "complete",
+                currentIndex === index && "current",
+              )}
+            >
+              <span aria-hidden="true">
+                {currentIndex >= index && status !== "rejected" ? (
+                  <Check size={14} />
+                ) : (
+                  index + 1
+                )}
+              </span>
+              {buyerVerificationStatusLabel(level)}
+            </li>
+          ))}
+        </ol>
+        <div
+          className={cn(
+            "verification-notice",
+            status === "rejected" && "error",
+          )}
+        >
+          {underReview ? (
+            <>
+              <Clock3 size={18} />
+              <div>
+                <strong>Internal review in progress</strong>
+                <p>
+                  Submitted {dateTimeLabel(profile.submitted_at!)}. Your current
+                  trust level remains in effect until a reviewer records a
+                  decision.
+                </p>
+              </div>
+            </>
+          ) : status === "rejected" ? (
+            <>
+              <CircleHelp size={18} />
+              <div>
+                <strong>Additional information is required</strong>
+                <p>
+                  Update the profile below and submit it again for internal
+                  review.
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <CircleCheck size={18} />
+              <div>
+                <strong>Internal marketplace verification</strong>
+                <p>
+                  These levels reflect Succera onboarding checks. They are not
+                  legal accreditation, a guarantee of capital, or investment
+                  advice.
+                </p>
+              </div>
+            </>
+          )}
+        </div>
+      </Panel>
+
+      <Panel title="Firm evidence profile">
+        <div className="panel-body">
+          {profile.can_manage && !underReview ? (
+            <>
+              <MutationForm
+                action="updateBuyerVerificationProfile"
+                label="Save verification profile"
+              >
+                <div className="form-grid">
+                  <Field
+                    label="Legal firm name"
+                    name="legal_name"
+                    value={profile.legal_name}
+                  />
+                  <Field
+                    label="Website"
+                    name="website"
+                    type="url"
+                    value={profile.website}
+                    help="A public firm or operating-company website"
+                  />
+                  <label>
+                    Buyer type
+                    <select
+                      name="buyer_type"
+                      defaultValue={profile.buyer_type}
+                      required
+                    >
+                      {BUYER_ORGANIZATION_TYPES.map((type) => (
+                        <option key={type} value={type}>
+                          {ORGANIZATION_TYPE_LABELS[type]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div />
+                  <label className="full">
+                    Principals
+                    <textarea
+                      name="principals"
+                      maxLength={4000}
+                      defaultValue={profile.principals}
+                      required
+                    />
+                    <span className="field-hint">
+                      Names and roles of the people leading acquisitions
+                    </span>
+                  </label>
+                  <label className="full">
+                    Acquisition history
+                    <textarea
+                      name="acquisition_history"
+                      maxLength={5000}
+                      defaultValue={profile.acquisition_history}
+                      required
+                    />
+                  </label>
+                  <label className="full">
+                    Capital source
+                    <textarea
+                      name="capital_source"
+                      maxLength={3000}
+                      defaultValue={profile.capital_source}
+                      required
+                    />
+                  </label>
+                  <Field
+                    label="Typical minimum equity cheque (CAD)"
+                    name="min_equity_check"
+                    type="number"
+                    min={0}
+                    value={profile.min_equity_check ?? ""}
+                    required={false}
+                  />
+                  <Field
+                    label="Typical maximum equity cheque (CAD)"
+                    name="max_equity_check"
+                    type="number"
+                    min={0}
+                    value={profile.max_equity_check ?? ""}
+                    required={false}
+                  />
+                  <label className="full">
+                    Financing approach
+                    <textarea
+                      name="financing_approach"
+                      maxLength={3000}
+                      defaultValue={profile.financing_approach}
+                      required
+                    />
+                  </label>
+                </div>
+              </MutationForm>
+              <div className="verification-submit-row">
+                <div>
+                  <strong>Ready for review?</strong>
+                  <p>
+                    Save the latest profile first, then submit it to Succera’s
+                    internal review queue.
+                  </p>
+                </div>
+                <MutationForm
+                  action="submitBuyerVerification"
+                  label="Submit for internal review"
+                >
+                  <input type="hidden" name="confirmation" value="submit" />
+                </MutationForm>
+              </div>
+            </>
+          ) : (
+            <div className="verification-evidence-sheet">
+              <div>
+                <span>Legal name</span>
+                <strong>{profile.legal_name || "Not provided"}</strong>
+              </div>
+              <div>
+                <span>Buyer type</span>
+                <strong>{ORGANIZATION_TYPE_LABELS[profile.buyer_type]}</strong>
+              </div>
+              <div>
+                <span>Website</span>
+                <strong>{profile.website || "Not provided"}</strong>
+              </div>
+              <div>
+                <span>Typical equity cheque</span>
+                <strong>
+                  {profile.min_equity_check !== null
+                    ? money(profile.min_equity_check, false)
+                    : "Not specified"}
+                  {profile.max_equity_check !== null
+                    ? ` – ${money(profile.max_equity_check, false)}`
+                    : ""}
+                </strong>
+              </div>
+              <div className="full">
+                <span>Principals</span>
+                <p>{profile.principals || "Not provided"}</p>
+              </div>
+              <div className="full">
+                <span>Acquisition history</span>
+                <p>{profile.acquisition_history || "Not provided"}</p>
+              </div>
+              <div className="full">
+                <span>Capital source</span>
+                <p>{profile.capital_source || "Not provided"}</p>
+              </div>
+              <div className="full">
+                <span>Financing approach</span>
+                <p>{profile.financing_approach || "Not provided"}</p>
+              </div>
+              {!profile.can_manage && (
+                <p className="notice full">
+                  An organization owner or administrator must update and submit
+                  this profile.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function VerificationReviewQueue() {
+  const { data } = useWorkspace();
+  if (!data.is_platform_admin) return null;
+  const queue = data.verification_admin_queue ?? [];
+  const pending = queue.filter((entry) => entry.submitted_at);
+  const reviews = data.verification_reviews ?? [];
+  return (
+    <div className="verification-admin-stack">
+      <Panel title={`Internal review queue · ${pending.length}`}>
+        <div className="verification-admin-intro">
+          <ShieldCheck size={20} />
+          <div>
+            <strong>Platform-reviewer access</strong>
+            <p>
+              Decisions here control Qualified Discovery eligibility. They do
+              not represent legal accreditation or guarantee available capital.
+            </p>
+          </div>
+        </div>
+        {pending.length ? (
+          <div className="verification-review-list">
+            {pending.map((entry) => (
+              <article
+                className="verification-review-card"
+                key={entry.organization_id}
+              >
+                <header>
+                  <div>
+                    <p className="eyebrow">SUBMITTED BUYER</p>
+                    <h3>{entry.organization_name}</h3>
+                    <p>
+                      {ORGANIZATION_TYPE_LABELS[entry.buyer_type]} ·{" "}
+                      {entry.province || "Canada"}
+                    </p>
+                  </div>
+                  <Status value={entry.verification_status} />
+                </header>
+                <div className="verification-review-grid">
+                  <div>
+                    <span>Legal firm name</span>
+                    <strong>{entry.legal_name}</strong>
+                  </div>
+                  <div>
+                    <span>Website</span>
+                    <a href={entry.website} target="_blank" rel="noreferrer">
+                      {entry.website}
+                    </a>
+                  </div>
+                  <div className="full">
+                    <span>Principals</span>
+                    <p>{entry.principals}</p>
+                  </div>
+                  <div className="full">
+                    <span>Acquisition history</span>
+                    <p>{entry.acquisition_history}</p>
+                  </div>
+                  <div className="full">
+                    <span>Capital source</span>
+                    <p>{entry.capital_source}</p>
+                  </div>
+                  <div className="full">
+                    <span>Financing approach</span>
+                    <p>{entry.financing_approach}</p>
+                  </div>
+                </div>
+                <MutationForm
+                  action="reviewBuyerVerification"
+                  extra={{
+                    organization_id: entry.organization_id,
+                    submission_revision: entry.submission_revision,
+                  }}
+                  label="Record verification decision"
+                >
+                  <input
+                    type="hidden"
+                    name="submission_revision"
+                    value={entry.submission_revision}
+                  />
+                  <div className="form-grid verification-decision-form">
+                    <label>
+                      Decision
+                      <select name="decision" defaultValue="firm_verified">
+                        {BUYER_VERIFICATION_STATUSES.filter(
+                          (status) => status !== "unverified",
+                        ).map((status) => (
+                          <option key={status} value={status}>
+                            {buyerVerificationStatusLabel(status)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="full">
+                      Internal review notes
+                      <textarea
+                        name="notes"
+                        minLength={3}
+                        maxLength={5000}
+                        required
+                      />
+                    </label>
+                  </div>
+                </MutationForm>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <Empty
+            title="No buyer profiles await review"
+            body="Submitted buyer evidence will appear here for an internal decision."
+          />
+        )}
+      </Panel>
+      <Panel title="Recent verification decisions">
+        {reviews.length ? (
+          <div className="verification-history">
+            {reviews.map((review) => {
+              return (
+                <article key={review.id}>
+                  <div>
+                    <strong>{review.organization_name}</strong>
+                    <span>{review.notes}</span>
+                  </div>
+                  <div>
+                    <Status value={review.decision} />
+                    <small>
+                      {review.reviewer_name} ·{" "}
+                      {dateTimeLabel(review.created_at)}
+                    </small>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <Empty
+            title="No verification decisions yet"
+            body="Completed internal reviews will be recorded here."
+          />
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+function VerificationPage() {
+  const { data } = useWorkspace();
+  const hasBuyerProfile = Boolean(data.buyer_verification_profile);
+  if (!hasBuyerProfile && !data.is_platform_admin)
+    return (
+      <Empty
+        title="Buyer organization required"
+        body="Verification profiles are available to eligible buyer organizations."
+        href="/app/settings"
+        label="Review firm settings"
+      />
+    );
+  return (
+    <>
+      <Heading
+        eyebrow={data.is_platform_admin ? "TRUST & SAFETY" : "BUYER ONBOARDING"}
+        title={
+          data.is_platform_admin && !hasBuyerProfile
+            ? "Review buyer credibility."
+            : "Build buyer credibility."
+        }
+        description="Collect consistent firm evidence and keep Qualified Discovery limited to reviewed buyers."
+      />
+      {hasBuyerProfile && <BuyerVerificationPanel />}
+      {data.is_platform_admin && <VerificationReviewQueue />}
+    </>
+  );
+}
+
 function SettingsPage() {
   const { data } = useWorkspace(),
     { user, organization } = data;
@@ -5269,9 +5775,9 @@ function SettingsPage() {
           <Panel title="Early-access release">
             <div className="panel-body">
               <p className="muted">
-                Billing, email delivery, identity verification, team
-                invitations, and electronic signatures are not connected in this
-                release.
+                Billing, live email delivery, independent identity and capital
+                verification, team invitations, and electronic signatures are
+                not connected in this release.
               </p>
               <Link
                 href="/about-this-release"

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { MATCHING_CONFIG, matchDealToBuyerProject } from "./matching.ts";
+import { matchDealToBuyerProject } from "./matching.ts";
 import { inImmediateTransaction } from "./sqlite-transaction.ts";
 import type { BuyerProject, Deal, DealMatch } from "./types";
 import { recordDealBuyerEvent } from "./buyer-funnel.ts";
@@ -68,14 +68,6 @@ function buyerIsBlocked(
   );
 }
 
-function verificationStatus(database: DatabaseSync, organizationId: string) {
-  return (
-    database
-      .prepare("SELECT verification_status FROM organizations WHERE id=?")
-      .get(organizationId) as { verification_status: string } | undefined
-  )?.verification_status;
-}
-
 function marketplaceEnvironmentsMatch(
   database: DatabaseSync,
   deal: Deal,
@@ -102,18 +94,12 @@ function recalculatePair(
     .get(deal.id, project.id) as
     { id: string; status: DealMatch["status"]; eligible: number } | undefined;
   const result = matchDealToBuyerProject(deal, project, {
-    buyerVerificationStatus: verificationStatus(
-      database,
-      project.organization_id,
-    ),
     buyerExplicitlyBlocked: buyerIsBlocked(
       database,
       deal.id,
       project.organization_id,
     ),
     sellerExcluded: existing?.status === "excluded",
-    requiresDiscoveryVerification:
-      MATCHING_CONFIG.qualifiedDiscoveryRequiresVerification,
     marketplaceEnvironmentsMatch: true,
   });
   const breakdown = JSON.stringify({

@@ -5,6 +5,7 @@ import {
   type BuyerFunnelEntry,
   type BuyerFunnelMetrics,
   type BuyerFunnelStage,
+  type BuyerVerificationStatus,
   type DealBuyerEvent,
   type DealBuyerEventType,
   type DealBuyerFunnel,
@@ -458,7 +459,7 @@ export function buyerFunnelsForDeals(
     Omit<DealBuyerEvent, "metadata"> & {
       metadata_json: string;
       buyer_organization_name: string;
-      buyer_organization_verification_status: string;
+      buyer_organization_verification_status: BuyerVerificationStatus;
       buyer_project_name: string | null;
     }
   >;

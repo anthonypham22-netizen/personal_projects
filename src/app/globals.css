@@ -1737,6 +1737,158 @@
   .account-roles > div {
     @apply rounded-lg bg-slate-50 p-3;
   }
+  .verification-buyer-stack,
+  .verification-admin-stack {
+    @apply space-y-6;
+  }
+  .verification-buyer-stack + .verification-admin-stack {
+    @apply mt-6;
+  }
+  .verification-summary {
+    @apply flex flex-wrap items-start justify-between gap-5 p-5;
+  }
+  .verification-summary .eyebrow,
+  .verification-review-card .eyebrow {
+    @apply mb-2 text-emerald-800;
+  }
+  .verification-status-title {
+    @apply flex items-start gap-3;
+  }
+  .verification-status-title > svg {
+    @apply mt-1 shrink-0 text-emerald-800;
+  }
+  .verification-status-title h2 {
+    @apply text-2xl font-semibold tracking-tight text-slate-950;
+  }
+  .verification-status-title p {
+    @apply mt-1 text-sm text-slate-500;
+  }
+  .verification-ladder {
+    @apply grid gap-px border-y border-slate-100 bg-slate-100 sm:grid-cols-5;
+  }
+  .verification-ladder li {
+    @apply flex min-w-0 items-center gap-2 bg-white px-4 py-3 text-xs font-medium text-slate-400;
+  }
+  .verification-ladder li > span {
+    @apply flex size-6 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-[11px] tabular-nums;
+  }
+  .verification-ladder li.complete {
+    @apply text-emerald-800;
+  }
+  .verification-ladder li.complete > span {
+    @apply border-emerald-700 bg-emerald-700 text-white;
+  }
+  .verification-ladder li.current {
+    @apply bg-emerald-50 font-semibold;
+  }
+  .verification-notice,
+  .verification-admin-intro {
+    @apply m-5 flex items-start gap-3 rounded-xl bg-slate-50 p-4 text-slate-600;
+  }
+  .verification-notice.error {
+    @apply bg-rose-50 text-rose-800;
+  }
+  .verification-notice > svg,
+  .verification-admin-intro > svg {
+    @apply mt-0.5 shrink-0 text-emerald-800;
+  }
+  .verification-notice.error > svg {
+    @apply text-rose-700;
+  }
+  .verification-notice strong,
+  .verification-admin-intro strong {
+    @apply block text-sm font-semibold text-slate-800;
+  }
+  .verification-notice.error strong {
+    @apply text-rose-900;
+  }
+  .verification-notice p,
+  .verification-admin-intro p {
+    @apply mt-1 text-sm leading-relaxed;
+  }
+  .verification-submit-row {
+    @apply mt-6 flex flex-col gap-4 border-t border-slate-100 pt-5 md:flex-row md:items-center md:justify-between;
+  }
+  .verification-submit-row strong {
+    @apply text-sm font-semibold;
+  }
+  .verification-submit-row p {
+    @apply mt-1 max-w-xl text-sm text-slate-500;
+  }
+  .verification-submit-row .inline-form,
+  .verification-submit-row .form-actions {
+    @apply m-0;
+  }
+  .verification-evidence-sheet,
+  .verification-review-grid {
+    @apply grid gap-4 sm:grid-cols-2;
+  }
+  .verification-evidence-sheet > div,
+  .verification-review-grid > div {
+    @apply rounded-lg bg-slate-50 p-4;
+  }
+  .verification-evidence-sheet .full,
+  .verification-review-grid .full {
+    @apply sm:col-span-2;
+  }
+  .verification-evidence-sheet span,
+  .verification-review-grid span {
+    @apply block text-xs font-medium text-slate-500;
+  }
+  .verification-evidence-sheet strong,
+  .verification-review-grid strong,
+  .verification-review-grid a {
+    @apply mt-1 block break-words text-sm font-semibold text-slate-800;
+  }
+  .verification-review-grid a {
+    @apply text-emerald-800 underline;
+  }
+  .verification-evidence-sheet p,
+  .verification-review-grid p {
+    @apply mt-1 whitespace-pre-wrap text-sm leading-relaxed text-slate-700;
+  }
+  .verification-review-list {
+    @apply divide-y divide-slate-100;
+  }
+  .verification-review-card {
+    @apply p-5;
+  }
+  .verification-review-card > header {
+    @apply mb-5 flex flex-wrap items-start justify-between gap-4;
+  }
+  .verification-review-card h3 {
+    @apply text-lg font-semibold text-slate-950;
+  }
+  .verification-review-card header p:last-child {
+    @apply mt-1 text-sm text-slate-500;
+  }
+  .verification-review-card > .inline-form {
+    @apply mt-5 border-t border-slate-100 pt-5;
+  }
+  .verification-decision-form {
+    @apply items-start;
+  }
+  .verification-history {
+    @apply divide-y divide-slate-100;
+  }
+  .verification-history article {
+    @apply flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-start sm:justify-between;
+  }
+  .verification-history article > div:first-child {
+    @apply min-w-0;
+  }
+  .verification-history strong {
+    @apply block text-sm font-semibold text-slate-900;
+  }
+  .verification-history span:not(.badge) {
+    @apply mt-1 block text-sm leading-relaxed text-slate-600;
+  }
+  .verification-history article > div:last-child {
+    @apply flex shrink-0 flex-col items-start gap-1 sm:items-end;
+  }
+  .verification-history small {
+    @apply text-xs text-slate-400;
+  }
 }
 @media (max-width: 480px) {
   .nav-actions {

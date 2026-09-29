@@ -131,6 +131,47 @@ docker compose logs --tail=100 app
 
 Keep the previous known-good commit and backup. A code rollback alone may not be compatible with later database migrations. The application runs versioned migrations automatically at startup and records completed versions in `schema_migrations`; always test upgrades and restores against a production-like database copy before deployment.
 
+### Phase 11 migration checks
+
+For a release that includes migration `014_buyer_verification`, use this short runbook in addition to the normal update steps:
+
+1. Before restarting the application, create and verify a successful backup with `docker compose exec app node scripts/backup.mjs`. Keep the database snapshot and its matching `uploads/` directory together.
+2. Before restarting, record the status, eligible-buyer, buyer-project, and deal-match counts on the same database. After restart, rerun those checks and inspect profile coverage (the profile table does not exist before migration) using the available SQLite client:
+
+   ```sql
+   SELECT verification_status, COUNT(*)
+   FROM organizations
+   GROUP BY verification_status
+   ORDER BY verification_status;
+
+   SELECT COUNT(*) AS buyer_organizations
+   FROM organizations
+   WHERE organization_type IN (
+     'buyer','private_equity','family_office','search_fund',
+     'independent_sponsor','strategic'
+   );
+
+   SELECT COUNT(*) AS buyer_projects FROM buyer_projects;
+
+   SELECT COUNT(*) AS deal_matches FROM deal_matches;
+
+   SELECT COUNT(*) AS verification_profiles
+   FROM buyer_verification_profiles;
+
+   SELECT COUNT(*) AS missing_profiles
+   FROM organizations organization
+   LEFT JOIN buyer_verification_profiles profile
+     ON profile.organization_id=organization.id
+   WHERE organization.organization_type IN (
+     'buyer','private_equity','family_office','search_fund',
+     'independent_sponsor','strategic'
+   ) AND profile.organization_id IS NULL;
+   ```
+
+   After migration, `missing_profiles` should be zero, legacy `verified` rows should appear as `verified_acquirer`, and unknown legacy statuses should appear as `unverified`. Also compare the pre/post counts for buyer projects and deal matches; migration `014` must not rewrite them.
+
+3. If startup fails or the post-checks do not match expectations, stop the application and restore the complete pre-migration snapshot (the database and matching uploads) into the stopped volume, then start the previous known-good image or commit. Phase 11 has no automatic down migration; rollback is a database restore and code rollback performed together.
+
 ## What changes for a larger launch
 
 The current architecture is deliberately limited to **one server and one application instance**. Do not horizontally scale it against shared SQLite files or separate local upload directories.

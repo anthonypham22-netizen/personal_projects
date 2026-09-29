@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { hashPassword } from "./passwords.ts";
 import { notifyUsers } from "./notifications.ts";
+import { tableExists } from "./sqlite-schema.ts";
 
 type DemoDocument = {
   id: string;
@@ -490,8 +491,67 @@ function syncDemoNotifications(d: DatabaseSync) {
   });
 }
 
+function syncDemoVerification(d: DatabaseSync) {
+  if (!tableExists(d, "buyer_verification_profiles")) return;
+
+  d.prepare(
+    "UPDATE users SET is_platform_admin=1 WHERE id='demo-advisor'",
+  ).run();
+  d.prepare(
+    `UPDATE organizations
+     SET verification_status='verified_acquirer',
+       website=CASE id
+         WHEN 'org-demo-buyer' THEN 'https://evergreen-capital.example'
+         WHEN 'org-demo-buyer-2' THEN 'https://maple-bridge.example'
+         ELSE website
+       END,
+       updated_at=CURRENT_TIMESTAMP
+     WHERE id IN ('org-demo-buyer','org-demo-buyer-2')`,
+  ).run();
+
+  const upsert = d.prepare(`
+    INSERT INTO buyer_verification_profiles(
+      organization_id,legal_name,principals,acquisition_history,capital_source,
+      min_equity_check,max_equity_check,financing_approach,updated_by_user_id
+    ) VALUES(?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(organization_id) DO UPDATE SET
+      legal_name=excluded.legal_name,
+      principals=excluded.principals,
+      acquisition_history=excluded.acquisition_history,
+      capital_source=excluded.capital_source,
+      min_equity_check=excluded.min_equity_check,
+      max_equity_check=excluded.max_equity_check,
+      financing_approach=excluded.financing_approach,
+      updated_by_user_id=excluded.updated_by_user_id,
+      updated_at=CURRENT_TIMESTAMP
+  `);
+  upsert.run(
+    "org-demo-buyer",
+    "Evergreen Capital Partners Inc.",
+    "Taylor Reid, Managing Director",
+    "Three fictional Canadian lower-middle-market acquisitions completed for demonstration purposes.",
+    "Fictional committed private investment fund.",
+    2_000_000,
+    30_000_000,
+    "Equity capital supplemented by senior acquisition financing where appropriate.",
+    "demo-buyer",
+  );
+  upsert.run(
+    "org-demo-buyer-2",
+    "Laurent Partners Inc.",
+    "Sam Laurent, Principal",
+    "One fictional operator-led acquisition completed for demonstration purposes.",
+    "Fictional personal capital and committed investor equity.",
+    1_000_000,
+    8_000_000,
+    "Equity capital with conventional senior lending.",
+    "demo-buyer-2",
+  );
+}
+
 export function seed(d: DatabaseSync, directory: string) {
   if (d.prepare("SELECT id FROM users WHERE id='demo-advisor'").get()) {
+    syncDemoVerification(d);
     syncDemoDocuments(d, directory);
     syncDemoBuyerProjects(d);
     syncDemoMandates(d);
@@ -593,6 +653,7 @@ export function seed(d: DatabaseSync, directory: string) {
         "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'owner','active')",
       ).run(`membership-${id}`, `org-${id}`, id);
     }
+    syncDemoVerification(d);
     const deals = [
       [
         "cedar",

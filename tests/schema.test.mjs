@@ -23,6 +23,7 @@ import { internalDealNotesMigration } from "../src/lib/migrations/010_internal_d
 import { notificationsMigration } from "../src/lib/migrations/011_notifications.ts";
 import { emailProcessingLeaseMigration } from "../src/lib/migrations/012_email_processing_lease.ts";
 import { emailProcessingTokenMigration } from "../src/lib/migrations/013_email_processing_token.ts";
+import { buyerVerificationMigration } from "../src/lib/migrations/014_buyer_verification.ts";
 import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
 import { ensureBuyerFunnelBackfill } from "../src/lib/buyer-funnel.ts";
 
@@ -68,11 +69,21 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 11, name: "notifications" },
       { version: 12, name: "email_processing_lease" },
       { version: 13, name: "email_processing_token" },
+      { version: 14, name: "buyer_verification" },
     ]);
 
     seed(database, directory);
     ensureInitialMatchBackfill(database);
     ensureBuyerFunnelBackfill(database);
+    assert.equal(
+      database
+        .prepare(
+          "SELECT value FROM matching_engine_state WHERE key='verification_gate_v1'",
+        )
+        .get(),
+      undefined,
+      "verification must not have a separate persisted match backfill",
+    );
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM deals").get().count,
       6,
@@ -120,6 +131,18 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       database.prepare("SELECT COUNT(*) count FROM organization_members").get()
         .count,
       5,
+    );
+    assert.equal(
+      database
+        .prepare("SELECT COUNT(*) count FROM buyer_verification_profiles")
+        .get().count,
+      2,
+    );
+    assert.equal(
+      database
+        .prepare("SELECT is_platform_admin FROM users WHERE id='demo-advisor'")
+        .get().is_platform_admin,
+      1,
     );
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM deal_internal_notes").get()
@@ -316,7 +339,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 13);
+    assert.equal(history.length, 14);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
@@ -331,6 +354,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       { version: 11, name: "notifications" },
       { version: 12, name: "email_processing_lease" },
       { version: 13, name: "email_processing_token" },
+      { version: 14, name: "buyer_verification" },
     ]);
     assert.equal(
       database
@@ -618,6 +642,254 @@ test("an existing Phase 9 database adds notification infrastructure without losi
   } finally {
     database.close();
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an existing Phase 10 database adds buyer verification without losing marketplace data", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "succera-phase11-"));
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    const phaseTen = [
+      initialUpgrade,
+      organizationsMigration,
+      buyerProjectsMigration,
+      sellSideMandatesMigration,
+      matchingEngineMigration,
+      recommendedBuyersMigration,
+      privateTeaserDistributionMigration,
+      qualifiedDiscoveryMigration,
+      buyerFunnelMigration,
+      internalDealNotesMigration,
+      notificationsMigration,
+      emailProcessingLeaseMigration,
+      emailProcessingTokenMigration,
+    ];
+    applyMigrations(database, phaseTen);
+    seed(database, directory);
+    const longLegacyName = `Legacy ${"Acquisition Holdings ".repeat(20)}`;
+    assert.ok(longLegacyName.length > 200);
+    database
+      .prepare(
+        "UPDATE organizations SET verification_status='verified' WHERE id='org-demo-buyer'",
+      )
+      .run();
+    database
+      .prepare(
+        "UPDATE organizations SET verification_status='legacy_future_status' WHERE id='org-demo-buyer-2'",
+      )
+      .run();
+    database
+      .prepare(
+        `INSERT INTO organizations(
+          id,name,slug,organization_type,province,verification_status
+        ) VALUES('legacy-long-buyer',?,?, 'buyer','Ontario','verified')`,
+      )
+      .run(longLegacyName, "legacy-long-buyer");
+    database
+      .prepare(
+        `INSERT INTO organizations(
+          id,name,slug,organization_type,province,verification_status
+        ) VALUES('legacy-unknown-buyer','Legacy Unknown Buyer','legacy-unknown-buyer','buyer','Québec','legacy_future_status')`,
+      )
+      .run();
+    ensureInitialMatchBackfill(database);
+    const before = {
+      users: database.prepare("SELECT COUNT(*) count FROM users").get().count,
+      deals: database.prepare("SELECT COUNT(*) count FROM deals").get().count,
+      projects: database
+        .prepare("SELECT COUNT(*) count FROM buyer_projects")
+        .get().count,
+      organizations: database
+        .prepare("SELECT COUNT(*) count FROM organizations")
+        .get().count,
+      notifications: database
+        .prepare("SELECT COUNT(*) count FROM notifications")
+        .get().count,
+      matches: database.prepare("SELECT COUNT(*) count FROM deal_matches").get()
+        .count,
+    };
+    const matchBefore = database
+      .prepare(
+        `SELECT id,deal_id,buyer_project_id,buyer_organization_id,score,
+           eligible,score_breakdown_json,status,created_at,updated_at
+         FROM deal_matches ORDER BY id LIMIT 1`,
+      )
+      .get();
+    assert.ok(matchBefore, "Phase 10 fixture should contain an existing match");
+
+    applyMigrations(database, [...phaseTen, buyerVerificationMigration]);
+
+    assert.deepEqual(
+      {
+        users: database.prepare("SELECT COUNT(*) count FROM users").get().count,
+        deals: database.prepare("SELECT COUNT(*) count FROM deals").get().count,
+        projects: database
+          .prepare("SELECT COUNT(*) count FROM buyer_projects")
+          .get().count,
+        organizations: database
+          .prepare("SELECT COUNT(*) count FROM organizations")
+          .get().count,
+        notifications: database
+          .prepare("SELECT COUNT(*) count FROM notifications")
+          .get().count,
+        matches: database
+          .prepare("SELECT COUNT(*) count FROM deal_matches")
+          .get().count,
+      },
+      before,
+    );
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 14,
+      name: "buyer_verification",
+    });
+    assert.equal(
+      database
+        .prepare("SELECT COUNT(*) count FROM buyer_verification_profiles")
+        .get().count,
+      database
+        .prepare(
+          `SELECT COUNT(*) count FROM organizations
+           WHERE organization_type IN (
+             'buyer','private_equity','family_office','search_fund',
+             'independent_sponsor','strategic'
+           )`,
+        )
+        .get().count,
+    );
+    assert.deepEqual(
+      database
+        .prepare(
+          `SELECT id,verification_status FROM organizations
+           WHERE id IN (
+             'legacy-long-buyer','legacy-unknown-buyer',
+             'org-demo-buyer','org-demo-buyer-2'
+           ) ORDER BY id`,
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      [
+        { id: "legacy-long-buyer", verification_status: "verified_acquirer" },
+        { id: "legacy-unknown-buyer", verification_status: "unverified" },
+        { id: "org-demo-buyer", verification_status: "verified_acquirer" },
+        { id: "org-demo-buyer-2", verification_status: "unverified" },
+      ],
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT legal_name FROM buyer_verification_profiles WHERE organization_id='legacy-long-buyer'",
+        )
+        .get().legal_name,
+      longLegacyName,
+    );
+    assert.deepEqual(
+      database
+        .prepare(
+          `SELECT id,deal_id,buyer_project_id,buyer_organization_id,score,
+             eligible,score_breakdown_json,status,created_at,updated_at
+           FROM deal_matches ORDER BY id LIMIT 1`,
+        )
+        .get(),
+      matchBefore,
+      "existing matches must not be rewritten during verification migration",
+    );
+
+    const historyAfterUpgrade = getMigrationHistory(database);
+    const schemaVersionAfterUpgrade = database
+      .prepare("PRAGMA schema_version")
+      .get().schema_version;
+    const changesAfterUpgrade = database
+      .prepare("SELECT total_changes() changes")
+      .get().changes;
+    applyMigrations(database, [...phaseTen, buyerVerificationMigration]);
+    assert.deepEqual(getMigrationHistory(database), historyAfterUpgrade);
+    assert.equal(
+      database.prepare("PRAGMA schema_version").get().schema_version,
+      schemaVersionAfterUpgrade,
+      "re-running Phase 11 initialization must not change the schema",
+    );
+    assert.equal(
+      database.prepare("SELECT total_changes() changes").get().changes,
+      changesAfterUpgrade,
+      "re-running Phase 11 initialization must not write to the database",
+    );
+
+    seed(database, directory);
+    seed(database, directory);
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM deal_matches").get().count,
+      before.matches,
+      "repeated initialization must preserve existing matches",
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT legal_name FROM buyer_verification_profiles WHERE organization_id='legacy-long-buyer'",
+        )
+        .get().legal_name,
+      longLegacyName,
+      "repeated initialization must preserve the legacy legal name",
+    );
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("buyer verification schema constrains statuses, decisions, and cheque ranges", () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    runMigrations(database);
+    database
+      .prepare(
+        "INSERT INTO users(id,email,password_hash,name,company,role) VALUES('reviewer','reviewer@example.test','hash','Reviewer','Succera','advisor')",
+      )
+      .run();
+    database
+      .prepare(
+        "INSERT INTO users(id,email,password_hash,name,company,role) VALUES('buyer','buyer@example.test','hash','Buyer','Buyer Co.','buyer')",
+      )
+      .run();
+    database
+      .prepare(
+        "INSERT INTO organizations(id,name,slug,organization_type) VALUES('buyer-org','Buyer Co.','buyer-co','buyer')",
+      )
+      .run();
+
+    assert.throws(() =>
+      database
+        .prepare(
+          "UPDATE organizations SET verification_status='accredited' WHERE id='buyer-org'",
+        )
+        .run(),
+    );
+    assert.throws(() =>
+      database
+        .prepare(
+          `INSERT INTO buyer_verification_profiles(
+             organization_id,min_equity_check,max_equity_check
+           ) VALUES('buyer-org',200,100)`,
+        )
+        .run(),
+    );
+    database
+      .prepare(
+        "INSERT INTO buyer_verification_profiles(organization_id,legal_name) VALUES('buyer-org','Buyer Co. Inc.')",
+      )
+      .run();
+    assert.throws(() =>
+      database
+        .prepare(
+          `INSERT INTO verification_reviews(
+             id,organization_id,reviewer_user_id,previous_status,decision,notes
+           ) VALUES('review','buyer-org','reviewer','unverified','accredited','Reviewed')`,
+        )
+        .run(),
+    );
+  } finally {
+    database.close();
   }
 });
 

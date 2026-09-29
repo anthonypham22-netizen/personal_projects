@@ -1387,7 +1387,15 @@ test("deal managers can curate recommended buyers without granting access", () =
     false,
   );
 
-  const matchIds = ownerMatches.slice(0, 2).map((match) => match.id);
+  const revokedBuyerOrganizationId = workspace(buyer).organization.id;
+  const curatedMatches = [...ownerMatches]
+    .sort(
+      (left, right) =>
+        Number(left.buyer_organization_id === revokedBuyerOrganizationId) -
+        Number(right.buyer_organization_id === revokedBuyerOrganizationId),
+    )
+    .slice(0, 2);
+  const matchIds = curatedMatches.map((match) => match.id);
   const accessBefore = one<{ count: number }>(
     "SELECT COUNT(*) count FROM access WHERE deal_id='cedar'",
   )!.count;
@@ -1441,7 +1449,8 @@ test("deal managers can curate recommended buyers without granting access", () =
       .buyer_funnels?.find((funnel) => funnel.deal_id === "cedar")
       ?.buyers.find(
         (entry) =>
-          entry.buyer_organization_id === ownerMatches[0].buyer_organization_id,
+          entry.buyer_organization_id ===
+          curatedMatches[0].buyer_organization_id,
       )?.outcome,
     "Active",
     "restoring a recommendation must supersede its historical exclusion outcome",
@@ -1772,6 +1781,62 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
       keywords: ["retail"],
     },
   });
+  const verificationReviewerId = sessionUser(
+    register({
+      name: "Registered Verification Reviewer",
+      company: `Platform Operations ${suffix}`,
+      email: `verification-reviewer-${suffix}@example.test`,
+      password: "verification-reviewer-password-2026",
+      role: "advisor",
+    }),
+  )!.id;
+  run(
+    "UPDATE users SET is_platform_admin=1 WHERE id=?",
+    verificationReviewerId,
+  );
+  const verificationReviewer = one<User>(
+    "SELECT * FROM users WHERE id=?",
+    verificationReviewerId,
+  )!;
+  const verifyBuyer = (candidate: User, name: string, website: string) => {
+    mutate(candidate, {
+      action: "updateBuyerVerificationProfile",
+      data: {
+        legal_name: name,
+        website,
+        buyer_type: "private_equity",
+        principals: "Avery Morgan, Managing Partner",
+        acquisition_history:
+          "Completed Canadian acquisitions with operating oversight.",
+        capital_source: "Committed private investment capital.",
+        min_equity_check: 1_000_000,
+        max_equity_check: 20_000_000,
+        financing_approach: "Equity capital with senior acquisition financing.",
+      },
+    });
+    mutate(candidate, { action: "submitBuyerVerification", data: {} });
+    const submissionRevision =
+      workspace(candidate).buyer_verification_profile?.submission_revision;
+    mutate(verificationReviewer, {
+      action: "reviewBuyerVerification",
+      data: {
+        organization_id: workspace(candidate).organization.id,
+        submission_revision: submissionRevision,
+        decision: "firm_verified",
+        notes: "Firm identity reviewed for Qualified Discovery testing.",
+      },
+    });
+  };
+  verifyBuyer(
+    qualifiedBuyer,
+    `Qualified Capital ${suffix} Inc.`,
+    `https://qualified-${suffix}.example.test`,
+  );
+  verifyBuyer(
+    unmatchedBuyer,
+    `Unmatched Capital ${suffix} Inc.`,
+    `https://unmatched-${suffix}.example.test`,
+  );
   const sellerToken = register({
     name: "Discovery Seller",
     company: `Discovery Software ${suffix}`,
@@ -1939,6 +2004,73 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
       message,
     },
   });
+  const approvedRequestCountBeforeDowngrade = workspace(
+    seller,
+  ).introduction_requests.filter(
+    (candidate) => candidate.deal_id === approvedDealId,
+  ).length;
+  mutate(qualifiedBuyer, {
+    action: "updateBuyerVerificationProfile",
+    data: {
+      legal_name: `Qualified Capital ${suffix} Inc.`,
+      website: `https://qualified-downgraded-${suffix}.example.test`,
+      buyer_type: "private_equity",
+      principals: "Avery Morgan, Managing Partner",
+      acquisition_history:
+        "Completed Canadian acquisitions with operating oversight.",
+      capital_source: "Committed private investment capital.",
+      min_equity_check: 1_000_000,
+      max_equity_check: 20_000_000,
+      financing_approach: "Equity capital with senior acquisition financing.",
+    },
+  });
+  assert.equal(
+    workspace(qualifiedBuyer).organization.verification_status,
+    "unverified",
+  );
+  assert.throws(
+    () =>
+      mutate(qualifiedBuyer, {
+        action: "requestIntroduction",
+        data: {
+          deal_id: approvedDealId,
+          buyer_project_id: project.id,
+          message,
+        },
+      }),
+    /not reached|required/i,
+  );
+  assert.equal(
+    workspace(seller).introduction_requests.filter(
+      (candidate) => candidate.deal_id === approvedDealId,
+    ).length,
+    approvedRequestCountBeforeDowngrade,
+    "a downgraded buyer cannot create a new introduction request",
+  );
+  assert.equal(membership(approvedDealId, qualifiedBuyer.id), undefined);
+  assert.throws(
+    () =>
+      mutate(seller, {
+        action: "reviewIntroduction",
+        data: {
+          deal_id: approvedDealId,
+          introduction_request_id: approvedRequest.id,
+          status: "approved",
+        },
+      }),
+    /no longer meets|required/i,
+  );
+  assert.equal(
+    membership(approvedDealId, qualifiedBuyer.id),
+    undefined,
+    "approval after downgrade must not grant access",
+  );
+
+  verifyBuyer(
+    qualifiedBuyer,
+    `Qualified Capital ${suffix} Inc.`,
+    `https://qualified-restored-${suffix}.example.test`,
+  );
   mutate(seller, {
     action: "reviewIntroduction",
     data: {

@@ -1,4 +1,21 @@
 import { test, expect } from "@playwright/test";
+import { DatabaseSync } from "node:sqlite";
+import path from "node:path";
+
+function provisionPlatformReviewer(email: string) {
+  const database = new DatabaseSync(
+    path.resolve("test-results/app-data/northlane.sqlite"),
+  );
+  try {
+    database.exec("PRAGMA busy_timeout=5000");
+    const result = database
+      .prepare("UPDATE users SET is_platform_admin=1 WHERE email=?")
+      .run(email);
+    expect(result.changes).toBe(1);
+  } finally {
+    database.close();
+  }
+}
 
 test("public website connects to all three registration journeys", async ({
   page,
@@ -438,6 +455,78 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
     },
   });
   expect(projectResponse.status()).toBe(200);
+  const buyerWorkspace = await (
+    await page.request.get("/api/workspace")
+  ).json();
+  const verificationProfile = await page.request.post("/api/workspace", {
+    headers,
+    data: {
+      action: "updateBuyerVerificationProfile",
+      data: {
+        legal_name: `${buyerFirm} Inc.`,
+        website: `https://maple-ridge-${suffix}.example.test`,
+        buyer_type: "private_equity",
+        principals: "Discovery Buyer, Managing Partner",
+        acquisition_history:
+          "Completed Canadian software acquisitions with operating oversight.",
+        capital_source: "Committed private investment capital.",
+        min_equity_check: 2_000_000,
+        max_equity_check: 20_000_000,
+        financing_approach: "Equity capital with senior acquisition financing.",
+      },
+    },
+  });
+  expect(verificationProfile.status()).toBe(200);
+  expect(
+    (
+      await page.request.post("/api/workspace", {
+        headers,
+        data: { action: "submitBuyerVerification", data: {} },
+      })
+    ).status(),
+  ).toBe(200);
+  const submittedBuyerWorkspace = await (
+    await page.request.get("/api/workspace")
+  ).json();
+  await page.request.post("/api/auth", {
+    headers,
+    data: { action: "logout" },
+  });
+  const reviewerEmail = `discovery-reviewer-${suffix}@example.test`;
+  expect(
+    (
+      await page.request.post("/api/auth", {
+        headers,
+        data: {
+          action: "register",
+          name: "Discovery Verification Reviewer",
+          company: `Platform Operations ${suffix}`,
+          email: reviewerEmail,
+          password,
+          role: "advisor",
+        },
+      })
+    ).status(),
+  ).toBe(200);
+  provisionPlatformReviewer(reviewerEmail);
+  expect(
+    (
+      await page.request.post("/api/workspace", {
+        headers,
+        data: {
+          action: "reviewBuyerVerification",
+          data: {
+            organization_id: buyerWorkspace.organization.id,
+            submission_revision:
+              submittedBuyerWorkspace.buyer_verification_profile
+                .submission_revision,
+            decision: "firm_verified",
+            notes: "Firm identity reviewed for the Qualified Discovery test.",
+          },
+        },
+      })
+    ).status(),
+  ).toBe(200);
   await page.request.post("/api/auth", {
     headers,
     data: { action: "logout" },
@@ -585,16 +674,16 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL(/\/app$/);
-  const buyerWorkspace = await (
+  const finalBuyerWorkspace = await (
     await page.request.get("/api/workspace")
   ).json();
   expect(
-    buyerWorkspace.access.find(
+    finalBuyerWorkspace.access.find(
       (candidate: { deal_id: string }) => candidate.deal_id === dealId,
     )?.status,
   ).toBe("requested");
   expect(
-    buyerWorkspace.deals.find(
+    finalBuyerWorkspace.deals.find(
       (candidate: { id: string }) => candidate.id === dealId,
     ).company_name,
   ).toBe("Confidential company");
@@ -865,6 +954,112 @@ test("a registered account receives an editable firm profile and team membership
   await expect(
     page.getByText("Search fund", { exact: true }).first(),
   ).toBeVisible();
+});
+
+test("buyer submits a verification profile and an internal reviewer records the decision", async ({
+  page,
+}) => {
+  const suffix = Date.now();
+  const firm = `Verification Capital ${suffix}`;
+  const headers = { Origin: "http://localhost:3000" };
+  expect(
+    (
+      await page.request.post("/api/auth", {
+        headers,
+        data: {
+          action: "register",
+          name: "Casey Morgan",
+          company: firm,
+          email: `verification-buyer-${suffix}@example.test`,
+          password: "verification-password-2026",
+          role: "buyer",
+        },
+      })
+    ).status(),
+  ).toBe(200);
+
+  await page.goto("/app/verification");
+  await expect(
+    page.getByRole("heading", { name: "Build buyer credibility." }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Unverified", { exact: true }).first(),
+  ).toBeVisible();
+  await page.getByLabel("Legal firm name").fill(`${firm} Inc.`);
+  await page
+    .getByLabel("Website")
+    .fill(`https://verification-${suffix}.example.test`);
+  await page.getByLabel("Buyer type").selectOption("private_equity");
+  await page.getByLabel("Principals").fill("Casey Morgan, Managing Partner");
+  await page
+    .getByLabel("Acquisition history")
+    .fill(
+      "Two Canadian business-services acquisitions with operating oversight.",
+    );
+  await page
+    .getByLabel("Capital source")
+    .fill("Committed private investment capital from a closed fund.");
+  await page.getByLabel("Typical minimum equity cheque (CAD)").fill("2000000");
+  await page.getByLabel("Typical maximum equity cheque (CAD)").fill("15000000");
+  await page
+    .getByLabel("Financing approach")
+    .fill("Equity capital supported by senior acquisition financing.");
+  await page.getByRole("button", { name: "Save verification profile" }).click();
+  await expect(
+    page.getByRole("status").getByText("Verification profile saved."),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Submit for internal review" })
+    .click();
+  await expect(page.getByText("Internal review in progress")).toBeVisible();
+
+  await page.request.post("/api/auth", {
+    headers,
+    data: { action: "logout" },
+  });
+  const reviewerEmail = `verification-reviewer-${suffix}@example.test`;
+  expect(
+    (
+      await page.request.post("/api/auth", {
+        headers,
+        data: {
+          action: "register",
+          name: "Verification Operations Reviewer",
+          company: `Platform Operations ${suffix}`,
+          email: reviewerEmail,
+          password: "verification-password-2026",
+          role: "advisor",
+        },
+      })
+    ).status(),
+  ).toBe(200);
+  provisionPlatformReviewer(reviewerEmail);
+  await page.goto("/app/verification");
+  await expect(
+    page.getByRole("heading", { name: "Review buyer credibility." }),
+  ).toBeVisible();
+  const review = page.getByRole("article").filter({ hasText: firm });
+  await expect(review).toContainText(`${firm} Inc.`);
+  await review.getByLabel("Decision").selectOption("firm_verified");
+  await review
+    .getByLabel("Internal review notes")
+    .fill("Firm identity and public operating website reviewed.");
+  await review
+    .getByRole("button", { name: "Record verification decision" })
+    .click();
+  await expect(
+    page.getByText("Buyer verification decision recorded."),
+  ).toBeVisible();
+  await expect(
+    page.locator(".verification-history").getByRole("article").filter({
+      hasText: firm,
+    }),
+  ).toContainText("Firm verified");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
 });
 
 test("unauthenticated downloads and foreign-origin mutations are rejected", async ({
