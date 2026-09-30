@@ -16,6 +16,14 @@ This list records concrete gaps in the implemented MVP. It is not a claim of com
 - Define owner representation authority, advisor assignment/acceptance, member removal, and conflict-of-interest handling.
 - The app now includes an internal buyer-firm evidence review and audit trail. Add independent identity, authority, and buyer-capital verification before describing participants as legally accredited, independently verified, or guaranteed to have funds.
 
+## Public network and discovery
+
+- Review migration `022_public_network` against a production-like copy and confirm every organization has a private public-profile row without changing active mandates or confidential records.
+- Keep `PUBLIC_NETWORK_INDEXING_ENABLED=false` for local, staging, preview, and review hostnames. Enable indexing only on the approved production domain after reviewing public copy, canonical metadata, privacy notices, removal handling, and `robots.txt`/sitemap output.
+- Verify that advisor and eligible buyer profiles are explicitly opt-in, operating-business seller firms remain absent, and public transaction pages require both firm-level and independently verified transaction-level opt-in.
+- Confirm public routes never expose active deal identifiers, legal company names, confidential summaries, buyer projects, documents, messages, seller/advisor identities, or internal verification evidence. Test anonymous requests and direct alternate slugs.
+- Treat demo public profiles and transactions as fictional examples only. Never copy staging demo data, public-network taxonomy, or generated sitemap entries into production.
+
 ## Documents and transactions
 
 - Integrate an e-signature provider with verified webhooks, idempotency, signer authority, and evidence retention if signing is to occur inside the app.

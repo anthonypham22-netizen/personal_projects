@@ -135,6 +135,12 @@ Visible website, auth screens, portal labels, metadata, favicon, new demo-file h
 
 The current full verification totals above include the Succera title and logo assertions. Changes remain local and uncommitted; no shipping or public deployment was performed. Name/domain availability has not been checked.
 
+## Phase 18 public network
+
+Phase 18 adds migration `022_public_network`, opt-in public firm profiles for advisors and eligible buyer organizations, normalized industry/province directory filters, and anonymized public pages for independently verified transaction tombstones. Public profile and transaction publication are separate opt-ins; operating-business seller organizations and active deal records remain private. Demo seeding adds only clearly fictional public examples and leaves self-reported transaction history private.
+
+`PUBLIC_NETWORK_INDEXING_ENABLED=false` is the safe preview and staging setting: public pages remain available for review but emit `noindex`, `robots.txt` disallows crawling, and the sitemap excludes private application and deal-room routes. Production indexing requires an explicit content, privacy, canonical-metadata, removal-workflow, and domain review. Phase 18 validation counts and browser results should be recorded here after the complete suite is run; none are asserted in this section yet.
+
 ## Required continuation
 
 Run `npm run dev` from the repository directory to restart the preview, then open `http://localhost:3000`. The server must remain running for that address to work. Stop it before running `npm run test:e2e`, which starts an isolated server on the same port. Further workflow testing and the live-launch requirements remain separate milestones; passing these checks does not make the service ready for confidential real-world transactions.

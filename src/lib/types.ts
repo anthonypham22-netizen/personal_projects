@@ -208,6 +208,56 @@ export type BuyerFirmProfile = {
   updated_at: string;
   can_manage: boolean;
 };
+export type PublicOrganizationProfile = {
+  organization_id: string;
+  is_public: boolean;
+  headline: string;
+  public_description: string;
+  show_website: boolean;
+  show_province: boolean;
+  show_verified_transactions: boolean;
+  revision: number;
+  updated_at: string;
+  can_manage: boolean;
+  industries: string[];
+  locations: string[];
+};
+export type PublicFirmKind = "buyer" | "advisor";
+export type PublicFirmSummary = {
+  slug: string;
+  name: string;
+  kind: PublicFirmKind;
+  organization_type: OrganizationType;
+  headline: string;
+  public_description: string;
+  website: string | null;
+  province: string | null;
+  industries: string[];
+  locations: string[];
+  verification_label: string | null;
+};
+export type PublicFirmDetail = PublicFirmSummary & {
+  verified_transaction_count: number;
+  transactions: PublicTransaction[];
+};
+export type PublicTransaction = {
+  public_slug: string;
+  industry: string;
+  province: string;
+  enterprise_value: number | null;
+  closed_date: string;
+  verification_label: "Succera verified";
+  buyer_firm_slug: string;
+  buyer_firm_name: string;
+};
+export type PublicDirectoryAggregate = {
+  value: string;
+  count: number;
+};
+export type PublicDirectoryDetail = {
+  value: string;
+  firms: PublicFirmSummary[];
+};
 export type ClosedTransactionVerificationLabel =
   "Self-reported" | "Succera verified";
 export type ClosedTransaction = {
@@ -225,6 +275,8 @@ export type ClosedTransaction = {
   created_by_user_id: string | null;
   verified_by_user_id: string | null;
   verified_at: string | null;
+  public_slug: string | null;
+  public_opt_in: number;
   created_at: string;
   updated_at: string;
   can_manage: boolean;
@@ -743,6 +795,7 @@ export type WorkspaceData = {
   notification_preferences: NotificationPreferences;
   buyer_verification_profile?: BuyerVerificationProfile;
   buyer_firm_profile?: BuyerFirmProfile;
+  public_network_profile?: PublicOrganizationProfile;
   closed_transactions: ClosedTransaction[];
   is_platform_admin: boolean;
   verification_admin_queue?: VerificationAdminEntry[];

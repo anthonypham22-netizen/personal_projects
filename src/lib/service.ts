@@ -41,6 +41,7 @@ import {
   type NotificationPreferences,
   type BuyerVerificationProfile,
   type BuyerFirmProfile,
+  type PublicOrganizationProfile,
   type SellerVisibleBuyerProject,
   type ClosedTransaction,
   type ClosedTransactionReviewEntry,
@@ -54,6 +55,7 @@ import {
 import { electronicSignatureCapability } from "./electronic-signature-provider";
 import { teaserSafetyCapability } from "./teaser-safety-provider";
 import { teaserSafetyReviewInputDigest } from "./teaser-safety";
+import { slugify } from "./utils";
 import { inImmediateTransaction } from "./sqlite-transaction";
 import {
   recalculateDealMatch,
@@ -102,6 +104,7 @@ export const userColumns =
   "id,email,name,company,role,province,bio,sectors,min_revenue,max_revenue,is_demo,is_platform_admin";
 const text = (min = 1, max = 200) => z.string().trim().min(min).max(max);
 const idSchema = text(1, 100);
+const websiteUrl = z.url().max(300);
 const amount = z.coerce.number().int().min(0).max(10000000000);
 const optionalAmount = z.preprocess(
   (value) =>
@@ -139,13 +142,7 @@ const statusTextForAudit = (status: DealMatch["status"]) =>
   })[status];
 const organizationTypeFor = (role: User["role"]): OrganizationType =>
   role === "advisor" ? "advisor" : role === "owner" ? "business" : "buyer";
-const slugPart = (value: string) =>
-  value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "") || "firm";
+const slugPart = (value: string) => slugify(value, "firm");
 export const organizationFor = (userId: string) => {
   const organization = one<
     Omit<Organization, "can_manage"> & { can_manage: number }
@@ -198,6 +195,51 @@ const buyerFirmProfileFor = (
   return profile
     ? { ...profile, can_manage: organization.can_manage }
     : undefined;
+};
+const publicOrganizationProfileFor = (
+  organization: Organization,
+): PublicOrganizationProfile | undefined => {
+  const profile = one<
+    Omit<
+      PublicOrganizationProfile,
+      | "can_manage"
+      | "industries"
+      | "locations"
+      | "is_public"
+      | "show_website"
+      | "show_province"
+      | "show_verified_transactions"
+    > & {
+      is_public: number;
+      show_website: number;
+      show_province: number;
+      show_verified_transactions: number;
+    }
+  >(
+    `SELECT organization_id,is_public,headline,public_description,
+       show_website,show_province,show_verified_transactions,revision,updated_at
+     FROM organization_public_profiles WHERE organization_id=?`,
+    organization.id,
+  );
+  if (!profile) return undefined;
+  return {
+    ...profile,
+    is_public: Boolean(profile.is_public),
+    show_website: Boolean(profile.show_website),
+    show_province: Boolean(profile.show_province),
+    show_verified_transactions: Boolean(profile.show_verified_transactions),
+    industries: all<{ industry: string }>(
+      `SELECT industry FROM organization_public_industries
+       WHERE organization_id=? ORDER BY rowid`,
+      organization.id,
+    ).map(({ industry }) => industry),
+    locations: all<{ province: string }>(
+      `SELECT province FROM organization_public_locations
+       WHERE organization_id=? ORDER BY rowid`,
+      organization.id,
+    ).map(({ province }) => province),
+    can_manage: organization.can_manage,
+  };
 };
 const transactionVerificationLabel = (verified: number) =>
   verified ? ("Succera verified" as const) : ("Self-reported" as const);
@@ -977,6 +1019,11 @@ export function register(input: unknown) {
       );
     database
       .prepare(
+        "INSERT OR IGNORE INTO organization_public_profiles(organization_id) VALUES(?)",
+      )
+      .run(organizationId);
+    database
+      .prepare(
         "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'owner','active')",
       )
       .run(randomUUID(), organizationId, id);
@@ -1104,7 +1151,7 @@ const buyerProjectNumber = (maximum: number, integer = true) =>
   );
 const buyerVerificationProfileSchema = z.object({
   legal_name: text(2, 200),
-  website: z.url().max(300),
+  website: websiteUrl,
   buyer_type: z.enum(BUYER_ORGANIZATION_TYPES),
   principals: text(5, 4000),
   acquisition_history: text(10, 5000),
@@ -1149,6 +1196,20 @@ const buyerProjectKeywordList = z.preprocess(
       ? value.map((item) => (typeof item === "string" ? item.trim() : item))
       : value,
   z.array(z.string().min(1).max(100)).max(100),
+);
+const publicIndustryList = z.preprocess(
+  (value) =>
+    Array.isArray(value)
+      ? value.map((item) => (typeof item === "string" ? item.trim() : item))
+      : value,
+  z.array(z.enum(SECTORS)).max(SECTORS.length),
+);
+const publicLocationList = z.preprocess(
+  (value) =>
+    Array.isArray(value)
+      ? value.map((item) => (typeof item === "string" ? item.trim() : item))
+      : value,
+  z.array(z.enum(PROVINCES)).max(PROVINCES.length),
 );
 const buyerProjectFields = {
   name: text(1, 160),
@@ -1775,6 +1836,7 @@ export function workspace(user: User): WorkspaceData {
   const buyerFirmProfile = isEligibleBuyerOrganization(organization)
     ? buyerFirmProfileFor(organization)
     : undefined;
+  const publicNetworkProfile = publicOrganizationProfileFor(organization);
   const closedTransactions = isEligibleBuyerOrganization(organization)
     ? closedTransactionsForOrganization(organization)
     : [];
@@ -1815,6 +1877,9 @@ export function workspace(user: User): WorkspaceData {
       ? { buyer_verification_profile: buyerVerificationProfile }
       : {}),
     ...(buyerFirmProfile ? { buyer_firm_profile: buyerFirmProfile } : {}),
+    ...(publicNetworkProfile
+      ? { public_network_profile: publicNetworkProfile }
+      : {}),
     closed_transactions: closedTransactions,
     is_platform_admin: platformAdmin,
     ...(platformAdmin
@@ -2047,6 +2112,177 @@ export function mutate(
         );
     });
     return { message: "Seller-facing firm profile saved." };
+  }
+  if (action === "updatePublicNetworkProfile") {
+    const organization = organizationFor(user.id);
+    if (!organization || !organization.can_manage)
+      throw new AppError(
+        "Only organization owners and administrators can update the public network profile.",
+        403,
+      );
+    const profile = parse(
+      z.object({
+        is_public: z.boolean(),
+        headline: text(0, 160),
+        public_description: text(0, 4000),
+        show_website: z.boolean(),
+        show_province: z.boolean(),
+        show_verified_transactions: z.boolean(),
+        industries: publicIndustryList,
+        locations: publicLocationList,
+        revision: z.coerce.number().int().min(1),
+      }),
+      data,
+    );
+    if (
+      new Set(profile.industries).size !== profile.industries.length ||
+      new Set(profile.locations).size !== profile.locations.length
+    )
+      throw new AppError("Public industries and locations must not repeat.");
+    const publicProfileEligible =
+      organization.organization_type === "advisor" ||
+      isEligibleBuyerOrganization(organization);
+    if (profile.is_public && !publicProfileEligible)
+      throw new AppError(
+        "Public network profiles are available only to acquisition firms and M&A advisors.",
+        403,
+      );
+    if (
+      profile.is_public &&
+      (!profile.headline.trim() || !profile.public_description.trim())
+    )
+      throw new AppError(
+        "Add a public headline and description before publishing the profile.",
+      );
+    const database = db();
+    inImmediateTransaction(database, () => {
+      const updated = database
+        .prepare(
+          `UPDATE organization_public_profiles SET
+             is_public=?,headline=?,public_description=?,show_website=?,
+             show_province=?,show_verified_transactions=?,updated_by_user_id=?,
+             revision=revision+1,updated_at=CURRENT_TIMESTAMP
+           WHERE organization_id=? AND revision=?`,
+        )
+        .run(
+          profile.is_public ? 1 : 0,
+          profile.headline,
+          profile.public_description,
+          profile.show_website ? 1 : 0,
+          profile.show_province ? 1 : 0,
+          profile.show_verified_transactions ? 1 : 0,
+          user.id,
+          organization.id,
+          profile.revision,
+        );
+      if (!updated.changes)
+        throw new AppError(
+          "This public network profile changed in another session. Refresh and try again.",
+          409,
+        );
+      database
+        .prepare(
+          "DELETE FROM organization_public_industries WHERE organization_id=?",
+        )
+        .run(organization.id);
+      const insertIndustry = database.prepare(
+        "INSERT INTO organization_public_industries(organization_id,industry) VALUES(?,?)",
+      );
+      for (const industry of profile.industries)
+        insertIndustry.run(organization.id, industry);
+      database
+        .prepare(
+          "DELETE FROM organization_public_locations WHERE organization_id=?",
+        )
+        .run(organization.id);
+      const insertLocation = database.prepare(
+        "INSERT INTO organization_public_locations(organization_id,province) VALUES(?,?)",
+      );
+      for (const province of profile.locations)
+        insertLocation.run(organization.id, province);
+    });
+    return { message: "Public network profile saved." };
+  }
+  if (action === "setClosedTransactionPublic") {
+    const organization = organizationFor(user.id);
+    if (!organization || !organization.can_manage)
+      throw new AppError(
+        "Only organization owners and administrators can publish transaction history.",
+        403,
+      );
+    const p = parse(
+      z.object({ transaction_id: idSchema, public_opt_in: z.boolean() }),
+      data,
+    );
+    const database = db();
+    inImmediateTransaction(database, () => {
+      const target = database
+        .prepare(
+          `SELECT ct.id,ct.public_slug,ct.verified,ct.industry,ct.province,
+             profile.is_public,profile.show_verified_transactions
+           FROM closed_transactions ct
+           LEFT JOIN organization_public_profiles profile
+             ON profile.organization_id=ct.buyer_organization_id
+           WHERE ct.id=? AND ct.buyer_organization_id=?`,
+        )
+        .get(p.transaction_id, organization.id) as
+        | {
+            id: string;
+            public_slug: string | null;
+            verified: number;
+            industry: string;
+            province: string;
+            is_public: number | null;
+            show_verified_transactions: number | null;
+          }
+        | undefined;
+      if (!target)
+        throw new AppError(
+          "Transaction record is not available to your organization.",
+          404,
+        );
+      if (!p.public_opt_in) {
+        database
+          .prepare(
+            `UPDATE closed_transactions
+             SET public_opt_in=0,updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+          )
+          .run(target.id);
+        return;
+      }
+      if (!isEligibleBuyerOrganization(organization))
+        throw new AppError(
+          "Only eligible buyer organizations can publish transaction history.",
+          403,
+        );
+      if (!target.verified)
+        throw new AppError(
+          "Only independently verified transactions can be published.",
+          409,
+        );
+      if (!target.is_public || !target.show_verified_transactions)
+        throw new AppError(
+          "Enable the public profile and verified transactions before publishing transaction history.",
+          409,
+        );
+      const slug =
+        target.public_slug ||
+        `${slugPart(target.industry)}-${slugPart(target.province)}-${slugPart(
+          target.id,
+        ).slice(0, 32)}`;
+      database
+        .prepare(
+          `UPDATE closed_transactions
+           SET public_slug=?,public_opt_in=1,updated_at=CURRENT_TIMESTAMP
+           WHERE id=? AND verified=1`,
+        )
+        .run(slug, target.id);
+    });
+    return {
+      message: p.public_opt_in
+        ? "Verified transaction published to the public network."
+        : "Transaction removed from the public network.",
+    };
   }
   if (action === "updateBuyerVerificationProfile") {
     const organization = organizationFor(user.id);
@@ -2322,7 +2558,7 @@ export function mutate(
       z.object({
         name: text(2, 160),
         organization_type: z.enum(ORGANIZATION_TYPES),
-        website: z.union([z.literal(""), z.url().max(300)]),
+        website: z.union([z.literal(""), websiteUrl]),
         province: z.union([z.enum(PROVINCES), z.literal("")]),
         description: text(0, 2000),
       }),

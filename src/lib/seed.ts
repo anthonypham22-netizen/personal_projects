@@ -652,11 +652,160 @@ function syncDemoClosedTransactions(d: DatabaseSync) {
   );
 }
 
+type DemoPublicNetworkProfile = {
+  organizationId: string;
+  updatedByUserId: string;
+  headline: string;
+  description: string;
+  showWebsite: boolean;
+  showProvince: boolean;
+  showVerifiedTransactions: boolean;
+  industries: readonly string[];
+  locations: readonly string[];
+};
+
+const demoPublicNetworkProfiles: readonly DemoPublicNetworkProfile[] = [
+  {
+    organizationId: "org-demo-advisor",
+    updatedByUserId: "demo-advisor",
+    headline: "Independent Canadian M&A advice for enduring businesses",
+    description:
+      "Northstar Advisory supports owners and management teams through succession planning, buyer outreach, and disciplined transaction execution across Canada.",
+    showWebsite: false,
+    showProvince: true,
+    showVerifiedTransactions: false,
+    industries: ["Business services", "Manufacturing", "Healthcare"],
+    locations: ["Ontario", "Québec", "Alberta"],
+  },
+  {
+    organizationId: "org-demo-advisor-2",
+    updatedByUserId: "demo-advisor-2",
+    headline: "Western Canadian succession and acquisition advisory",
+    description:
+      "Pacific Partners helps Canadian business owners prepare for thoughtful succession and connects qualified counterparties in selected lower-middle-market sectors.",
+    showWebsite: false,
+    showProvince: true,
+    showVerifiedTransactions: false,
+    industries: ["Business services", "Food & beverage", "Manufacturing"],
+    locations: ["British Columbia", "Alberta", "Saskatchewan"],
+  },
+  {
+    organizationId: "org-demo-buyer",
+    updatedByUserId: "demo-buyer",
+    headline: "Patient capital for enduring Canadian businesses",
+    description:
+      "Evergreen Capital Partners works with established owner-operated businesses on succession, growth, and long-term stewardship in the Canadian lower middle market.",
+    showWebsite: true,
+    showProvince: true,
+    showVerifiedTransactions: true,
+    industries: ["Business services", "Manufacturing", "Technology"],
+    locations: ["Ontario", "Alberta", "Québec"],
+  },
+  {
+    organizationId: "org-demo-buyer-2",
+    updatedByUserId: "demo-buyer-2",
+    headline: "Operator-led acquisitions across Canada",
+    description:
+      "Laurent Partners is an operator-led acquisition group focused on building lasting Canadian businesses through hands-on ownership and responsible transition planning.",
+    showWebsite: true,
+    showProvince: true,
+    showVerifiedTransactions: true,
+    industries: ["Technology", "Business services", "Manufacturing"],
+    locations: ["Québec", "Ontario"],
+  },
+];
+
+function syncDemoPublicNetwork(d: DatabaseSync) {
+  if (
+    !tableExists(d, "organization_public_profiles") ||
+    !tableExists(d, "organization_public_industries") ||
+    !tableExists(d, "organization_public_locations") ||
+    !tableExists(d, "closed_transactions")
+  )
+    return;
+
+  const ensureProfile = d.prepare(
+    "INSERT OR IGNORE INTO organization_public_profiles(organization_id) VALUES(?)",
+  );
+  const readProfile = d.prepare(
+    "SELECT revision,updated_by_user_id FROM organization_public_profiles WHERE organization_id=?",
+  );
+  const updateProfile = d.prepare(`
+    UPDATE organization_public_profiles SET
+      is_public=?,headline=?,public_description=?,show_website=?,
+      show_province=?,show_verified_transactions=?,updated_by_user_id=?,
+      revision=revision+1,updated_at=CURRENT_TIMESTAMP
+    WHERE organization_id=? AND revision=1 AND updated_by_user_id IS NULL
+  `);
+  const deleteIndustries = d.prepare(
+    "DELETE FROM organization_public_industries WHERE organization_id=?",
+  );
+  const insertIndustry = d.prepare(
+    "INSERT INTO organization_public_industries(organization_id,industry) VALUES(?,?)",
+  );
+  const deleteLocations = d.prepare(
+    "DELETE FROM organization_public_locations WHERE organization_id=?",
+  );
+  const insertLocation = d.prepare(
+    "INSERT INTO organization_public_locations(organization_id,province) VALUES(?,?)",
+  );
+
+  for (const profile of demoPublicNetworkProfiles) {
+    ensureProfile.run(profile.organizationId);
+    const existing = readProfile.get(profile.organizationId) as
+      { revision: number; updated_by_user_id: string | null } | undefined;
+    // Demo seeding establishes fictional examples once, but it must not undo a
+    // profile owner’s later privacy or taxonomy choices on app restart.
+    if (!existing || existing.revision !== 1 || existing.updated_by_user_id)
+      continue;
+    updateProfile.run(
+      1,
+      profile.headline,
+      profile.description,
+      profile.showWebsite ? 1 : 0,
+      profile.showProvince ? 1 : 0,
+      profile.showVerifiedTransactions ? 1 : 0,
+      profile.updatedByUserId,
+      profile.organizationId,
+    );
+    deleteIndustries.run(profile.organizationId);
+    for (const industry of profile.industries)
+      insertIndustry.run(profile.organizationId, industry);
+    deleteLocations.run(profile.organizationId);
+    for (const location of profile.locations)
+      insertLocation.run(profile.organizationId, location);
+  }
+
+  const publicTransactions = [
+    {
+      id: "closed-demo-evergreen-services",
+      slug: "industrial-services-ontario-evergreen-services",
+    },
+    {
+      id: "closed-demo-laurent-technology",
+      slug: "technology-quebec-laurent-technology",
+    },
+  ] as const;
+  const publishTransaction = d.prepare(`
+    UPDATE closed_transactions
+    SET public_slug=?,public_opt_in=1,updated_at=CURRENT_TIMESTAMP
+    WHERE id=? AND verified=1 AND public_slug IS NULL AND public_opt_in=0
+      AND EXISTS (
+        SELECT 1 FROM organization_public_profiles profile
+        WHERE profile.organization_id=closed_transactions.buyer_organization_id
+          AND profile.is_public=1 AND profile.show_verified_transactions=1
+      )
+  `);
+  for (const transaction of publicTransactions)
+    publishTransaction.run(transaction.slug, transaction.id);
+}
+
 export function seed(d: DatabaseSync, directory: string) {
   if (d.prepare("SELECT id FROM users WHERE id='demo-advisor'").get()) {
     syncDemoVerification(d);
     syncDemoBuyerFirmProfiles(d);
     syncDemoClosedTransactions(d);
+    syncDemoPublicNetwork(d);
     syncDemoDocuments(d, directory);
     syncDemoBuyerProjects(d);
     syncDemoMandates(d);
@@ -761,6 +910,7 @@ export function seed(d: DatabaseSync, directory: string) {
     syncDemoVerification(d);
     syncDemoBuyerFirmProfiles(d);
     syncDemoClosedTransactions(d);
+    syncDemoPublicNetwork(d);
     const deals = [
       [
         "cedar",

@@ -34,6 +34,56 @@ test("public website connects to all three registration journeys", async ({
   await expect(page.getByLabel("I’m joining as")).toHaveValue("owner");
 });
 
+test("public network exposes only opted-in firms and anonymized verified history", async ({
+  page,
+}) => {
+  await page.goto("/network");
+  await expect(page).toHaveTitle("The network · Succera");
+  await expect(
+    page.getByRole("heading", {
+      name: "Find the people behind the next chapter.",
+    }),
+  ).toBeVisible();
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+    "content",
+    /noindex/,
+  );
+  await expect(
+    page.getByText("Evergreen Capital", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Northstar Advisory", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Cedar & Co.", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Cedar Industrial Services Ltd.")).toHaveCount(0);
+  await expect(page.getByText("Atlas Logistics Inc.")).toHaveCount(0);
+
+  await page.goto("/firms/evergreen-capital-demo-buyer");
+  await expect(page).toHaveURL(/\/buyers\/evergreen-capital-demo-buyer$/);
+  await expect(
+    page.getByRole("heading", { name: "Evergreen Capital" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Verified transactions", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Fictional committed private investment fund."),
+  ).toHaveCount(0);
+
+  await page.goto(
+    "/transactions/industrial-services-ontario-evergreen-services",
+  );
+  await expect(
+    page.getByRole("heading", { name: "Industrial services acquisition" }),
+  ).toBeVisible();
+  await expect(page.getByText("Cedar Industrial Services Ltd.")).toHaveCount(0);
+
+  const robots = await page.request.get("/robots.txt");
+  expect(await robots.text()).toContain("Disallow: /");
+  const sitemap = await page.request.get("/sitemap.xml");
+  expect(await sitemap.text()).not.toContain("/app/deals");
+});
+
 test("advisor can navigate mandates and record a shared diligence task", async ({
   page,
 }) => {
@@ -944,6 +994,7 @@ test("owner can send a provider-managed electronic NDA without granting early ac
 }) => {
   await page.goto("/login");
   await page.getByRole("button", { name: "Owner demo" }).click();
+  await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/deals/harbour");
   await page.getByRole("button", { name: "Buyer access" }).click();
   const buyerCard = page.getByRole("article").filter({
@@ -1474,5 +1525,16 @@ test("mobile public page has no horizontal overflow", async ({ page }) => {
   ).toBe(true);
   await expect(
     page.getByRole("link", { name: "Find your next chapter" }),
+  ).toBeVisible();
+  await page.goto("/network");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await expect(
+    page.getByRole("heading", {
+      name: "Find the people behind the next chapter.",
+    }),
   ).toBeVisible();
 });

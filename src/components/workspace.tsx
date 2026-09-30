@@ -85,6 +85,7 @@ import {
   type NotificationPreferences,
   type NotificationType,
   type BuyerVerificationStatus,
+  type ClosedTransaction,
   type SellerVisibleClosedTransaction,
   type TeaserSafetyReview,
 } from "@/lib/types";
@@ -287,6 +288,88 @@ function TransactionTombstones({
               ? "Enterprise value not disclosed"
               : `${money(transaction.enterprise_value, false)} enterprise value`}
           </small>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function BuyerTransactionTombstones({
+  transactions,
+  canManage,
+}: {
+  transactions: ClosedTransaction[];
+  canManage: boolean;
+}) {
+  const { data } = useWorkspace();
+  const publicProfile = data.public_network_profile;
+  const canPublish = Boolean(
+    publicProfile?.is_public && publicProfile.show_verified_transactions,
+  );
+  return (
+    <div
+      className="transaction-tombstones transaction-tombstones-own"
+      role="list"
+    >
+      {transactions.map((transaction) => (
+        <article key={transaction.id} role="listitem">
+          <header>
+            <div>
+              <strong>{transaction.industry}</strong>
+              <span>
+                {transaction.province} · Closed{" "}
+                {closedDateLabel(transaction.closed_date)}
+              </span>
+            </div>
+            <Status value={transaction.verification_label} />
+          </header>
+          <p>{transaction.description}</p>
+          <small>
+            {transaction.enterprise_value === null
+              ? "Enterprise value not disclosed"
+              : `${money(transaction.enterprise_value, false)} enterprise value`}
+          </small>
+          {transaction.verified ? (
+            <div className="public-transaction-controls">
+              <div>
+                <strong>
+                  {transaction.public_opt_in
+                    ? "Published to the public network"
+                    : "Private transaction record"}
+                </strong>
+                <span>
+                  {transaction.public_opt_in
+                    ? "Only this anonymized record is visible."
+                    : "Publishing is always an explicit organization decision."}
+                </span>
+              </div>
+              {canManage && (transaction.public_opt_in || canPublish) ? (
+                <MutationForm
+                  action="setClosedTransactionPublic"
+                  extra={{
+                    transaction_id: transaction.id,
+                    public_opt_in: !Boolean(transaction.public_opt_in),
+                  }}
+                  label={
+                    transaction.public_opt_in
+                      ? "Remove from network"
+                      : "Publish verified record"
+                  }
+                >
+                  <span className="field-hint">
+                    {transaction.public_opt_in
+                      ? "This is reversible."
+                      : "No company identity or confidential materials are published."}
+                  </span>
+                </MutationForm>
+              ) : null}
+            </div>
+          ) : (
+            <p className="field-hint public-transaction-pending">
+              Publish controls appear after Succera independently verifies this
+              record.
+            </p>
+          )}
         </article>
       ))}
     </div>
@@ -5819,9 +5902,9 @@ function BuyerTransactionHistoryPanel() {
           </MutationForm>
         )}
         {transactions.length ? (
-          <TransactionTombstones
+          <BuyerTransactionTombstones
             transactions={transactions}
-            className="transaction-tombstones-own"
+            canManage={canManage}
           />
         ) : (
           <Empty
@@ -6433,6 +6516,155 @@ function VerificationPage() {
   );
 }
 
+function PublicNetworkProfilePanel() {
+  const { data } = useWorkspace();
+  const { organization, public_network_profile: profile } = data;
+  if (!profile) return null;
+  const eligible =
+    organization.organization_type === "advisor" ||
+    buyerOrganizationTypes.has(organization.organization_type);
+  const previewPath =
+    organization.organization_type === "advisor"
+      ? `/advisors/${organization.slug}`
+      : `/buyers/${organization.slug}`;
+  return (
+    <Panel title="Public network profile">
+      <div className="panel-body">
+        {!eligible ? (
+          <div className="public-settings-private-note">
+            <strong>Operating businesses stay private.</strong>
+            <p>
+              Public network profiles are currently available to acquisition
+              firms and M&A advisors. Sell-side mandates and active company
+              identities remain inside controlled workspaces.
+            </p>
+          </div>
+        ) : profile.can_manage ? (
+          <MutationForm
+            action="updatePublicNetworkProfile"
+            label="Save public profile"
+            extra={{ revision: profile.revision }}
+          >
+            <div className="public-settings-intro">
+              <div>
+                <p className="public-network-eyebrow">OPT-IN DISCOVERY</p>
+                <strong>Choose what your firm makes discoverable.</strong>
+                <p>
+                  Your firm name becomes public only when you opt in. Active
+                  deals, buyer mandates, and confidential documents are never
+                  listed here.
+                </p>
+              </div>
+              <label className="public-toggle">
+                <input
+                  type="checkbox"
+                  name="is_public"
+                  defaultChecked={profile.is_public}
+                />
+                <span>Publish profile to the public network</span>
+              </label>
+            </div>
+            <div className="form-grid">
+              <Field
+                label="Public headline"
+                name="headline"
+                value={profile.headline}
+                required={false}
+                help="One concise sentence buyers or advisors should see first."
+              />
+              <label className="full">
+                Public description
+                <textarea
+                  name="public_description"
+                  maxLength={4000}
+                  defaultValue={profile.public_description}
+                  placeholder="Describe your acquisition focus or advisory practice without confidential mandates."
+                />
+              </label>
+              <MultiSelectField
+                label="Industries"
+                name="industries"
+                options={SECTORS}
+                values={profile.industries}
+                help="Choose the public categories that best describe your work."
+              />
+              <MultiSelectField
+                label="Locations"
+                name="locations"
+                options={[...PROVINCES]}
+                values={profile.locations}
+                help="Only selected provinces appear in public directories."
+              />
+            </div>
+            <div className="public-settings-options">
+              <label className="public-checkbox-option">
+                <input
+                  type="checkbox"
+                  name="show_website"
+                  defaultChecked={profile.show_website}
+                />
+                <span>
+                  <strong>Display external link publicly</strong>
+                  <small>Link to the website in your public profile.</small>
+                </span>
+              </label>
+              <label className="public-checkbox-option">
+                <input
+                  type="checkbox"
+                  name="show_province"
+                  defaultChecked={profile.show_province}
+                />
+                <span>
+                  <strong>Display location publicly</strong>
+                  <small>Use your firm province in public profile cards.</small>
+                </span>
+              </label>
+              {organization.organization_type !== "advisor" && (
+                <label className="public-checkbox-option">
+                  <input
+                    type="checkbox"
+                    name="show_verified_transactions"
+                    defaultChecked={profile.show_verified_transactions}
+                  />
+                  <span>
+                    <strong>Show verified transactions</strong>
+                    <small>
+                      Publish only records you explicitly opt in below.
+                    </small>
+                  </span>
+                </label>
+              )}
+            </div>
+            <p className="notice">
+              Public pages are informational only. Review every field for
+              privacy before publishing; a public profile does not expose active
+              deals.
+            </p>
+          </MutationForm>
+        ) : (
+          <div className="public-settings-private-note">
+            <strong>
+              {profile.is_public
+                ? "Public profile is enabled"
+                : "Public profile is private"}
+            </strong>
+            <p>
+              Only organization owners and administrators can change public
+              network settings. Your firm’s approved public content remains
+              separate from confidential deal-room data.
+            </p>
+          </div>
+        )}
+        {eligible && profile.is_public && (
+          <Link className="public-settings-preview" href={previewPath}>
+            Preview public profile <ArrowUpRight size={15} />
+          </Link>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
 function SettingsPage() {
   const { data } = useWorkspace(),
     { user, organization } = data;
@@ -6595,6 +6827,7 @@ function SettingsPage() {
               )}
             </div>
           </Panel>
+          <PublicNetworkProfilePanel />
           <Panel title={`Team · ${data.organization_members.length}`}>
             <div className="team-list">
               {data.organization_members.map((member) => (

@@ -299,6 +299,335 @@
   .marketing-footer > div {
     @apply flex gap-5;
   }
+  .public-network-main {
+    @apply bg-slate-50;
+  }
+  .public-network-header nav {
+    @apply flex gap-6 text-sm text-slate-600;
+  }
+  .public-network-footer {
+    @apply bg-white;
+  }
+  .public-network-footer > div {
+    @apply flex flex-wrap items-center gap-5;
+  }
+  .public-network-hero {
+    @apply border-b border-emerald-950/10 bg-emerald-950 text-white;
+  }
+  .public-network-hero-inner,
+  .public-firm-hero-inner,
+  .public-transaction-hero-inner,
+  .public-directory-hero-inner {
+    @apply mx-auto max-w-7xl px-6 py-16 lg:px-10 lg:py-24;
+  }
+  .public-network-hero-inner {
+    @apply grid items-end gap-10 lg:grid-cols-[1fr_340px];
+  }
+  .public-network-eyebrow {
+    @apply mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700;
+  }
+  .public-network-hero .public-network-eyebrow {
+    @apply text-emerald-300;
+  }
+  .public-network-hero h1 {
+    @apply max-w-3xl text-5xl leading-tight lg:text-6xl;
+    font-family: Georgia, serif;
+  }
+  .public-network-hero-copy {
+    @apply mt-6 max-w-2xl text-lg leading-relaxed text-emerald-100;
+  }
+  .public-network-hero-actions {
+    @apply mt-8 flex flex-wrap gap-3;
+  }
+  .public-network-hero-actions .button-quiet {
+    @apply border-white/20 bg-white/10 text-white hover:bg-white/15;
+  }
+  .public-network-hero-note {
+    @apply rounded-2xl border border-white/15 bg-white/10 p-6 text-emerald-50;
+  }
+  .public-network-hero-note svg {
+    @apply mb-8 text-emerald-300;
+  }
+  .public-network-hero-note strong {
+    @apply block text-lg text-white;
+  }
+  .public-network-hero-note p {
+    @apply mt-2 text-sm leading-relaxed text-emerald-100;
+  }
+  .public-network-section {
+    @apply mx-auto max-w-7xl px-6 py-16 lg:px-10 lg:py-20;
+  }
+  .public-directory-section {
+    @apply border-t border-slate-200;
+  }
+  .public-section-heading {
+    @apply mb-7 flex flex-wrap items-end justify-between gap-4;
+  }
+  .public-section-heading h2 {
+    @apply text-3xl font-semibold text-slate-950;
+  }
+  .public-section-heading > span {
+    @apply text-sm text-slate-500;
+  }
+  .public-firm-grid {
+    @apply grid gap-4 md:grid-cols-2 xl:grid-cols-3;
+  }
+  .public-firm-card,
+  .public-transaction-card,
+  .public-network-card,
+  .public-directory-card {
+    @apply rounded-2xl border border-slate-200 bg-white;
+  }
+  .public-firm-card,
+  .public-transaction-card {
+    @apply flex min-h-72 flex-col p-6;
+  }
+  .public-firm-card-topline {
+    @apply flex flex-wrap items-center gap-2;
+  }
+  .public-network-icon {
+    @apply flex size-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-800;
+  }
+  .public-network-type {
+    @apply text-xs font-semibold uppercase tracking-[0.1em] text-slate-500;
+  }
+  .public-verified-badge {
+    @apply ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-800;
+  }
+  .public-firm-card h3,
+  .public-transaction-card h3 {
+    @apply mt-6 text-xl font-semibold text-slate-950;
+  }
+  .public-firm-headline {
+    @apply mt-2 text-sm font-semibold leading-relaxed text-emerald-900;
+  }
+  .public-firm-description,
+  .public-transaction-card > p {
+    @apply mt-2 line-clamp-3 text-sm leading-relaxed text-slate-600;
+  }
+  .public-firm-meta {
+    @apply mt-auto flex flex-wrap items-center gap-2 pt-5 text-xs text-slate-500;
+  }
+  .public-firm-meta > span:not(.public-network-pill),
+  .public-firm-detail-meta a {
+    @apply inline-flex items-center gap-1;
+  }
+  .public-network-pill {
+    @apply rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600;
+  }
+  .public-card-link {
+    @apply mt-5 inline-flex items-center gap-2 text-sm font-semibold text-emerald-800 hover:text-emerald-950;
+  }
+  .public-directory-grid {
+    @apply grid gap-4 md:grid-cols-2;
+  }
+  .public-directory-card {
+    @apply p-6;
+  }
+  .public-directory-card-title {
+    @apply flex items-center gap-2 text-sm font-semibold text-slate-950;
+  }
+  .public-directory-card-title svg {
+    @apply text-emerald-800;
+  }
+  .public-directory-card ul {
+    @apply mt-4 divide-y divide-slate-100;
+  }
+  .public-directory-card li a {
+    @apply flex items-center justify-between py-3 text-sm text-slate-600 hover:text-emerald-800;
+  }
+  .public-directory-card li span {
+    @apply rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500;
+  }
+  .public-network-empty {
+    @apply flex min-h-40 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-slate-500;
+  }
+  .public-network-empty h2 {
+    @apply mt-3 text-lg font-semibold text-slate-800;
+  }
+  .public-network-empty p,
+  .public-network-empty-small {
+    @apply mt-2 text-sm leading-relaxed text-slate-500;
+  }
+  .public-network-indexing-note {
+    @apply mx-auto max-w-7xl px-6 pb-10 text-center text-xs text-slate-400 lg:px-10;
+  }
+  .public-firm-hero,
+  .public-transaction-hero,
+  .public-directory-hero {
+    @apply bg-slate-50;
+  }
+  .public-network-breadcrumb,
+  .public-network-back {
+    @apply mb-8 flex items-center gap-2 text-sm text-slate-500;
+  }
+  .public-network-breadcrumb a,
+  .public-network-back {
+    @apply text-emerald-800 hover:text-emerald-950;
+  }
+  .public-firm-detail-grid {
+    @apply grid gap-5 lg:grid-cols-[1fr_300px];
+  }
+  .public-firm-about,
+  .public-firm-trust,
+  .public-firm-profile-details,
+  .public-firm-transactions {
+    @apply p-7 lg:p-9;
+  }
+  .public-firm-about h1,
+  .public-directory-hero h1,
+  .public-transaction-detail-card h1 {
+    @apply text-4xl font-semibold leading-tight text-slate-950 lg:text-5xl;
+  }
+  .public-firm-detail-headline {
+    @apply mt-4 text-lg font-semibold leading-relaxed text-emerald-900;
+  }
+  .public-firm-detail-description,
+  .public-directory-intro {
+    @apply mt-5 max-w-3xl text-base leading-relaxed text-slate-600;
+  }
+  .public-firm-detail-meta {
+    @apply mt-6;
+  }
+  .public-firm-detail-meta a {
+    @apply font-semibold text-emerald-800;
+  }
+  .public-network-taxonomy {
+    @apply mt-6 flex flex-wrap gap-2;
+  }
+  .public-trust-row {
+    @apply flex items-start gap-3 rounded-xl bg-emerald-50 p-4 text-emerald-800;
+  }
+  .public-trust-row strong,
+  .public-trust-row span {
+    @apply block;
+  }
+  .public-trust-row strong {
+    @apply text-sm;
+  }
+  .public-trust-row span {
+    @apply mt-1 text-xs text-emerald-700;
+  }
+  .public-trust-stat {
+    @apply mt-6 border-t border-slate-100 pt-5;
+  }
+  .public-trust-stat strong,
+  .public-trust-stat span {
+    @apply block;
+  }
+  .public-trust-stat strong {
+    @apply text-2xl font-semibold text-slate-950;
+  }
+  .public-trust-stat span,
+  .public-trust-note {
+    @apply mt-1 text-xs leading-relaxed text-slate-500;
+  }
+  .public-trust-note {
+    @apply border-t border-slate-100 pt-5;
+  }
+  .public-firm-transactions {
+    @apply mt-5;
+  }
+  .public-transaction-grid {
+    @apply grid gap-4 md:grid-cols-2;
+  }
+  .public-transaction-card {
+    @apply min-h-0;
+  }
+  .public-transaction-card .public-verified-badge {
+    @apply ml-auto;
+  }
+  .public-transaction-detail-card {
+    @apply mx-auto max-w-3xl p-7 lg:p-10;
+  }
+  .public-transaction-detail-meta {
+    @apply mt-8 flex flex-wrap gap-x-6 gap-y-3 border-t border-slate-100 pt-5 text-sm text-slate-500;
+  }
+  .public-transaction-detail-meta > span {
+    @apply inline-flex items-center gap-1;
+  }
+  .public-transaction-detail-meta a {
+    @apply font-semibold text-emerald-800;
+  }
+  .public-transaction-confidential-note {
+    @apply mt-8 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-relaxed text-amber-900;
+  }
+  .public-directory-hero-inner > .public-firm-grid {
+    @apply mt-10;
+  }
+  .public-settings-intro {
+    @apply mb-6 flex flex-col gap-5 rounded-xl bg-slate-50 p-5 lg:flex-row lg:items-center lg:justify-between;
+  }
+  .public-settings-intro strong {
+    @apply block text-sm font-semibold text-slate-900;
+  }
+  .public-settings-intro p:not(.public-network-eyebrow) {
+    @apply mt-1 max-w-2xl text-sm leading-relaxed text-slate-500;
+  }
+  .public-toggle,
+  .public-checkbox-option {
+    @apply flex-row items-start gap-3;
+  }
+  .public-toggle {
+    @apply shrink-0 rounded-lg border border-emerald-200 bg-white p-3 text-sm font-semibold text-emerald-900;
+  }
+  .public-toggle input,
+  .public-checkbox-option input {
+    @apply mt-0.5 shrink-0;
+  }
+  .public-settings-options {
+    @apply mt-6 grid gap-3 border-y border-slate-100 py-5 md:grid-cols-3;
+  }
+  .public-checkbox-option {
+    @apply rounded-lg border border-slate-200 p-3;
+  }
+  .public-checkbox-option strong,
+  .public-checkbox-option small {
+    @apply block;
+  }
+  .public-checkbox-option strong {
+    @apply text-sm font-semibold text-slate-800;
+  }
+  .public-checkbox-option small {
+    @apply mt-1 text-xs font-normal leading-relaxed text-slate-500;
+  }
+  .public-settings-private-note {
+    @apply rounded-xl border border-slate-200 bg-slate-50 p-5;
+  }
+  .public-settings-private-note strong {
+    @apply block text-sm font-semibold text-slate-900;
+  }
+  .public-settings-private-note p {
+    @apply mt-2 text-sm leading-relaxed text-slate-500;
+  }
+  .public-settings-preview {
+    @apply mt-5 inline-flex items-center gap-2 text-sm font-semibold text-emerald-800;
+  }
+  .public-transaction-controls {
+    @apply mt-5 flex flex-col gap-4 border-t border-slate-100 pt-4 lg:flex-row lg:items-end lg:justify-between;
+  }
+  .public-transaction-controls > div:first-child strong,
+  .public-transaction-controls > div:first-child span {
+    @apply block;
+  }
+  .public-transaction-controls > div:first-child strong {
+    @apply text-sm font-semibold text-slate-800;
+  }
+  .public-transaction-controls > div:first-child span {
+    @apply mt-1 text-xs leading-relaxed text-slate-500;
+  }
+  .public-transaction-controls .inline-form {
+    @apply mt-0 shrink-0;
+  }
+  .public-transaction-controls .inline-form .field-hint {
+    @apply block mb-2;
+  }
+  .public-transaction-controls .inline-form .form-actions {
+    @apply mt-0;
+  }
+  .public-transaction-pending {
+    @apply mt-4 block;
+  }
   .auth-page {
     @apply min-h-dvh lg:grid lg:grid-cols-2;
   }
@@ -2168,6 +2497,9 @@
     --brand-width: 128px;
   }
   .marketing-nav .text-link {
+    display: none;
+  }
+  .public-network-header nav {
     display: none;
   }
   .hero h1 {

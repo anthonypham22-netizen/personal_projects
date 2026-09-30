@@ -41,6 +41,7 @@ Use two deployments before inviting real users. GitHub Environments are recommen
 | Purpose           | Test releases and complete fictional transaction walkthroughs | Real customer accounts and approved live data |
 | Example domain    | `staging.your-domain.ca`                                      | `app.your-domain.ca`                          |
 | `ALLOW_DEMO`      | `true`                                                        | `false`                                       |
+| `PUBLIC_NETWORK_INDEXING_ENABLED` | `false`                                        | `false` until public content and privacy review are complete |
 | Registration      | Controlled test accounts                                      | Invitation-only initially is recommended      |
 | Data              | Fictional only                                                | Live data under approved operating controls   |
 | Storage           | Dedicated staging volume and backups                          | Dedicated production volume and backups       |
@@ -71,6 +72,8 @@ Create a server-side `.env` file in the repository directory with:
 APP_DOMAIN=app.your-domain.ca
 ALLOW_DEMO=false
 ALLOW_REGISTRATION=true
+# Keep public profile pages previewable but non-indexed until launch review.
+PUBLIC_NETWORK_INDEXING_ENABLED=false
 # Leave unset until an established provider adapter is implemented.
 # ELECTRONIC_SIGNATURE_PROVIDER=
 # ELECTRONIC_SIGNATURE_WEBHOOK_SECRET=
@@ -83,6 +86,8 @@ ALLOW_REGISTRATION=true
 Replace the example domain with the actual DNS name. Do not include `https://` in `APP_DOMAIN`. Docker Compose constructs the exact `APP_URL` from it and enables secure cookies. `ALLOW_DEMO` defaults to `false` when omitted. Ensure `.env` is readable only by the deployment administrator.
 
 For staging, use a separate checkout or Compose project, domain, and volume with `ALLOW_DEMO=true`. Keep staging private or access-controlled and use fictional information only.
+
+Public profile pages are safe to preview with indexing disabled. Do not enable `PUBLIC_NETWORK_INDEXING_ENABLED` on a staging or review hostname. Production should enable it only after the public firm-profile copy, privacy notice, canonical metadata, removal workflow, and the explicit firm/transaction opt-ins have been reviewed. The public sitemap is generated from currently opted-in advisor and buyer profiles and anonymized, independently verified transaction tombstones; it never includes active mandates, `/app` routes, login, registration, messages, documents, or other confidential workflows.
 
 The development `.env.local` file is excluded from the Docker image. Do not copy local demo databases to the live volume. A fresh volume is initialized automatically on first application database access.
 
@@ -286,6 +291,33 @@ SELECT COUNT(*) AS published_after_upgrade FROM deals WHERE published=1;
 ```
 
 Migration 21 should appear once and a pre-existing database should begin with zero review rows; the published count must match the pre-upgrade backup. In staging, use fictional data to verify that buyers cannot call `/api/teaser-safety`, a stale review cannot overwrite an edited teaser, and a suggestion cannot be applied while a teaser is published. Production must not use `TEASER_SAFETY_PROVIDER=development`. If `openai` is selected, keep `OPENAI_API_KEY` server-side, require an explicit model value, review the provider’s current retention/residency contract, and disclose external processing to users. The request uses `store:false`, but that setting is not a substitute for contractual and privacy review.
+
+### Phase 18 migration and public-network checks
+
+Migration `022_public_network` creates public-profile and normalized taxonomy tables and adds explicit public fields to closed-transaction tombstones. Back up the database and matching uploads before deployment, then verify the migration and the non-destructive defaults:
+
+```sql
+SELECT version,name,applied_at
+FROM schema_migrations
+WHERE version=22;
+
+SELECT COUNT(*) AS public_profiles
+FROM organization_public_profiles
+WHERE is_public=1;
+
+SELECT COUNT(*) AS missing_public_profiles
+FROM organizations organization
+LEFT JOIN organization_public_profiles profile
+  ON profile.organization_id=organization.id
+WHERE profile.organization_id IS NULL;
+
+SELECT COUNT(*) AS public_transactions
+FROM closed_transactions
+WHERE verified=1 AND public_opt_in=1 AND public_slug IS NOT NULL;
+
+```
+
+Migration 22 should appear once, every organization should have a private profile row, and the migration itself must not publish a firm or transaction. Demo seeding may add clearly fictional public examples only when `ALLOW_DEMO=true`; no operating-business seller or active deal is public. Add an application-level route and sitemap check to deployment validation: public pages must never expose a deal id, company name, confidential summary, document, buyer project, message, or seller/advisor identity. With `PUBLIC_NETWORK_INDEXING_ENABLED=false`, confirm public pages emit `noindex` and `robots.txt` disallows crawling. If startup or privacy checks fail, stop the application and restore the complete pre-migration snapshot before starting the previous code. There is no automatic down migration.
 
 ## What changes for a larger launch
 

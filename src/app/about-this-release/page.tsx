@@ -1,5 +1,10 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { Brand } from "@/components/brand";
+export const metadata: Metadata = {
+  title: "About this release",
+  robots: { index: false, follow: false },
+};
 export default function Release() {
   return (
     <main className="release-page">

@@ -31,6 +31,7 @@ import { buyerReputationMigration } from "../src/lib/migrations/018_buyer_reputa
 import { electronicNdaMigration } from "../src/lib/migrations/019_electronic_nda.ts";
 import { personalizedCimWatermarkingMigration } from "../src/lib/migrations/020_personalized_cim_watermarking.ts";
 import { aiTeaserSafetyMigration } from "../src/lib/migrations/021_ai_teaser_safety.ts";
+import { publicNetworkMigration } from "../src/lib/migrations/022_public_network.ts";
 import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
 import { ensureBuyerFunnelBackfill } from "../src/lib/buyer-funnel.ts";
 
@@ -84,6 +85,7 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 19, name: "electronic_nda" },
       { version: 20, name: "personalized_cim_watermarking" },
       { version: 21, name: "ai_teaser_safety" },
+      { version: 22, name: "public_network" },
     ]);
 
     const accessColumns = database
@@ -209,6 +211,61 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
     );
     assert.equal(
       database
+        .prepare(
+          "SELECT COUNT(*) count FROM organization_public_profiles WHERE is_public=1",
+        )
+        .get().count,
+      4,
+      "only fictional demo advisor and buyer firms are seeded as public",
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT COUNT(*) count FROM organization_public_profiles WHERE organization_id='org-demo-owner' AND is_public=1",
+        )
+        .get().count,
+      0,
+      "the operating-business seller remains private",
+    );
+    assert.deepEqual(
+      database
+        .prepare(
+          "SELECT id,public_slug,public_opt_in,verified FROM closed_transactions ORDER BY id",
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      [
+        {
+          id: "closed-demo-evergreen-manufacturing",
+          public_slug: null,
+          public_opt_in: 0,
+          verified: 0,
+        },
+        {
+          id: "closed-demo-evergreen-services",
+          public_slug: "industrial-services-ontario-evergreen-services",
+          public_opt_in: 1,
+          verified: 1,
+        },
+        {
+          id: "closed-demo-laurent-technology",
+          public_slug: "technology-quebec-laurent-technology",
+          public_opt_in: 1,
+          verified: 1,
+        },
+      ],
+      "only independently verified fictional transactions are published",
+    );
+    const publicNetworkBeforeSecondSeed = database
+      .prepare(
+        `SELECT organization_id,is_public,headline,public_description,
+                show_website,show_province,show_verified_transactions,revision
+         FROM organization_public_profiles
+         ORDER BY organization_id`,
+      )
+      .all();
+    assert.equal(
+      database
         .prepare("SELECT is_platform_admin FROM users WHERE id='demo-advisor'")
         .get().is_platform_admin,
       1,
@@ -273,6 +330,18 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
         .get().revision,
       profileRevisionBeforeSecondSeed,
       "re-seeding unchanged demo profile values must not invalidate open forms",
+    );
+    assert.deepEqual(
+      database
+        .prepare(
+          `SELECT organization_id,is_public,headline,public_description,
+                  show_website,show_province,show_verified_transactions,revision
+           FROM organization_public_profiles
+           ORDER BY organization_id`,
+        )
+        .all(),
+      publicNetworkBeforeSecondSeed,
+      "re-seeding public network examples must be idempotent",
     );
     for (const document of database
       .prepare("SELECT name, storage_key, size FROM documents")
@@ -422,7 +491,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 21);
+    assert.equal(history.length, 22);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
@@ -445,6 +514,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       { version: 19, name: "electronic_nda" },
       { version: 20, name: "personalized_cim_watermarking" },
       { version: 21, name: "ai_teaser_safety" },
+      { version: 22, name: "public_network" },
     ]);
     assert.equal(
       database
@@ -1613,6 +1683,99 @@ test("an existing Phase 16 database adds private teaser review history without c
     });
     const history = getMigrationHistory(database);
     applyMigrations(database, [...phaseSixteen, aiTeaserSafetyMigration]);
+    assert.deepEqual(getMigrationHistory(database), history);
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an existing Phase 17 database adds default-private public network state without changing transaction history", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase18-"));
+  const database = new DatabaseSync(":memory:");
+  const phaseTwentyOne = [
+    initialUpgrade,
+    organizationsMigration,
+    buyerProjectsMigration,
+    sellSideMandatesMigration,
+    matchingEngineMigration,
+    recommendedBuyersMigration,
+    privateTeaserDistributionMigration,
+    qualifiedDiscoveryMigration,
+    buyerFunnelMigration,
+    internalDealNotesMigration,
+    notificationsMigration,
+    emailProcessingLeaseMigration,
+    emailProcessingTokenMigration,
+    buyerVerificationMigration,
+    buyerFirmProfilesMigration,
+    buyerFirmProfileRevisionMigration,
+    closedTransactionsMigration,
+    buyerReputationMigration,
+    electronicNdaMigration,
+    personalizedCimWatermarkingMigration,
+    aiTeaserSafetyMigration,
+  ];
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    applyMigrations(database, phaseTwentyOne);
+    seed(database, directory);
+    const beforeTransactions = database
+      .prepare(
+        `SELECT id,buyer_organization_id,seller_organization_id,
+           advisor_organization_id,industry,province,enterprise_value,
+           closed_date,description,verified,created_by_user_id,
+           verified_by_user_id,verified_at
+         FROM closed_transactions ORDER BY id`,
+      )
+      .all()
+      .map((row) => ({ ...row }));
+
+    applyMigrations(database, [...phaseTwentyOne, publicNetworkMigration]);
+
+    assert.deepEqual(
+      database
+        .prepare(
+          `SELECT id,buyer_organization_id,seller_organization_id,
+             advisor_organization_id,industry,province,enterprise_value,
+             closed_date,description,verified,created_by_user_id,
+             verified_by_user_id,verified_at
+           FROM closed_transactions ORDER BY id`,
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      beforeTransactions,
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT COUNT(*) count FROM organization_public_profiles WHERE is_public=0 AND revision=1",
+        )
+        .get().count,
+      database.prepare("SELECT COUNT(*) count FROM organizations").get().count,
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT COUNT(*) count FROM closed_transactions WHERE public_slug IS NULL AND public_opt_in=0",
+        )
+        .get().count,
+      beforeTransactions.length,
+    );
+    assert.equal(
+      database
+        .prepare("SELECT COUNT(*) count FROM organization_public_industries")
+        .get().count,
+      0,
+    );
+    assert.equal(
+      database
+        .prepare("SELECT COUNT(*) count FROM organization_public_locations")
+        .get().count,
+      0,
+    );
+    const history = getMigrationHistory(database);
+    applyMigrations(database, [...phaseTwentyOne, publicNetworkMigration]);
     assert.deepEqual(getMigrationHistory(database), history);
   } finally {
     database.close();
