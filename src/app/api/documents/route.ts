@@ -25,6 +25,7 @@ import {
   documentAudienceUserIds,
   notifyUsers,
 } from "@/lib/notifications";
+import { assertWatermarkablePdf } from "@/lib/document-watermarks";
 export const runtime = "nodejs";
 export async function POST(request: Request) {
   let storedPath: string | undefined;
@@ -101,6 +102,23 @@ export async function POST(request: Request) {
     if (audience === "buyer" && !membership(deal.id, buyerId))
       throw new AppError("Choose an invited buyer for this document.");
     if (audience !== "buyer") buyerId = "";
+    const watermarkEnabled = String(form.get("watermark_enabled")) === "true";
+    if (watermarkEnabled) {
+      if (!managing)
+        throw new AppError(
+          "Only the deal team can enable personalized watermarking.",
+          403,
+        );
+      if (
+        category !== "Company overview" ||
+        mime[ext] !== "application/pdf" ||
+        audience === "team"
+      )
+        throw new AppError(
+          "Personalized watermarking is available for PDF company overviews shared with buyers.",
+        );
+      await assertWatermarkablePdf(buffer);
+    }
     const version =
       (one<{ version: number }>(
         "SELECT MAX(version) version FROM documents WHERE deal_id=? AND name=? AND audience=? AND COALESCE(buyer_id,'')=?",
@@ -119,7 +137,7 @@ export async function POST(request: Request) {
     inImmediateTransaction(database, () => {
       database
         .prepare(
-          "INSERT INTO documents(id,deal_id,name,storage_key,mime,category,size,version,audience,buyer_id,uploaded_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO documents(id,deal_id,name,storage_key,mime,category,size,version,audience,buyer_id,uploaded_by,watermark_enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .run(
           id,
@@ -133,6 +151,7 @@ export async function POST(request: Request) {
           audience,
           buyerId || null,
           user.id,
+          watermarkEnabled ? 1 : 0,
         );
       const recipientIds =
         category === "NDA" && buyerId
@@ -191,8 +210,9 @@ export async function POST(request: Request) {
     storedPath = undefined;
     return NextResponse.json({
       id,
-      message:
-        "Document uploaded. Agreement uploads require separate review; they are not automatically signed.",
+      message: watermarkEnabled
+        ? "Document uploaded. Each buyer download will receive a personalized watermarked PDF."
+        : "Document uploaded. Agreement uploads require separate review; they are not automatically signed.",
     });
   } catch (e) {
     if (storedPath) await unlink(storedPath).catch(() => {});

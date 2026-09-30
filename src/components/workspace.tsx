@@ -3734,6 +3734,9 @@ function DocumentTable({ documents }: { documents: Document[] }) {
                           {d.size < 1024
                             ? `${d.size} B`
                             : `${Math.round(d.size / 1024)} KB`}
+                          {d.watermark_enabled
+                            ? " · Personalized for each buyer"
+                            : ""}
                         </small>
                       </div>
                     </div>
@@ -3777,7 +3780,10 @@ function DocumentTable({ documents }: { documents: Document[] }) {
 function UploadForm({ deal }: { deal: Deal }) {
   const { data, refresh, notify } = useWorkspace();
   const [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [category, setCategory] = useState(deal.has_access ? "Financials" : "NDA"),
+    [audience, setAudience] = useState("team"),
+    [watermarkEnabled, setWatermarkEnabled] = useState(false);
   const buyers = data.access.filter(
     (a) => a.deal_id === deal.id && !["denied", "revoked"].includes(a.status),
   );
@@ -3807,6 +3813,9 @@ function UploadForm({ deal }: { deal: Deal }) {
               await refresh();
               notify(json.message);
               form.reset();
+              setCategory(deal.has_access ? "Financials" : "NDA");
+              setAudience("team");
+              setWatermarkEnabled(false);
             } catch (e) {
               setError(e instanceof Error ? e.message : "Upload failed.");
             } finally {
@@ -3828,11 +3837,18 @@ function UploadForm({ deal }: { deal: Deal }) {
                 name and visibility creates a new version.
               </span>
             </label>
-            <SelectField
-              label="Category"
-              name="category"
-              options={
-                deal.has_access
+            <label>
+              Category
+              <select
+                name="category"
+                value={category}
+                onChange={(event) => {
+                  setCategory(event.target.value);
+                  if (event.target.value !== "Company overview")
+                    setWatermarkEnabled(false);
+                }}
+              >
+                {(deal.has_access
                   ? [
                       "Financials",
                       "Company overview",
@@ -3842,14 +3858,24 @@ function UploadForm({ deal }: { deal: Deal }) {
                       "Other",
                     ]
                   : ["NDA"]
-              }
-              value={deal.has_access ? "Financials" : "NDA"}
-            />
+                ).map((option) => (
+                  <option key={option}>{option}</option>
+                ))}
+              </select>
+            </label>
             {deal.can_manage && (
               <>
                 <label>
                   Visibility
-                  <select name="audience" defaultValue="team">
+                  <select
+                    name="audience"
+                    value={audience}
+                    onChange={(event) => {
+                      setAudience(event.target.value);
+                      if (event.target.value === "team")
+                        setWatermarkEnabled(false);
+                    }}
+                  >
                     <option value="team">Internal deal team only</option>
                     <option value="approved">All approved buyers</option>
                     <option value="buyer">One specific buyer</option>
@@ -3868,6 +3894,29 @@ function UploadForm({ deal }: { deal: Deal }) {
                 </label>
               </>
             )}
+            {deal.can_manage &&
+              category === "Company overview" &&
+              audience !== "team" && (
+                <label className="checkbox-label watermark-option full">
+                  <input
+                    type="checkbox"
+                    name="watermark_enabled"
+                    value="true"
+                    checked={watermarkEnabled}
+                    onChange={(event) =>
+                      setWatermarkEnabled(event.target.checked)
+                    }
+                  />
+                  <span>
+                    <strong>Personalize every buyer’s PDF download</strong>
+                    <small>
+                      Adds the buyer’s firm, email, download date and Succera
+                      transaction reference. The uploaded original stays
+                      unchanged.
+                    </small>
+                  </span>
+                </label>
+              )}
           </div>
           <p className="field-hint">
             NDAs and LOIs are always restricted to the selected buyer and the

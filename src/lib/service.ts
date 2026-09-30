@@ -143,7 +143,7 @@ const slugPart = (value: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "") || "firm";
-const organizationFor = (userId: string) => {
+export const organizationFor = (userId: string) => {
   const organization = one<
     Omit<Organization, "can_manage"> & { can_manage: number }
   >(
@@ -1633,22 +1633,29 @@ export function workspace(user: User): WorkspaceData {
         ...visibleAccessIds,
       )
     : [];
-  const documents = all<Document>(
-    "SELECT d.id,d.deal_id,d.name,d.category,d.size,d.version,d.audience,d.buyer_id,d.uploaded_by,d.created_at,u.name uploader_name,p.title deal_title FROM documents d JOIN users u ON u.id=d.uploaded_by JOIN deals p ON p.id=d.deal_id ORDER BY d.created_at DESC",
-  ).filter((doc) => {
-    const deal = rawDealById.get(doc.deal_id);
-    return (
-      !!deal &&
-      !previewIds.has(doc.deal_id) &&
-      canReadDocumentWithMembership(
-        user,
-        deal,
-        doc,
-        membershipByDeal.get(doc.deal_id),
-        teamMemberForDeal(deal),
-      )
-    );
-  });
+  const documents = all<
+    Omit<Document, "watermark_enabled"> & { watermark_enabled: number }
+  >(
+    "SELECT d.id,d.deal_id,d.name,d.category,d.size,d.version,d.audience,d.buyer_id,d.watermark_enabled,d.uploaded_by,d.created_at,u.name uploader_name,p.title deal_title FROM documents d JOIN users u ON u.id=d.uploaded_by JOIN deals p ON p.id=d.deal_id ORDER BY d.created_at DESC",
+  )
+    .filter((doc) => {
+      const deal = rawDealById.get(doc.deal_id);
+      return (
+        !!deal &&
+        !previewIds.has(doc.deal_id) &&
+        canReadDocumentWithMembership(
+          user,
+          deal,
+          doc,
+          membershipByDeal.get(doc.deal_id),
+          teamMemberForDeal(deal),
+        )
+      );
+    })
+    .map((document) => ({
+      ...document,
+      watermark_enabled: Boolean(document.watermark_enabled),
+    }));
   const messages = all<Message>(
     "SELECT m.*,u.name sender_name,u.role sender_role,d.title deal_title,b.name buyer_name FROM messages m JOIN users u ON u.id=m.sender_id JOIN users b ON b.id=m.buyer_id JOIN deals d ON d.id=m.deal_id ORDER BY m.created_at,m.rowid",
   ).filter((m) => ids.has(m.deal_id) && activeThread(m.deal_id, m.buyer_id));

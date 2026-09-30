@@ -1,6 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
+import { readFileSync } from "node:fs";
 import path from "node:path";
+import { PDFDocument } from "pdf-lib";
 
 function provisionPlatformReviewer(email: string) {
   const database = new DatabaseSync(
@@ -833,6 +835,108 @@ test("buyer sees approved documents but cannot download seller-only files", asyn
   await expect(
     page.getByText("Your request is with the deal team.", { exact: false }),
   ).toBeVisible();
+});
+
+test("buyer receives a cached personalized CIM while the seller keeps the original", async ({
+  page,
+}) => {
+  const pdf = await PDFDocument.create();
+  const pdfPage = pdf.addPage([612, 792]);
+  pdfPage.drawText("Confidential Project Cedar memorandum", {
+    x: 72,
+    y: 720,
+    size: 18,
+  });
+  const original = Buffer.from(await pdf.save());
+  const name = `Project Cedar CIM ${Date.now()}.pdf`;
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Owner demo" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Welcome back, Jamie." }),
+  ).toBeVisible();
+  await page.goto("/app/deals/cedar");
+  await page.getByRole("button", { name: "Data room" }).click();
+  await page.getByText("Upload a document", { exact: true }).click();
+  await page.getByLabel("Choose file").setInputFiles({
+    name,
+    mimeType: "application/pdf",
+    buffer: original,
+  });
+  await page
+    .locator('select[name="category"]')
+    .selectOption("Company overview");
+  await page.locator('select[name="audience"]').selectOption("approved");
+  await page
+    .getByRole("checkbox", {
+      name: "Personalize every buyer’s PDF download",
+    })
+    .check();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(() => document.body.scrollWidth <= window.innerWidth),
+  ).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.getByRole("button", { name: "Upload document" }).click();
+  await expect(
+    page
+      .getByRole("status")
+      .getByText("Each buyer download will receive", { exact: false }),
+  ).toBeVisible();
+
+  const ownerWorkspace = await (
+    await page.request.get("/api/workspace")
+  ).json();
+  const document = ownerWorkspace.documents.find(
+    (candidate: { name: string }) => candidate.name === name,
+  );
+  expect(document?.watermark_enabled).toBe(true);
+  const ownerDownload = await page.request.get(`/api/documents/${document.id}`);
+  expect(ownerDownload.status()).toBe(200);
+  expect(ownerDownload.headers()["x-succera-personalized-watermark"]).toBe(
+    undefined,
+  );
+  expect(Buffer.from(await ownerDownload.body())).toEqual(original);
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Welcome back, Taylor." }),
+  ).toBeVisible();
+  const buyerDownload = await page.request.get(`/api/documents/${document.id}`);
+  expect(buyerDownload.status()).toBe(200);
+  expect(buyerDownload.headers()["x-succera-personalized-watermark"]).toBe(
+    "applied",
+  );
+  const personalized = Buffer.from(await buyerDownload.body());
+  expect(personalized).not.toEqual(original);
+  expect((await PDFDocument.load(personalized)).getPageCount()).toBe(1);
+
+  const databasePath = path.resolve("test-results/app-data/northlane.sqlite");
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const stored = database
+      .prepare(
+        "SELECT storage_key FROM documents WHERE id=? AND watermark_enabled=1",
+      )
+      .get(document.id) as { storage_key: string };
+    expect(
+      readFileSync(
+        path.resolve("test-results/app-data/uploads", stored.storage_key),
+      ),
+    ).toEqual(original);
+    expect(
+      (
+        database
+          .prepare(
+            "SELECT COUNT(*) count FROM document_watermark_variants WHERE document_id=? AND buyer_id='demo-buyer'",
+          )
+          .get(document.id) as { count: number }
+      ).count,
+    ).toBe(1);
+  } finally {
+    database.close();
+  }
 });
 
 test("owner can send a provider-managed electronic NDA without granting early access", async ({

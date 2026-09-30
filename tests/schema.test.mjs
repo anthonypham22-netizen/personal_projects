@@ -29,6 +29,7 @@ import { buyerFirmProfileRevisionMigration } from "../src/lib/migrations/016_buy
 import { closedTransactionsMigration } from "../src/lib/migrations/017_closed_transactions.ts";
 import { buyerReputationMigration } from "../src/lib/migrations/018_buyer_reputation.ts";
 import { electronicNdaMigration } from "../src/lib/migrations/019_electronic_nda.ts";
+import { personalizedCimWatermarkingMigration } from "../src/lib/migrations/020_personalized_cim_watermarking.ts";
 import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
 import { ensureBuyerFunnelBackfill } from "../src/lib/buyer-funnel.ts";
 
@@ -80,6 +81,7 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 17, name: "closed_transactions" },
       { version: 18, name: "buyer_reputation" },
       { version: 19, name: "electronic_nda" },
+      { version: 20, name: "personalized_cim_watermarking" },
     ]);
 
     const accessColumns = database
@@ -99,6 +101,22 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
         { name: "electronic_signature_envelopes" },
         { name: "electronic_signature_events" },
       ],
+    );
+    assert.ok(
+      database
+        .prepare("PRAGMA table_info(documents)")
+        .all()
+        .some(({ name }) => name === "watermark_enabled"),
+    );
+    assert.deepEqual(
+      {
+        ...database
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='document_watermark_variants'",
+          )
+          .get(),
+      },
+      { name: "document_watermark_variants" },
     );
 
     seed(database, directory);
@@ -392,7 +410,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 19);
+    assert.equal(history.length, 20);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
@@ -413,6 +431,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       { version: 17, name: "closed_transactions" },
       { version: 18, name: "buyer_reputation" },
       { version: 19, name: "electronic_nda" },
+      { version: 20, name: "personalized_cim_watermarking" },
     ]);
     assert.equal(
       database
@@ -1440,6 +1459,87 @@ test("an existing Phase 14 database adds electronic NDA ledgers without changing
       version: 19,
       name: "electronic_nda",
     });
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an existing Phase 15 database adds watermark caching without changing documents", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase16-"));
+  const database = new DatabaseSync(":memory:");
+  const phaseFifteen = [
+    initialUpgrade,
+    organizationsMigration,
+    buyerProjectsMigration,
+    sellSideMandatesMigration,
+    matchingEngineMigration,
+    recommendedBuyersMigration,
+    privateTeaserDistributionMigration,
+    qualifiedDiscoveryMigration,
+    buyerFunnelMigration,
+    internalDealNotesMigration,
+    notificationsMigration,
+    emailProcessingLeaseMigration,
+    emailProcessingTokenMigration,
+    buyerVerificationMigration,
+    buyerFirmProfilesMigration,
+    buyerFirmProfileRevisionMigration,
+    closedTransactionsMigration,
+    buyerReputationMigration,
+    electronicNdaMigration,
+  ];
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    applyMigrations(database, phaseFifteen);
+    seed(database, directory);
+    const before = database
+      .prepare(
+        `SELECT id,deal_id,name,storage_key,mime,category,size,version,
+           audience,buyer_id,uploaded_by,created_at
+         FROM documents ORDER BY id`,
+      )
+      .all()
+      .map((row) => ({ ...row }));
+
+    applyMigrations(database, [
+      ...phaseFifteen,
+      personalizedCimWatermarkingMigration,
+    ]);
+
+    const after = database
+      .prepare(
+        `SELECT id,deal_id,name,storage_key,mime,category,size,version,
+           audience,buyer_id,uploaded_by,created_at
+         FROM documents ORDER BY id`,
+      )
+      .all()
+      .map((row) => ({ ...row }));
+    assert.deepEqual(after, before);
+    assert.equal(
+      database
+        .prepare(
+          "SELECT COUNT(*) count FROM documents WHERE watermark_enabled<>0",
+        )
+        .get().count,
+      0,
+    );
+    assert.equal(
+      database
+        .prepare("SELECT COUNT(*) count FROM document_watermark_variants")
+        .get().count,
+      0,
+    );
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 20,
+      name: "personalized_cim_watermarking",
+    });
+    const history = getMigrationHistory(database);
+    applyMigrations(database, [
+      ...phaseFifteen,
+      personalizedCimWatermarkingMigration,
+    ]);
+    assert.deepEqual(getMigrationHistory(database), history);
   } finally {
     database.close();
     rmSync(directory, { recursive: true, force: true });

@@ -117,6 +117,8 @@ docker compose exec app node scripts/backup.mjs
 
 The script prints the backup directory inside `/app/data/backups/`. It checks that every document referenced in the database snapshot exists in the copied upload directory. A failed run may leave a partial directory without a completion manifest; do not use it as a restore point. Copy the printed successful directory to a protected host destination with `docker compose cp`, then to encrypted off-server storage. Schedule backups at a frequency appropriate to the pilot, monitor failures, and apply a retention policy. Backups contain confidential records, password hashes, sessions, and documents.
 
+Personalized watermark files under `/app/data/watermarks/` are a replaceable cache and are intentionally not included in the backup artifact. Their database rows may remain in a restored snapshot; the application treats a missing cached file as a cache miss and regenerates it from the protected original only after the current buyer passes the normal download authorization check.
+
 Test restoration into a **separate staging deployment and fresh volume** first. Stop that staging app, restore `northlane.sqlite` and `uploads/` into its data directory, ensure ownership matches the runtime `node` user, and restart. Verify a representative deal, account, and download. Never mix a snapshot database with an unrelated upload directory or stale SQLite WAL files. Do not restore over a running database.
 
 Do not use `docker compose down -v` during routine updates: `-v` deletes persistent volumes.
@@ -256,6 +258,18 @@ SELECT COUNT(*) AS provider_events FROM electronic_signature_events;
 ```
 
 Migration 19 should appear once, every pre-existing access row should report `external_upload`, and both new ledger counts should be zero before anyone starts an electronic request. Production deliberately reports electronic signing as unavailable until an established provider adapter is implemented, its webhook verification is mapped to that provider’s documented contract, and its secret is stored outside source control. Never enable the development adapter in production. Back up the database and uploads together before upgrading; there is no automatic down migration.
+
+### Phase 16 migration checks
+
+Migration `020_personalized_cim_watermarking` adds the document opt-in flag and derivative-cache ledger without rewriting uploaded files. After restart, run:
+
+```sql
+SELECT version,name,applied_at FROM schema_migrations WHERE version=20;
+SELECT watermark_enabled,COUNT(*) FROM documents GROUP BY watermark_enabled;
+SELECT COUNT(*) AS watermark_variants FROM document_watermark_variants;
+```
+
+Migration 20 should appear once. Every pre-existing document should report `watermark_enabled=0`, and the derivative count should be zero until a buyer downloads an enabled PDF. In staging, upload a valid PDF company overview, enable buyer personalization, and confirm that a deal-team download exactly matches the uploaded original while an approved buyer receives a valid PDF carrying the personalized-watermark response header. Then revoke that buyer and confirm a copied download URL fails. Cache files under `data/watermarks/` are regenerable and are not originals; never expose that directory directly through a web server. Back up the database and uploads together before upgrading; there is no automatic down migration.
 
 ## What changes for a larger launch
 

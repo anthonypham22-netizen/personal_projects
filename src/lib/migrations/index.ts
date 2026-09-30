@@ -19,6 +19,7 @@ import { buyerFirmProfileRevisionMigration } from "./016_buyer_firm_profile_revi
 import { closedTransactionsMigration } from "./017_closed_transactions.ts";
 import { buyerReputationMigration } from "./018_buyer_reputation.ts";
 import { electronicNdaMigration } from "./019_electronic_nda.ts";
+import { personalizedCimWatermarkingMigration } from "./020_personalized_cim_watermarking.ts";
 
 export type Migration = {
   version: number;
@@ -52,6 +53,7 @@ const migrations: readonly Migration[] = [
   closedTransactionsMigration,
   buyerReputationMigration,
   electronicNdaMigration,
+  personalizedCimWatermarkingMigration,
 ];
 
 const migrationTableSql = `

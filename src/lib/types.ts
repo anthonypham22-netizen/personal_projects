@@ -588,6 +588,7 @@ export type Document = {
   version: number;
   audience: string;
   buyer_id: string | null;
+  watermark_enabled: boolean;
   uploaded_by: string;
   created_at: string;
   uploader_name: string;
