@@ -12,10 +12,11 @@ export default function Release() {
       </p>
       <h2>What works</h2>
       <p>
-        Accounts, acquisition criteria, confidential teasers, controlled
-        document sharing, internal buyer-firm review, external NDA verification,
-        LOI submissions, private conversations, diligence tasks, and deal-stage
-        tracking are backed by a persistent database.
+        Accounts, acquisition criteria, human-controlled teaser safety reviews,
+        confidential teasers, controlled document sharing, internal buyer-firm
+        review, external NDA verification, LOI submissions, private
+        conversations, diligence tasks, and deal-stage tracking are backed by a
+        persistent database.
       </p>
       <h2>Before using real transaction information</h2>
       <p>
@@ -27,6 +28,13 @@ export default function Release() {
         not legal accreditation, a guarantee of capital, or third-party due
         diligence. The NDA workflow records a human review of an externally
         executed document; uploading a file does not sign it.
+      </p>
+      <p>
+        Teaser safety findings and rewrites can be incomplete or incorrect. The
+        assistant never publishes content and does not replace seller, advisor,
+        legal, privacy, or confidentiality review. The local demo provider sends
+        no teaser data externally; any production AI provider requires separate
+        operator configuration and disclosure.
       </p>
       <p>
         The operator must establish appropriate privacy notices, terms,

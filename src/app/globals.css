@@ -1596,6 +1596,146 @@
   .mandate-notice {
     @apply mb-6;
   }
+  .teaser-safety-layout {
+    @apply space-y-6;
+  }
+  .teaser-safety-intro {
+    @apply flex flex-col items-start justify-between gap-5 lg:flex-row lg:items-center;
+  }
+  .teaser-safety-intro .eyebrow,
+  .teaser-section-heading .eyebrow,
+  .teaser-review-heading .eyebrow,
+  .teaser-review-checklist .eyebrow {
+    @apply mb-1 text-emerald-800;
+  }
+  .teaser-safety-intro h3,
+  .teaser-section-heading h3,
+  .teaser-review-heading h3 {
+    @apply text-lg font-semibold text-slate-950;
+  }
+  .teaser-safety-intro > div > p:last-child,
+  .teaser-review-heading > div > p:last-child {
+    @apply mt-2 max-w-3xl text-sm leading-relaxed text-slate-600;
+  }
+  .teaser-provider-notice {
+    @apply mx-5 mb-5 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50/70 p-4 text-emerald-950;
+  }
+  .teaser-provider-notice.external {
+    @apply border-amber-200 bg-amber-50/70 text-amber-950;
+  }
+  .teaser-provider-notice svg {
+    @apply mt-0.5 shrink-0;
+  }
+  .teaser-provider-notice strong {
+    @apply block text-sm;
+  }
+  .teaser-provider-notice p {
+    @apply mt-1 text-xs leading-relaxed opacity-80;
+  }
+  .teaser-current-draft,
+  .teaser-suggestion,
+  .teaser-review-checklist,
+  .teaser-review-summary,
+  .teaser-safety-empty {
+    @apply rounded-xl border border-slate-200 bg-white p-5;
+  }
+  .teaser-section-heading {
+    @apply mb-4 flex flex-wrap items-start justify-between gap-3;
+  }
+  .teaser-current-draft > p,
+  .teaser-suggestion > p {
+    @apply whitespace-pre-wrap text-sm leading-7 text-slate-700;
+  }
+  .teaser-review-summary.attention {
+    @apply border-amber-200 bg-amber-50/30;
+  }
+  .teaser-review-summary.high_risk {
+    @apply border-rose-200 bg-rose-50/30;
+  }
+  .teaser-review-summary.ready {
+    @apply border-emerald-200 bg-emerald-50/30;
+  }
+  .teaser-review-heading {
+    @apply flex flex-wrap items-start gap-4;
+  }
+  .teaser-review-heading > .badge {
+    @apply ml-auto;
+  }
+  .teaser-review-icon {
+    @apply flex size-11 shrink-0 items-center justify-center rounded-xl border border-current/10 bg-white text-emerald-800;
+  }
+  .high_risk .teaser-review-icon {
+    @apply text-rose-700;
+  }
+  .attention .teaser-review-icon {
+    @apply text-amber-700;
+  }
+  .teaser-findings {
+    @apply mt-5 grid gap-3 md:grid-cols-2;
+  }
+  .teaser-findings article {
+    @apply rounded-lg border border-slate-200 bg-white p-4;
+  }
+  .teaser-findings header {
+    @apply flex items-center justify-between gap-3;
+  }
+  .teaser-findings strong {
+    @apply text-sm font-semibold text-slate-900;
+  }
+  .teaser-findings p {
+    @apply mt-2 text-sm leading-relaxed text-slate-600;
+  }
+  .teaser-findings small {
+    @apply mt-2 block text-xs leading-relaxed text-slate-500;
+  }
+  .badge-high {
+    @apply bg-rose-50 text-rose-800;
+  }
+  .badge-medium {
+    @apply bg-amber-50 text-amber-800;
+  }
+  .badge-low {
+    @apply bg-blue-50 text-blue-800;
+  }
+  .teaser-review-empty {
+    @apply mt-5 rounded-lg border border-emerald-100 bg-white p-4 text-sm leading-relaxed text-slate-600;
+  }
+  .teaser-output-grid {
+    @apply grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.6fr)];
+  }
+  .teaser-review-checklist {
+    @apply space-y-6;
+  }
+  .teaser-review-checklist > div + div {
+    @apply border-t border-slate-100 pt-5;
+  }
+  .teaser-review-checklist ul {
+    @apply mt-3 space-y-2 pl-5 text-sm leading-relaxed text-slate-700;
+  }
+  .teaser-review-checklist li {
+    @apply list-disc marker:text-emerald-700;
+  }
+  .teaser-review-checklist > div > p:last-child {
+    @apply mt-2 text-sm leading-relaxed text-slate-500;
+  }
+  .teaser-apply-row {
+    @apply mt-5 flex flex-col items-start gap-3 border-t border-slate-100 pt-5;
+  }
+  .teaser-apply-row span {
+    @apply text-xs leading-relaxed text-slate-500;
+  }
+  .teaser-review-history {
+    @apply text-xs leading-relaxed text-slate-500;
+  }
+  .teaser-safety-empty {
+    @apply flex min-h-56 flex-col items-center justify-center text-center text-slate-400;
+  }
+  .teaser-safety-empty h3 {
+    @apply mt-3 text-base font-semibold text-slate-800;
+  }
+  .teaser-safety-empty p {
+    @apply mt-2 max-w-xl text-sm leading-relaxed text-slate-500;
+  }
   .financial-table td small {
     @apply mt-1 block whitespace-nowrap text-xs text-slate-500;
   }

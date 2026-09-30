@@ -30,6 +30,7 @@ import { closedTransactionsMigration } from "../src/lib/migrations/017_closed_tr
 import { buyerReputationMigration } from "../src/lib/migrations/018_buyer_reputation.ts";
 import { electronicNdaMigration } from "../src/lib/migrations/019_electronic_nda.ts";
 import { personalizedCimWatermarkingMigration } from "../src/lib/migrations/020_personalized_cim_watermarking.ts";
+import { aiTeaserSafetyMigration } from "../src/lib/migrations/021_ai_teaser_safety.ts";
 import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
 import { ensureBuyerFunnelBackfill } from "../src/lib/buyer-funnel.ts";
 
@@ -82,6 +83,7 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 18, name: "buyer_reputation" },
       { version: 19, name: "electronic_nda" },
       { version: 20, name: "personalized_cim_watermarking" },
+      { version: 21, name: "ai_teaser_safety" },
     ]);
 
     const accessColumns = database
@@ -117,6 +119,16 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
           .get(),
       },
       { name: "document_watermark_variants" },
+    );
+    assert.deepEqual(
+      {
+        ...database
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='teaser_safety_reviews'",
+          )
+          .get(),
+      },
+      { name: "teaser_safety_reviews" },
     );
 
     seed(database, directory);
@@ -410,7 +422,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 20);
+    assert.equal(history.length, 21);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
@@ -432,6 +444,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       { version: 18, name: "buyer_reputation" },
       { version: 19, name: "electronic_nda" },
       { version: 20, name: "personalized_cim_watermarking" },
+      { version: 21, name: "ai_teaser_safety" },
     ]);
     assert.equal(
       database
@@ -1539,6 +1552,67 @@ test("an existing Phase 15 database adds watermark caching without changing docu
       ...phaseFifteen,
       personalizedCimWatermarkingMigration,
     ]);
+    assert.deepEqual(getMigrationHistory(database), history);
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an existing Phase 16 database adds private teaser review history without changing deals", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase17-"));
+  const database = new DatabaseSync(":memory:");
+  const phaseSixteen = [
+    initialUpgrade,
+    organizationsMigration,
+    buyerProjectsMigration,
+    sellSideMandatesMigration,
+    matchingEngineMigration,
+    recommendedBuyersMigration,
+    privateTeaserDistributionMigration,
+    qualifiedDiscoveryMigration,
+    buyerFunnelMigration,
+    internalDealNotesMigration,
+    notificationsMigration,
+    emailProcessingLeaseMigration,
+    emailProcessingTokenMigration,
+    buyerVerificationMigration,
+    buyerFirmProfilesMigration,
+    buyerFirmProfileRevisionMigration,
+    closedTransactionsMigration,
+    buyerReputationMigration,
+    electronicNdaMigration,
+    personalizedCimWatermarkingMigration,
+  ];
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    applyMigrations(database, phaseSixteen);
+    seed(database, directory);
+    const before = database
+      .prepare("SELECT * FROM deals ORDER BY id")
+      .all()
+      .map((row) => ({ ...row }));
+
+    applyMigrations(database, [...phaseSixteen, aiTeaserSafetyMigration]);
+
+    assert.deepEqual(
+      database
+        .prepare("SELECT * FROM deals ORDER BY id")
+        .all()
+        .map((row) => ({ ...row })),
+      before,
+    );
+    assert.equal(
+      database.prepare("SELECT COUNT(*) count FROM teaser_safety_reviews").get()
+        .count,
+      0,
+    );
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 21,
+      name: "ai_teaser_safety",
+    });
+    const history = getMigrationHistory(database);
+    applyMigrations(database, [...phaseSixteen, aiTeaserSafetyMigration]);
     assert.deepEqual(getMigrationHistory(database), history);
   } finally {
     database.close();

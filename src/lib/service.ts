@@ -49,8 +49,11 @@ import {
   type VerificationReview,
   type BuyerVerificationStatus,
   type ElectronicSignatureEnvelope,
+  type TeaserSafetyReview,
 } from "./types";
 import { electronicSignatureCapability } from "./electronic-signature-provider";
+import { teaserSafetyCapability } from "./teaser-safety-provider";
+import { teaserSafetyReviewInputDigest } from "./teaser-safety";
 import { inImmediateTransaction } from "./sqlite-transaction";
 import {
   recalculateDealMatch,
@@ -1705,6 +1708,54 @@ export function workspace(user: User): WorkspaceData {
   const managedDealIds = rawDeals
     .filter((deal) => canManageDeal(deal))
     .map((deal) => deal.id);
+  const teaserSafetyReviews = managedDealIds.length
+    ? all<
+        Omit<
+          TeaserSafetyReview,
+          | "findings"
+          | "investment_highlights"
+          | "missing_financials"
+          | "external_data_processing"
+        > & {
+          findings_json: string;
+          investment_highlights_json: string;
+          missing_financials_json: string;
+          external_data_processing: number;
+          review_count: number;
+          review_rank: number;
+        }
+      >(
+        `WITH ranked_reviews AS (
+           SELECT r.*,u.name requested_by_name,
+             COUNT(*) OVER (PARTITION BY r.deal_id) review_count,
+             ROW_NUMBER() OVER (
+               PARTITION BY r.deal_id
+               ORDER BY r.created_at DESC,r.rowid DESC
+             ) review_rank
+           FROM teaser_safety_reviews r
+           JOIN users u ON u.id=r.requested_by_user_id
+           WHERE r.deal_id IN (${managedDealIds.map(() => "?").join(",")})
+         )
+         SELECT * FROM ranked_reviews
+         WHERE review_rank=1
+         ORDER BY created_at DESC`,
+        ...managedDealIds,
+      ).map(
+        ({
+          findings_json,
+          investment_highlights_json,
+          missing_financials_json,
+          review_rank: _reviewRank,
+          ...review
+        }) => ({
+          ...review,
+          external_data_processing: Boolean(review.external_data_processing),
+          findings: JSON.parse(findings_json),
+          investment_highlights: JSON.parse(investment_highlights_json),
+          missing_financials: JSON.parse(missing_financials_json),
+        }),
+      )
+    : undefined;
   const dealMatches =
     user.role === "buyer" ? undefined : dealMatchesForDeals(managedDealIds);
   const dealOutreach = dealOutreachFor(user, organization.id, managedDealIds);
@@ -1736,6 +1787,10 @@ export function workspace(user: User): WorkspaceData {
       : [],
     can_manage_buyer_projects: canManageBuyerProjects,
     deals,
+    teaser_safety: teaserSafetyCapability(),
+    ...(teaserSafetyReviews
+      ? { teaser_safety_reviews: teaserSafetyReviews }
+      : {}),
     ...(dealMatches ? { deal_matches: dealMatches } : {}),
     deal_outreach: dealOutreach,
     introduction_requests: introductionRequests,
@@ -2551,6 +2606,92 @@ export function mutate(
   );
   if (!dealOwner || !!dealOwner.is_demo !== !!user.is_demo)
     throw new AppError("This deal is not available.", 404);
+  if (action === "applyTeaserSafetySuggestion") {
+    requireManager(user, deal);
+    const reviewId = parse(idSchema, data.review_id);
+    const database = db();
+    inImmediateTransaction(database, () => {
+      const currentDeal = database
+        .prepare("SELECT * FROM deals WHERE id=?")
+        .get(deal.id) as Deal | undefined;
+      if (!currentDeal) throw new AppError("Deal not found.", 404);
+      if (currentDeal.published)
+        throw new AppError(
+          "Make the teaser private before applying an assistant suggestion.",
+          409,
+        );
+      const review = database
+        .prepare(
+          `SELECT id,input_sha256,suggested_teaser,applied_at
+           FROM teaser_safety_reviews WHERE id=? AND deal_id=?`,
+        )
+        .get(reviewId, deal.id) as
+        | {
+            id: string;
+            input_sha256: string;
+            suggested_teaser: string;
+            applied_at: string | null;
+          }
+        | undefined;
+      if (!review) throw new AppError("Teaser safety review not found.", 404);
+      if (review.applied_at)
+        throw new AppError(
+          "This teaser suggestion has already been applied.",
+          409,
+        );
+      const historicalFinancialPeriods = (
+        database
+          .prepare(
+            `SELECT COUNT(*) count FROM deal_financials
+             WHERE deal_id=? AND is_projected=0`,
+          )
+          .get(deal.id) as { count: number }
+      ).count;
+      const currentInputSha256 = teaserSafetyReviewInputDigest({
+        companyName: currentDeal.company_name,
+        sector: currentDeal.sector,
+        province: currentDeal.province,
+        city: currentDeal.city,
+        revenue: currentDeal.revenue,
+        ebitda: currentDeal.ebitda,
+        askingPrice: currentDeal.asking_price,
+        employees: currentDeal.employees,
+        founded: currentDeal.founded,
+        transactionType: currentDeal.transaction_type,
+        ownershipPercentageAvailable:
+          currentDeal.ownership_percentage_available,
+        sellerRolloverPossible: Boolean(currentDeal.seller_rollover_possible),
+        description: currentDeal.description,
+        historicalFinancialPeriods,
+      });
+      if (currentInputSha256 !== review.input_sha256)
+        throw new AppError(
+          "The mandate changed after this review. Run a new safety review before applying its suggestion.",
+          409,
+        );
+      const applied = database
+        .prepare(
+          `UPDATE teaser_safety_reviews
+           SET applied_at=CURRENT_TIMESTAMP,applied_by_user_id=?
+           WHERE id=? AND deal_id=? AND applied_at IS NULL`,
+        )
+        .run(user.id, review.id, deal.id);
+      if (applied.changes !== 1)
+        throw new AppError(
+          "This teaser suggestion has already been applied.",
+          409,
+        );
+      database
+        .prepare("UPDATE deals SET description=? WHERE id=?")
+        .run(review.suggested_teaser, deal.id);
+      recalculateDealMatches(database, deal.id);
+    });
+    audit(user, deal.id, "Applied a reviewed teaser safety suggestion");
+    return {
+      message:
+        "Suggestion applied to the private teaser draft. Review and publish it separately when ready.",
+    };
+  }
   if (action === "recordBuyerFunnelEvent") {
     requireManager(user, deal);
     const p = parse(

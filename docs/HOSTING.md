@@ -74,6 +74,10 @@ ALLOW_REGISTRATION=true
 # Leave unset until an established provider adapter is implemented.
 # ELECTRONIC_SIGNATURE_PROVIDER=
 # ELECTRONIC_SIGNATURE_WEBHOOK_SECRET=
+# Leave unset until an approved teaser provider and data-processing policy exist.
+# TEASER_SAFETY_PROVIDER=openai
+# OPENAI_API_KEY=
+# OPENAI_TEASER_SAFETY_MODEL=
 ```
 
 Replace the example domain with the actual DNS name. Do not include `https://` in `APP_DOMAIN`. Docker Compose constructs the exact `APP_URL` from it and enables secure cookies. `ALLOW_DEMO` defaults to `false` when omitted. Ensure `.env` is readable only by the deployment administrator.
@@ -270,6 +274,18 @@ SELECT COUNT(*) AS watermark_variants FROM document_watermark_variants;
 ```
 
 Migration 20 should appear once. Every pre-existing document should report `watermark_enabled=0`, and the derivative count should be zero until a buyer downloads an enabled PDF. In staging, upload a valid PDF company overview, enable buyer personalization, and confirm that a deal-team download exactly matches the uploaded original while an approved buyer receives a valid PDF carrying the personalized-watermark response header. Then revoke that buyer and confirm a copied download URL fails. Cache files under `data/watermarks/` are regenerable and are not originals; never expose that directory directly through a web server. Back up the database and uploads together before upgrading; there is no automatic down migration.
+
+### Phase 17 migration checks
+
+Migration `021_ai_teaser_safety` adds a private review ledger without changing deals or publishing content. After restart, run:
+
+```sql
+SELECT version,name,applied_at FROM schema_migrations WHERE version=21;
+SELECT COUNT(*) AS teaser_reviews FROM teaser_safety_reviews;
+SELECT COUNT(*) AS published_after_upgrade FROM deals WHERE published=1;
+```
+
+Migration 21 should appear once and a pre-existing database should begin with zero review rows; the published count must match the pre-upgrade backup. In staging, use fictional data to verify that buyers cannot call `/api/teaser-safety`, a stale review cannot overwrite an edited teaser, and a suggestion cannot be applied while a teaser is published. Production must not use `TEASER_SAFETY_PROVIDER=development`. If `openai` is selected, keep `OPENAI_API_KEY` server-side, require an explicit model value, review the provider’s current retention/residency contract, and disclose external processing to users. The request uses `store:false`, but that setting is not a substitute for contractual and privacy review.
 
 ## What changes for a larger launch
 

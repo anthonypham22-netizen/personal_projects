@@ -45,6 +45,9 @@ import {
   RotateCcw,
   Bell,
   Mail,
+  ScanSearch,
+  ShieldAlert,
+  FileCheck2,
 } from "lucide-react";
 import { Brand } from "./brand";
 import { cn } from "@/lib/utils";
@@ -83,6 +86,7 @@ import {
   type NotificationType,
   type BuyerVerificationStatus,
   type SellerVisibleClosedTransaction,
+  type TeaserSafetyReview,
 } from "@/lib/types";
 
 const buyerOrganizationTypes = new Set<string>(BUYER_ORGANIZATION_TYPES);
@@ -2692,6 +2696,281 @@ function MandateSettings({ deal }: { deal: Deal }) {
   );
 }
 
+const teaserFindingLabel = (value: string) =>
+  ({
+    company_name: "Business name",
+    domain: "Domain or email",
+    customer_name: "Customer name",
+    precise_location: "Precise location",
+    revealing_detail: "Revealing detail",
+    missing_financial: "Missing financial",
+  })[value] || statusText(value);
+
+const teaserReviewStatus = (value: TeaserSafetyReview["status"]) =>
+  ({
+    ready: "Ready for human review",
+    attention: "Review recommended",
+    high_risk: "Identifying details found",
+  })[value];
+
+function TeaserSafetyAssistant({ deal }: { deal: Deal }) {
+  const { data, act, busy, refresh, notify } = useWorkspace();
+  const storedReviews = (data.teaser_safety_reviews ?? []).filter(
+    (review) => review.deal_id === deal.id,
+  );
+  const [review, setReview] = useState<TeaserSafetyReview | undefined>(
+    storedReviews[0],
+  );
+  const [running, setRunning] = useState(false);
+  const capability = data.teaser_safety;
+  const reviewCount =
+    review?.review_count ?? storedReviews[0]?.review_count ?? (review ? 1 : 0);
+  const runReview = async () => {
+    setRunning(true);
+    try {
+      const response = await fetch("/api/teaser-safety", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deal_id: deal.id }),
+      });
+      const result = await response.json();
+      if (!response.ok)
+        throw new Error(result.error || "Unable to review this teaser.");
+      setReview(result.review as TeaserSafetyReview);
+      notify(result.message);
+      await refresh();
+    } catch (error) {
+      notify(
+        error instanceof Error
+          ? error.message
+          : "Unable to review this teaser.",
+        true,
+      );
+    } finally {
+      setRunning(false);
+    }
+  };
+  const applySuggestion = async () => {
+    if (!review) return;
+    const result = await act("applyTeaserSafetySuggestion", {
+      deal_id: deal.id,
+      review_id: review.id,
+    });
+    if (result)
+      setReview((current) =>
+        current
+          ? { ...current, applied_at: new Date().toISOString() }
+          : current,
+      );
+  };
+  return (
+    <div className="teaser-safety-layout">
+      <Panel title="Teaser safety review">
+        <div className="panel-body teaser-safety-intro">
+          <div>
+            <p className="eyebrow">HUMAN-CONTROLLED REVIEW</p>
+            <h3>Check what the teaser could reveal.</h3>
+            <p>
+              Scan for business names, domains, customers, precise locations,
+              revealing combinations and missing financial context. The review
+              never changes or publishes your teaser automatically.
+            </p>
+          </div>
+          <button
+            className="button button-green"
+            type="button"
+            onClick={runReview}
+            disabled={running || !capability.available}
+          >
+            {running ? <LoaderCircle size={16} /> : <ScanSearch size={16} />}
+            {running ? "Reviewing teaser…" : "Run safety review"}
+          </button>
+        </div>
+        <div
+          className={cn(
+            "teaser-provider-notice",
+            capability.external_data_processing && "external",
+          )}
+        >
+          <ShieldCheck size={18} />
+          <div>
+            <strong>
+              {capability.provider_name || "Provider not configured"}
+            </strong>
+            <p>{capability.notice}</p>
+          </div>
+        </div>
+      </Panel>
+
+      <section
+        className="teaser-current-draft"
+        aria-labelledby="current-teaser"
+      >
+        <div className="teaser-section-heading">
+          <div>
+            <p className="eyebrow">CURRENT PRIVATE DRAFT</p>
+            <h3 id="current-teaser">What buyers would read</h3>
+          </div>
+          <span className="badge">{deal.description.length}/1200</span>
+        </div>
+        <p>{deal.description}</p>
+      </section>
+
+      {review ? (
+        <>
+          <section
+            className={cn("teaser-review-summary", review.status)}
+            aria-labelledby="teaser-review-result"
+          >
+            <div className="teaser-review-heading">
+              <span className="teaser-review-icon">
+                {review.status === "ready" ? (
+                  <FileCheck2 size={22} />
+                ) : (
+                  <ShieldAlert size={22} />
+                )}
+              </span>
+              <div>
+                <p className="eyebrow">LATEST REVIEW</p>
+                <h3 id="teaser-review-result">
+                  {teaserReviewStatus(review.status)}
+                </h3>
+                <p>
+                  {review.findings.length} disclosure finding
+                  {review.findings.length === 1 ? "" : "s"} · Reviewed by{" "}
+                  {review.requested_by_name} on{" "}
+                  {dateTimeLabel(review.created_at)}
+                </p>
+                <p>
+                  Provider: {review.provider_name}
+                  {review.provider.startsWith("local-fallback:")
+                    ? " · External provider unavailable; deterministic local review used"
+                    : ""}
+                </p>
+              </div>
+              <Status
+                value={
+                  review.status === "ready"
+                    ? "approved"
+                    : review.status === "high_risk"
+                      ? "failed"
+                      : "pending"
+                }
+              />
+            </div>
+            {review.findings.length ? (
+              <div className="teaser-findings">
+                {review.findings.map((finding, index) => (
+                  <article key={`${finding.type}-${finding.evidence}-${index}`}>
+                    <header>
+                      <strong>{teaserFindingLabel(finding.type)}</strong>
+                      <span
+                        className={cn("badge", `badge-${finding.severity}`)}
+                      >
+                        {statusText(finding.severity)}
+                      </span>
+                    </header>
+                    <p>{finding.message}</p>
+                    {finding.evidence && (
+                      <small>
+                        Flagged: <q>{finding.evidence}</q>
+                      </small>
+                    )}
+                    {finding.replacement && (
+                      <small>Safer direction: {finding.replacement}</small>
+                    )}
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="teaser-review-empty">
+                No direct identifiers were found. A seller or advisor must still
+                verify the draft against facts outside Succera.
+              </p>
+            )}
+          </section>
+
+          <div className="teaser-output-grid">
+            <section className="teaser-suggestion" aria-labelledby="safe-draft">
+              <div className="teaser-section-heading">
+                <div>
+                  <p className="eyebrow">SUGGESTED ANONYMIZED DRAFT</p>
+                  <h3 id="safe-draft">Review every word before applying</h3>
+                </div>
+                {review.applied_at && (
+                  <span className="badge badge-green">Applied</span>
+                )}
+              </div>
+              <p>{review.suggested_teaser}</p>
+              <div className="teaser-apply-row">
+                <button
+                  className="button button-green"
+                  type="button"
+                  disabled={
+                    busy || Boolean(review.applied_at) || !!deal.published
+                  }
+                  onClick={applySuggestion}
+                >
+                  <Check size={16} /> Apply to private teaser draft
+                </button>
+                <span>
+                  {deal.published
+                    ? "Make this teaser private before applying a suggestion."
+                    : "Applying does not publish. You can refine it under Mandate settings."}
+                </span>
+              </div>
+            </section>
+
+            <section
+              className="teaser-review-checklist"
+              aria-label="Review checklist"
+            >
+              <div>
+                <p className="eyebrow">INVESTMENT HIGHLIGHTS</p>
+                {review.investment_highlights.length ? (
+                  <ul>
+                    {review.investment_highlights.map((highlight) => (
+                      <li key={highlight}>{highlight}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No safe highlights were generated.</p>
+                )}
+              </div>
+              <div>
+                <p className="eyebrow">CHECK BEFORE MARKET</p>
+                {review.missing_financials.length ? (
+                  <ul>
+                    {review.missing_financials.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No obvious financial gaps were found.</p>
+                )}
+              </div>
+            </section>
+          </div>
+          <p className="teaser-review-history">
+            {reviewCount} review{reviewCount === 1 ? "" : "s"} retained for this
+            mandate. Safety suggestions do not affect buyer matching until a
+            deal-team member explicitly applies and saves the teaser draft.
+          </p>
+        </>
+      ) : (
+        <section className="teaser-safety-empty">
+          <ScanSearch size={30} />
+          <h3>No safety review yet</h3>
+          <p>
+            Run a review before outreach or Qualified Discovery, then verify the
+            result using your knowledge of the company and its market.
+          </p>
+        </section>
+      )}
+    </div>
+  );
+}
+
 function DealDetail({ deal }: { deal: Deal }) {
   const { data, act, busy } = useWorkspace();
   const [tab, setTab] = useState("Overview");
@@ -2718,6 +2997,7 @@ function DealDetail({ deal }: { deal: Deal }) {
     ? [
         "Overview",
         ...(deal.can_manage ? ["Mandate settings"] : []),
+        ...(deal.can_manage ? ["Teaser safety"] : []),
         ...(deal.can_manage ? ["Recommended buyers"] : []),
         ...(deal.can_manage ? ["Buyer funnel"] : []),
         ...(data.user.role !== "buyer" ? ["Internal notes"] : []),
@@ -3029,6 +3309,8 @@ function DealDetail({ deal }: { deal: Deal }) {
         </div>
       ) : tab === "Mandate settings" ? (
         <MandateSettings deal={deal} />
+      ) : tab === "Teaser safety" ? (
+        <TeaserSafetyAssistant deal={deal} />
       ) : tab === "Recommended buyers" ? (
         <RecommendedBuyers deal={deal} />
       ) : tab === "Buyer funnel" ? (

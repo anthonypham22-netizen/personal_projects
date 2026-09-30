@@ -179,7 +179,7 @@ export function matchDealToBuyerProject(
     );
 
   const searchable = normalized(
-    `${deal.title} ${deal.sector} ${deal.description} ${deal.confidential_summary}`,
+    `${deal.title} ${deal.company_name} ${deal.sector} ${deal.confidential_summary} ${deal.management_transition} ${deal.reason_for_transaction}`,
   );
   const fitTerms = project.keywords.length
     ? project.keywords

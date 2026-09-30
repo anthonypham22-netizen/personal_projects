@@ -23,6 +23,7 @@ This list records concrete gaps in the implemented MVP. It is not a claim of com
 - Add malware scanning/quarantine and a supported file-preview pipeline before accepting customer uploads.
 - Define document retention, deletion, export, watermarking, and download policies; revocation cannot recover downloaded files.
 - Treat the implemented personalized PDF watermark as an attribution deterrent, not DRM. Validate the legal notice, recipient data, cache-retention period, secure cache deletion, and incident-handling policy before live use.
+- Keep the teaser assistant disabled until privacy counsel and the operator approve the provider, model, data residency, retention, subprocessor terms, user disclosure, evaluation set, incident handling, and human-review policy. Test false negatives with realistic Canadian M&A teasers; never market the assistant as guaranteeing anonymity.
 - Exercise the implemented schema migration runner against production-like database copies and add storage migration tooling before changing uploaded-file layouts.
 - Decide whether to keep a pilot document room or integrate a specialist virtual data room for complex transactions.
 

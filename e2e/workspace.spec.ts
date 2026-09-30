@@ -962,6 +962,144 @@ test("owner can send a provider-managed electronic NDA without granting early ac
   await expect(buyerCard).not.toContainText("Approved");
 });
 
+test("seller reviews and explicitly applies a private teaser safety suggestion", async ({
+  page,
+}) => {
+  const headers = { Origin: "http://localhost:3000" };
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Owner demo" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goto("/app/deals/atlas");
+  await page.getByRole("button", { name: "Teaser safety" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Check what the teaser could reveal." }),
+  ).toBeVisible();
+  await expect(page.getByText("No safety review yet")).toBeVisible();
+  await expect(
+    page.getByText("Local development safety assistant", { exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Run safety review" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Review recommended" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Review every word before applying" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Financial scale in the teaser narrative"),
+  ).toBeVisible();
+
+  await page
+    .getByRole("button", { name: "Apply to private teaser draft" })
+    .click();
+  await expect(page.getByText("Applied", { exact: true })).toBeVisible();
+  const ownerWorkspace = await (
+    await page.request.get("/api/workspace")
+  ).json();
+  const atlas = ownerWorkspace.deals.find(
+    (deal: { id: string }) => deal.id === "atlas",
+  );
+  expect(atlas.published).toBe(0);
+  expect(atlas.description).toContain(
+    "annual revenue in the C$10M–C$20M range",
+  );
+  expect(ownerWorkspace.teaser_safety_reviews[0].applied_at).toBeTruthy();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    page.getByRole("heading", { name: "Check what the teaser could reveal." }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+
+  const projectedDealResponse = await page.request.post("/api/workspace", {
+    headers,
+    data: {
+      action: "createDeal",
+      data: {
+        title: `Projected safety check ${Date.now()}`,
+        company_name: "Projected Safety Check Inc.",
+        sector: "Technology",
+        province: "Ontario",
+        city: "Toronto",
+        revenue: 4_000_000,
+        ebitda: 700_000,
+        asking_price: 6_000_000,
+        employees: 18,
+        founded: 2016,
+        description:
+          "A Canadian technology business with approximately C$4 million in annual revenue.",
+        confidential_summary: "Used to test historical financial coverage.",
+        financial_year: 2027,
+        financial_is_projected: true,
+      },
+    },
+  });
+  expect(projectedDealResponse.status()).toBe(200);
+  const projectedDealId = (await projectedDealResponse.json()).id;
+  const projectedOnlyReview = await page.request.post("/api/teaser-safety", {
+    headers,
+    data: { deal_id: projectedDealId },
+  });
+  expect(projectedOnlyReview.status()).toBe(200);
+  expect(
+    (await projectedOnlyReview.json()).review.missing_financials,
+  ).toContain("Historical financial periods");
+  expect(
+    (
+      await page.request.post("/api/workspace", {
+        headers,
+        data: {
+          action: "upsertDealFinancial",
+          data: {
+            deal_id: projectedDealId,
+            fiscal_year: 2026,
+            period_type: "annual",
+            revenue: 3_700_000,
+            ebitda: 620_000,
+            gross_profit: 1_900_000,
+            is_projected: false,
+          },
+        },
+      })
+    ).status(),
+  ).toBe(200);
+  const historicalReview = await page.request.post("/api/teaser-safety", {
+    headers,
+    data: { deal_id: projectedDealId },
+  });
+  expect(historicalReview.status()).toBe(200);
+  expect(
+    (await historicalReview.json()).review.missing_financials,
+  ).not.toContain("Historical financial periods");
+
+  await page.request.post("/api/auth", {
+    headers,
+    data: { action: "logout" },
+  });
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  const unauthorized = await page.request.post("/api/teaser-safety", {
+    headers,
+    data: { deal_id: "atlas" },
+  });
+  const nonexistent = await page.request.post("/api/teaser-safety", {
+    headers,
+    data: { deal_id: "not-a-real-mandate" },
+  });
+  expect(unauthorized.status()).toBe(404);
+  expect(nonexistent.status()).toBe(404);
+  expect(await unauthorized.json()).toEqual(await nonexistent.json());
+  const buyerWorkspace = await (
+    await page.request.get("/api/workspace")
+  ).json();
+  expect(buyerWorkspace.teaser_safety_reviews).toBeUndefined();
+});
+
 test("buyer demo cannot enumerate registered Qualified Discovery inventory", async ({
   page,
 }) => {

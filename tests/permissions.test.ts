@@ -1429,7 +1429,8 @@ test("matching records recalculate on relevant changes and remain seller-authori
       founded: 2012,
       description:
         "A vertical software platform with recurring revenue and durable contracts.",
-      confidential_summary: "Founder-owned and consistently profitable.",
+      confidential_summary:
+        "Founder-owned, consistently profitable, with recurring revenue.",
       transaction_type: "majority_acquisition",
       ownership_percentage_available: 80,
       seller_rollover_possible: true,

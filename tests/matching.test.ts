@@ -16,7 +16,8 @@ const deal: Deal = {
   employees: 30,
   founded: 2012,
   description: "Vertical SaaS with recurring revenue and durable contracts.",
-  confidential_summary: "Profitable founder-owned platform.",
+  confidential_summary:
+    "Profitable founder-owned platform with recurring revenue.",
   transaction_type: "majority_acquisition",
   ownership_percentage_available: 80,
   seller_rollover_possible: 1,
@@ -108,6 +109,22 @@ test("ordinary mandate mismatches lower dimensions without excluding the buyer",
   assert.equal(reason(result, "revenue").score, 0);
   assert.equal(reason(result, "ebitda").score, 0);
   assert.ok(result.score < 45);
+});
+
+test("publishable teaser prose does not influence deterministic match scores", () => {
+  const baseline = matchDealToBuyerProject(deal, project);
+  const rewritten = matchDealToBuyerProject(
+    {
+      ...deal,
+      description:
+        "Completely different anonymized prose with no mandate keywords.",
+    },
+    project,
+  );
+
+  assert.equal(rewritten.score, baseline.score);
+  assert.deepEqual(rewritten.reasons, baseline.reasons);
+  assert.deepEqual(rewritten.hard_exclusions, baseline.hard_exclusions);
 });
 
 test("inactive mandates and same-organization deals are hard exclusions", () => {

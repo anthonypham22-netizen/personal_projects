@@ -1,3 +1,5 @@
+import type { TeaserSafetyFinding } from "./teaser-safety";
+
 export type Role = "buyer" | "owner" | "advisor";
 export const ORGANIZATION_TYPES = [
   "buyer",
@@ -350,6 +352,31 @@ export type Deal = {
   matched_project_id?: string;
   matched_project_name?: string;
 };
+export type TeaserSafetyReview = {
+  id: string;
+  deal_id: string;
+  requested_by_user_id: string;
+  requested_by_name: string;
+  provider: string;
+  provider_name: string;
+  external_data_processing: boolean;
+  input_sha256: string;
+  status: "ready" | "attention" | "high_risk";
+  findings: TeaserSafetyFinding[];
+  suggested_teaser: string;
+  investment_highlights: string[];
+  missing_financials: string[];
+  applied_at: string | null;
+  applied_by_user_id: string | null;
+  created_at: string;
+  review_count?: number;
+};
+export type TeaserSafetyCapability = {
+  available: boolean;
+  provider_name: string | null;
+  external_data_processing: boolean;
+  notice: string;
+};
 export type DealFinancial = {
   id: string;
   deal_id: string;
@@ -693,6 +720,8 @@ export type WorkspaceData = {
   buyer_projects: BuyerProject[];
   can_manage_buyer_projects: boolean;
   deals: Deal[];
+  teaser_safety: TeaserSafetyCapability;
+  teaser_safety_reviews?: TeaserSafetyReview[];
   deal_matches?: DealMatch[];
   deal_outreach: DealOutreachRecipient[];
   introduction_requests: IntroductionRequest[];
