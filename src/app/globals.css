@@ -903,6 +903,79 @@
   .stat-note {
     @apply text-xs text-slate-500;
   }
+  .marketplace-analytics-panel {
+    @apply mb-7;
+  }
+  .analytics-intro {
+    @apply border-b border-slate-100 px-5 py-4;
+  }
+  .analytics-intro p {
+    @apply max-w-3xl text-sm leading-relaxed text-slate-500;
+  }
+  .buyer-analytics-grid {
+    @apply grid sm:grid-cols-2 xl:grid-cols-5;
+  }
+  .buyer-analytics-grid > div {
+    @apply min-h-36 border-b border-r border-slate-100 px-5 py-5 last:border-r-0 xl:border-b-0;
+  }
+  .buyer-analytics-grid dt,
+  .analytics-funnel-strip dt,
+  .analytics-rate-grid dt {
+    @apply text-[11px] font-semibold uppercase tracking-wide text-slate-500;
+  }
+  .buyer-analytics-grid dd {
+    @apply mb-3 mt-3 text-3xl font-semibold tabular-nums tracking-tight text-slate-950;
+  }
+  .buyer-analytics-grid .analytics-metric-note {
+    @apply text-xs leading-relaxed text-slate-500;
+  }
+  .advisor-analytics-list {
+    @apply divide-y divide-slate-100;
+  }
+  .advisor-analytics-card {
+    @apply px-5 py-6;
+  }
+  .advisor-analytics-card > header {
+    @apply mb-4 flex flex-wrap items-end justify-between gap-3;
+  }
+  .advisor-analytics-card > header span {
+    @apply text-[11px] font-semibold uppercase tracking-wide text-emerald-800;
+  }
+  .advisor-analytics-card > header h3 {
+    @apply mt-1 text-xl font-semibold tracking-tight text-slate-950;
+  }
+  .advisor-analytics-card > header a {
+    @apply inline-flex min-h-10 items-center gap-1 text-xs font-semibold text-emerald-800;
+  }
+  .analytics-funnel-strip {
+    @apply grid overflow-x-auto rounded-xl border border-slate-200 bg-white;
+    grid-template-columns: repeat(9, minmax(7.5rem, 1fr));
+  }
+  .analytics-funnel-strip > div {
+    @apply relative min-h-24 border-r border-slate-100 px-4 py-4 last:border-r-0;
+  }
+  .analytics-funnel-strip > div::before {
+    content: "";
+    @apply absolute inset-x-0 top-0 h-1 bg-emerald-800;
+  }
+  .analytics-funnel-strip > div:nth-child(n + 4)::before {
+    @apply bg-emerald-600;
+  }
+  .analytics-funnel-strip > div:nth-child(n + 7)::before {
+    @apply bg-emerald-400;
+  }
+  .analytics-funnel-strip dd {
+    @apply mt-3 text-2xl font-semibold tabular-nums text-slate-950;
+  }
+  .analytics-rate-grid {
+    @apply mt-3 grid overflow-hidden rounded-xl border border-slate-200 bg-slate-50 sm:grid-cols-3 xl:grid-cols-6;
+  }
+  .analytics-rate-grid > div {
+    @apply border-b border-r border-slate-200 px-4 py-3 last:border-r-0 xl:border-b-0;
+  }
+  .analytics-rate-grid dd {
+    @apply mt-1 text-lg font-semibold tabular-nums text-slate-900;
+  }
   .dashboard-grid {
     @apply grid gap-6 xl:grid-cols-3;
   }

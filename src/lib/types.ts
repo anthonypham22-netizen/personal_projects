@@ -615,6 +615,38 @@ export type DealBuyerFunnel = {
   buyers: BuyerFunnelEntry[];
   metrics: BuyerFunnelMetrics;
 };
+export type DealManagerMarketplaceAnalytics = {
+  deal_id: string;
+  deal_title: string;
+  counts: {
+    recommended_buyers: number;
+    teasers_sent: number;
+    teaser_views: number;
+    interested: number;
+    ndas: number;
+    cims: number;
+    iois: number;
+    lois: number;
+    exclusive: number;
+  };
+  metrics: Pick<
+    BuyerFunnelMetrics,
+    | "pursuit_rate"
+    | "nda_conversion"
+    | "ioi_conversion"
+    | "loi_conversion"
+    | "average_response_hours"
+  > & {
+    view_rate: number | null;
+  };
+};
+export type BuyerMarketplaceAnalytics = {
+  opportunities_received: number;
+  opportunities_viewed: number;
+  opportunities_pursued: number;
+  lois_submitted: number;
+  active_diligence_processes: number;
+};
 export type Access = {
   id: string;
   deal_id: string;
@@ -778,6 +810,8 @@ export type WorkspaceData = {
   deal_outreach: DealOutreachRecipient[];
   introduction_requests: IntroductionRequest[];
   buyer_funnels?: DealBuyerFunnel[];
+  deal_manager_marketplace_analytics?: DealManagerMarketplaceAnalytics[];
+  buyer_marketplace_analytics?: BuyerMarketplaceAnalytics;
   deal_internal_notes?: DealInternalNote[];
   qualified_discovery_min_score: number;
   qualified_discovery_min_verification_status: BuyerVerificationStatus;

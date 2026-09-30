@@ -2136,11 +2136,6 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
     /not available/i,
   );
   mutate(buyerA, {
-    action: "viewOutreach",
-    data: { deal_id: deal.id, recipient_id: recipientId },
-  });
-  assert.equal(workspace(seller).deal_outreach[0].status, "viewed");
-  mutate(buyerA, {
     action: "respondToOutreach",
     data: {
       deal_id: deal.id,
@@ -2161,6 +2156,18 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
     ["teaser_sent", "teaser_viewed", "pursued"].every((eventType) =>
       pursuedBuyer.events.some((event) => event.event_type === eventType),
     ),
+  );
+  assert.equal(
+    workspace(buyerA).buyer_marketplace_analytics?.opportunities_viewed,
+    1,
+    "responding directly from a sent teaser records the buyer view",
+  );
+  assert.equal(
+    workspace(seller).deal_manager_marketplace_analytics?.find(
+      (analytics) => analytics.deal_id === deal.id,
+    )?.counts.teaser_views,
+    1,
+    "seller analytics include the implicit teaser view",
   );
   assert.equal(pursuedBuyer.current_stage, "Interested");
   assert.notEqual(pursuedFunnel?.metrics.average_response_hours, null);

@@ -84,6 +84,104 @@ test("public network exposes only opted-in firms and anonymized verified history
   expect(await sitemap.text()).not.toContain("/app/deals");
 });
 
+test("advisor overview summarizes recorded marketplace funnel activity", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Advisor demo" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Marketplace analytics" }),
+  ).toBeVisible();
+  const analytics = page.locator(".marketplace-analytics-panel");
+  await expect(
+    analytics.getByRole("heading", { name: "Project Cedar", exact: true }),
+  ).toBeVisible();
+  const cedarFunnel = analytics.getByLabel("Project Cedar marketplace funnel");
+  await expect(
+    cedarFunnel.getByText("Teasers sent", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    cedarFunnel.getByText("Teaser views", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    cedarFunnel.getByText("Interested", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    cedarFunnel
+      .getByText("Recommended buyers", { exact: true })
+      .locator("..")
+      .locator("dd")
+      .first(),
+  ).toHaveText("1");
+  await expect(
+    cedarFunnel
+      .getByText("Interested", { exact: true })
+      .locator("..")
+      .locator("dd")
+      .first(),
+  ).toHaveText("0");
+  const cedarRates = analytics.getByLabel("Project Cedar marketplace rates");
+  await expect(
+    cedarRates.getByText("Average buyer response", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    cedarRates
+      .getByText("View rate", { exact: true })
+      .locator("..")
+      .locator("dd")
+      .first(),
+  ).toHaveText("—");
+  await expect(
+    cedarRates
+      .getByText("Pursuit rate", { exact: true })
+      .locator("..")
+      .locator("dd")
+      .first(),
+  ).toHaveText("—");
+});
+
+test("buyer overview shows only organization-scoped marketplace activity", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Marketplace activity" }),
+  ).toBeVisible();
+  const analytics = page.getByLabel("Buyer marketplace activity");
+  for (const label of [
+    "Opportunities received",
+    "Opportunities viewed",
+    "Opportunities pursued",
+    "LOIs submitted",
+    "Active diligence",
+  ])
+    await expect(analytics.getByText(label, { exact: true })).toBeVisible();
+  for (const [label, value] of [
+    ["Opportunities received", "2"],
+    ["Opportunities viewed", "0"],
+    ["Opportunities pursued", "0"],
+    ["LOIs submitted", "1"],
+    ["Active diligence", "1"],
+  ])
+    await expect(
+      analytics
+        .getByText(label, { exact: true })
+        .locator("..")
+        .locator("dd")
+        .first(),
+    ).toHaveText(value);
+  await expect(
+    page.getByText("Average buyer response", { exact: true }),
+  ).toHaveCount(0);
+  expect(
+    await analytics.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+  ).toBe(true);
+});
+
 test("advisor can navigate mandates and record a shared diligence task", async ({
   page,
 }) => {

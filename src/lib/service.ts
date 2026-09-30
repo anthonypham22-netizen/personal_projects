@@ -82,6 +82,10 @@ import {
   type VerifiedTransactionEvidence,
 } from "./buyer-reputation";
 import {
+  buyerMarketplaceAnalytics as buyerMarketplaceAnalyticsFor,
+  deriveDealManagerMarketplaceAnalytics,
+} from "./marketplace-analytics";
+import {
   activeOrganizationUserIds,
   dealManagerUserIds,
   dealTeamUserIds,
@@ -1829,6 +1833,16 @@ export function workspace(user: User): WorkspaceData {
     user.role !== "buyer" && managedDealIds.length
       ? buyerFunnelsForDeals(db(), managedDealIds)
       : undefined;
+  const dealManagerMarketplaceAnalytics = buyerFunnels?.map((funnel) =>
+    deriveDealManagerMarketplaceAnalytics(
+      funnel,
+      rawDealById.get(funnel.deal_id)?.title ?? "Private mandate",
+    ),
+  );
+  const buyerMarketplaceAnalytics =
+    user.role === "buyer" && buyerProjectsEnabled
+      ? buyerMarketplaceAnalyticsFor(db(), organization.id)
+      : undefined;
   const platformAdmin = isPlatformAdmin(user);
   const buyerVerificationProfile = isEligibleBuyerOrganization(organization)
     ? buyerVerificationProfileFor(organization)
@@ -1857,6 +1871,12 @@ export function workspace(user: User): WorkspaceData {
     deal_outreach: dealOutreach,
     introduction_requests: introductionRequests,
     ...(buyerFunnels ? { buyer_funnels: buyerFunnels } : {}),
+    ...(dealManagerMarketplaceAnalytics
+      ? { deal_manager_marketplace_analytics: dealManagerMarketplaceAnalytics }
+      : {}),
+    ...(buyerMarketplaceAnalytics
+      ? { buyer_marketplace_analytics: buyerMarketplaceAnalytics }
+      : {}),
     ...(dealInternalNotes ? { deal_internal_notes: dealInternalNotes } : {}),
     qualified_discovery_min_score: qualifiedDiscoveryMinScore,
     qualified_discovery_min_verification_status:
@@ -3250,6 +3270,15 @@ export function mutate(
         .run(targetStatus, targetStatus, targetStatus, recipient.id);
       if (!updated.changes)
         throw new AppError("This outreach already has a final response.", 409);
+      if (recipient.status === "sent")
+        recordDealBuyerEvent(database, {
+          dealId: deal.id,
+          buyerOrganizationId: recipient.buyer_organization_id,
+          buyerProjectId: recipient.buyer_project_id,
+          eventType: "teaser_viewed",
+          sourceKey: `outreach:${recipient.id}:teaser_viewed`,
+          createdByUserId: user.id,
+        });
       if (response === "interested" && !existingAccess)
         database
           .prepare(

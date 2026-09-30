@@ -1255,6 +1255,7 @@ function Overview() {
           </div>
         ))}
       </div>
+      <MarketplaceAnalytics />
       <div className="dashboard-grid">
         <div className="dashboard-primary">
           <Panel title="Your transaction pipeline" link="/app/deals">
@@ -1407,6 +1408,168 @@ function Overview() {
         </div>
       </div>
     </>
+  );
+}
+
+function MarketplaceAnalytics() {
+  const { data } = useWorkspace();
+  if (data.user.role === "buyer") {
+    const analytics = data.buyer_marketplace_analytics;
+    if (!analytics) return null;
+    const metrics = [
+      {
+        label: "Opportunities received",
+        value: analytics.opportunities_received,
+        note: "Private invitations and approved introductions",
+      },
+      {
+        label: "Opportunities viewed",
+        value: analytics.opportunities_viewed,
+        note: "Recorded private invitation teasers opened",
+      },
+      {
+        label: "Opportunities pursued",
+        value: analytics.opportunities_pursued,
+        note: "Processes your firm chose to advance",
+      },
+      {
+        label: "LOIs submitted",
+        value: analytics.lois_submitted,
+        note: "Distinct mandates with an indicative offer",
+      },
+      {
+        label: "Active diligence",
+        value: analytics.active_diligence_processes,
+        note: "Approved processes currently in diligence",
+      },
+    ];
+    return (
+      <Panel
+        title="Marketplace activity"
+        className="marketplace-analytics-panel"
+        link="/app/deals"
+        label="Open pipeline"
+      >
+        <div className="analytics-intro">
+          <p>
+            Organization-level activity from recorded Succera marketplace
+            events. Counts never include another buyer firm’s activity.
+          </p>
+        </div>
+        <dl
+          className="buyer-analytics-grid"
+          aria-label="Buyer marketplace activity"
+        >
+          {metrics.map((metric) => (
+            <div key={metric.label}>
+              <dt>{metric.label}</dt>
+              <dd>{metric.value}</dd>
+              <dd className="analytics-metric-note">{metric.note}</dd>
+            </div>
+          ))}
+        </dl>
+      </Panel>
+    );
+  }
+
+  const analytics = data.deal_manager_marketplace_analytics;
+  if (!analytics) return null;
+  return (
+    <Panel
+      title="Marketplace analytics"
+      className="marketplace-analytics-panel"
+      link="/app/deals"
+      label="Open mandates"
+    >
+      <div className="analytics-intro">
+        <p>
+          Mandate performance derived only from recorded buyer events. Empty
+          denominators remain blank rather than implying activity.
+        </p>
+      </div>
+      {analytics.length ? (
+        <div className="advisor-analytics-list">
+          {analytics.map((dealAnalytics) => {
+            const counts = [
+              ["Recommended buyers", dealAnalytics.counts.recommended_buyers],
+              ["Teasers sent", dealAnalytics.counts.teasers_sent],
+              ["Teaser views", dealAnalytics.counts.teaser_views],
+              ["Interested", dealAnalytics.counts.interested],
+              ["NDAs", dealAnalytics.counts.ndas],
+              ["CIMs", dealAnalytics.counts.cims],
+              ["IOIs", dealAnalytics.counts.iois],
+              ["LOIs", dealAnalytics.counts.lois],
+              ["Exclusive", dealAnalytics.counts.exclusive],
+            ] as const;
+            const rates = [
+              ["View rate", funnelRate(dealAnalytics.metrics.view_rate)],
+              ["Pursuit rate", funnelRate(dealAnalytics.metrics.pursuit_rate)],
+              [
+                "NDA conversion",
+                funnelRate(dealAnalytics.metrics.nda_conversion),
+              ],
+              [
+                "IOI conversion",
+                funnelRate(dealAnalytics.metrics.ioi_conversion),
+              ],
+              [
+                "LOI conversion",
+                funnelRate(dealAnalytics.metrics.loi_conversion),
+              ],
+              [
+                "Average buyer response",
+                responseTimeLabel(dealAnalytics.metrics.average_response_hours),
+              ],
+            ] as const;
+            return (
+              <article
+                className="advisor-analytics-card"
+                key={dealAnalytics.deal_id}
+              >
+                <header>
+                  <div>
+                    <span>MANDATE PERFORMANCE</span>
+                    <h3>{dealAnalytics.deal_title}</h3>
+                  </div>
+                  <Link href={`/app/deals/${dealAnalytics.deal_id}`}>
+                    View buyer funnel <ArrowUpRight size={14} />
+                  </Link>
+                </header>
+                <dl
+                  className="analytics-funnel-strip"
+                  aria-label={`${dealAnalytics.deal_title} marketplace funnel`}
+                >
+                  {counts.map(([label, value]) => (
+                    <div key={label}>
+                      <dt>{label}</dt>
+                      <dd>{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <dl
+                  className="analytics-rate-grid"
+                  aria-label={`${dealAnalytics.deal_title} marketplace rates`}
+                >
+                  {rates.map(([label, value]) => (
+                    <div key={label}>
+                      <dt>{label}</dt>
+                      <dd>{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <Empty
+          title="No marketplace activity yet"
+          body="Buyer recommendations and responses will appear after an authorized mandate begins matching."
+          href="/app/deals"
+          label="Open mandates"
+        />
+      )}
+    </Panel>
   );
 }
 const projectRange = (minimum: number | null, maximum: number | null) => {

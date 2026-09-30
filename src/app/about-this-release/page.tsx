@@ -20,8 +20,8 @@ export default function Release() {
         Accounts, acquisition criteria, human-controlled teaser safety reviews,
         confidential teasers, controlled document sharing, internal buyer-firm
         review, external NDA verification, LOI submissions, private
-        conversations, diligence tasks, and deal-stage tracking are backed by a
-        persistent database.
+        conversations, diligence tasks, deal-stage tracking, and role-scoped
+        marketplace analytics are backed by a persistent database.
       </p>
       <h2>Before using real transaction information</h2>
       <p>
