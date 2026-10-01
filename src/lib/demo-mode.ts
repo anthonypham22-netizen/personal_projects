@@ -1,12 +1,7 @@
-type RolePreviewEnvironment = {
-  NODE_ENV?: string;
-  ALLOW_DEMO?: string;
-};
+import { isDemoAllowed, type AppEnvironmentVariables } from "./app-environment";
 
 export function isRolePreviewEnabled(
-  environment: RolePreviewEnvironment = process.env,
+  environment: AppEnvironmentVariables = process.env,
 ) {
-  return (
-    environment.NODE_ENV !== "production" && environment.ALLOW_DEMO === "true"
-  );
+  return isDemoAllowed(environment);
 }

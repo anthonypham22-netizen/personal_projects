@@ -4,11 +4,13 @@
 
 The public website and private SaaS portals are one Next.js application. One Node.js process serves both; a persistent volume stores SQLite and uploaded files. Caddy sits in front of the application and handles HTTPS.
 
-The first deployment should be a staging environment with fictional data. A successful deployment is not a substitute for completing the [live-launch requirements](LAUNCH-CHECKLIST.md).
+The first deployment should be `https://staging.succera.io` with fictional data. Production at `https://succera.io` must be a separate deployment with its own persistent volume, sessions, accounts, uploads, secrets, and backups. A successful deployment is not a substitute for completing the [live-launch requirements](LAUNCH-CHECKLIST.md).
+
+Succera uses the same application code and container image in all environments. Runtime variables select the environment; databases or uploaded files are never promoted between them.
 
 ## 1. Complete local verification
 
-Local installation, TypeScript checking, the production build, 81 backend tests, and 21 Chromium checks passed. Repeat verification after changes and before deployment:
+Local installation, TypeScript checking, the production build, 131 backend tests, and 30 Chromium checks passed. Repeat verification after changes and before deployment:
 
 ```sh
 npm ci
@@ -36,18 +38,19 @@ Canadian-region infrastructure is a hosting choice, not a claim of legal complia
 
 Use two deployments before inviting real users. GitHub Environments are recommended once GitHub Actions performs deployments, but they do not host the application themselves; each environment still needs its own server, domain, persistent storage, and secrets.
 
-| Boundary          | Staging                                                       | Production                                    |
-| ----------------- | ------------------------------------------------------------- | --------------------------------------------- |
-| Purpose           | Test releases and complete fictional transaction walkthroughs | Real customer accounts and approved live data |
-| Example domain    | `staging.your-domain.ca`                                      | `app.your-domain.ca`                          |
-| `ALLOW_DEMO`      | `true`                                                        | `false`                                       |
-| `PUBLIC_NETWORK_INDEXING_ENABLED` | `false`                                        | `false` until public content and privacy review are complete |
-| Registration      | Controlled test accounts                                      | Invitation-only initially is recommended      |
-| Data              | Fictional only                                                | Live data under approved operating controls   |
-| Storage           | Dedicated staging volume and backups                          | Dedicated production volume and backups       |
-| GitHub protection | Automatic deployment is acceptable                            | Required reviewer approval before deployment  |
+| Boundary                          | Staging                                                       | Production                                                   |
+| --------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------ |
+| Purpose                           | Test releases and complete fictional transaction walkthroughs | Real customer accounts and approved live data                |
+| Domain                            | `staging.succera.io`                                          | `succera.io`                                                 |
+| `APP_ENV`                         | `staging`                                                     | `production`                                                 |
+| `ALLOW_DEMO`                      | `true`                                                        | `false`                                                      |
+| `PUBLIC_NETWORK_INDEXING_ENABLED` | ignored and forced off                                        | `false` until public content and privacy review are complete |
+| Registration                      | Controlled test accounts                                      | Invitation-only initially is recommended                     |
+| Data                              | Fictional only                                                | Live data under approved operating controls                  |
+| Docker volume                     | `succera_staging_data`                                        | `succera_production_data`                                    |
+| GitHub protection                 | Automatic deployment is acceptable                            | Required reviewer approval before deployment                 |
 
-Never share a database, upload directory, encryption secret, session secret, or backup destination between staging and production. Promote the same reviewed commit or container image from staging to production; do not copy the staging database into production.
+Never share a database, upload directory, session database, encryption secret, or backup destination between staging and production. Promote the same reviewed commit or container image from staging to production; do not copy the staging database into production. The Compose volume name includes `APP_ENV`, which produces physically distinct volumes even though each container mounts its own volume at `/app/data`.
 
 In GitHub repository settings, create `staging` and `production` Environments when deployment automation is added. Store only environment-specific deployment credentials there. Configure the production Environment with required reviewers and restrict deployments to the protected release branch or tag policy you adopt.
 
@@ -66,26 +69,36 @@ If the repository is private, configure read-only deployment access; do not stor
 
 ## 4. Configure the deployment
 
-Create a server-side `.env` file in the repository directory with:
+Create a server-side `.env` file in each deployment directory. Staging uses:
 
 ```dotenv
-APP_DOMAIN=app.your-domain.ca
-ALLOW_DEMO=false
+APP_ENV=staging
+APP_DOMAIN=staging.succera.io
+APP_URL=https://staging.succera.io
+ALLOW_DEMO=true
 ALLOW_REGISTRATION=true
-# Keep public profile pages previewable but non-indexed until launch review.
 PUBLIC_NETWORK_INDEXING_ENABLED=false
-# Leave unset until an established provider adapter is implemented.
-# ELECTRONIC_SIGNATURE_PROVIDER=
-# ELECTRONIC_SIGNATURE_WEBHOOK_SECRET=
-# Leave unset until an approved teaser provider and data-processing policy exist.
-# TEASER_SAFETY_PROVIDER=openai
-# OPENAI_API_KEY=
-# OPENAI_TEASER_SAFETY_MODEL=
+ELECTRONIC_SIGNATURE_PROVIDER=development
+ELECTRONIC_SIGNATURE_WEBHOOK_SECRET=replace-with-a-random-staging-secret
+TEASER_SAFETY_PROVIDER=development
 ```
 
-Replace the example domain with the actual DNS name. Do not include `https://` in `APP_DOMAIN`. Docker Compose constructs the exact `APP_URL` from it and enables secure cookies. `ALLOW_DEMO` defaults to `false` when omitted. Ensure `.env` is readable only by the deployment administrator.
+Production uses:
 
-For staging, use a separate checkout or Compose project, domain, and volume with `ALLOW_DEMO=true`. Keep staging private or access-controlled and use fictional information only.
+```dotenv
+APP_ENV=production
+APP_DOMAIN=succera.io
+APP_URL=https://succera.io
+ALLOW_DEMO=false
+ALLOW_REGISTRATION=true
+PUBLIC_NETWORK_INDEXING_ENABLED=false
+# Leave development providers unset. Configure only approved production
+# providers and secrets after the corresponding launch reviews.
+```
+
+Do not include `https://` in `APP_DOMAIN`; do include it in `APP_URL`. Ensure each `.env` is readable only by the deployment administrator and never commit it. Startup rejects insecure staging/production cookies, demo-enabled production, development providers in production, or a production `DATA_DIR` containing demo users.
+
+Use a separate server or deployment checkout for each environment. Keep staging private or access-controlled and use fictional information only. At minimum, restrict administrative network access where practical; Caddy basic authentication or an infrastructure-level allowlist can be added without changing Succera authentication. The application itself always shows `STAGING — FICTIONAL DATA` and forces staging pages to `noindex, nofollow`.
 
 Public profile pages are safe to preview with indexing disabled. Do not enable `PUBLIC_NETWORK_INDEXING_ENABLED` on a staging or review hostname. Production should enable it only after the public firm-profile copy, privacy notice, canonical metadata, removal workflow, and the explicit firm/transaction opt-ins have been reviewed. The public sitemap is generated from currently opted-in advisor and buyer profiles and anonymized, independently verified transaction tombstones; it never includes active mandates, `/app` routes, login, registration, messages, documents, or other confidential workflows.
 
@@ -103,20 +116,21 @@ docker compose logs --tail=100 app caddy
 
 Caddy obtains and renews certificates when the DNS and network requirements are met. See [Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https).
 
-Open `https://app.your-domain.ca`. Register test accounts and verify the full walkthrough in the README. Confirm:
+Open the environment's configured `APP_URL`. Register test accounts and verify the full walkthrough in the README. Confirm:
 
 - All three role dashboards open and data persists after a container restart.
 - Anonymous document downloads fail.
 - Buyer A cannot access buyer B's documents or conversations, even by copying URLs.
 - Revocation blocks subsequent confidential downloads.
 - Upload, download, message, and task updates work under the exact production hostname.
-- The public deployment does not display or accept demo login.
+- Staging displays `STAGING — FICTIONAL DATA`, exposes `/dev/preview`, and contains fictional records only.
+- Production returns 404 for `/dev/preview`, does not display or accept demo login, and starts without fictional records.
 
 If writes fail with an origin error, confirm that the browser hostname matches `APP_DOMAIN` exactly. If uploads fail, check proxy body limits, file type, and the 10 MB application limit. Avoid placing a second caching proxy in front of authenticated responses until it is configured not to cache them.
 
 ## 6. Back up and test recovery
 
-The named `northlane_data` volume survives container replacement. It does not protect against disk failure, accidental volume deletion, or server loss.
+The environment-specific `succera_staging_data` or `succera_production_data` volume survives container replacement. Each contains exactly one environment's `/app/data/northlane.sqlite`, `/app/data/uploads/`, and `/app/data/backups/`. It does not protect against disk failure, accidental volume deletion, or server loss.
 
 Create a consistent SQLite snapshot and copy its document files:
 
@@ -128,7 +142,9 @@ The script prints the backup directory inside `/app/data/backups/`. It checks th
 
 Personalized watermark files under `/app/data/watermarks/` are a replaceable cache and are intentionally not included in the backup artifact. Their database rows may remain in a restored snapshot; the application treats a missing cached file as a cache miss and regenerates it from the protected original only after the current buyer passes the normal download authorization check.
 
-Test restoration into a **separate staging deployment and fresh volume** first. Stop that staging app, restore `northlane.sqlite` and `uploads/` into its data directory, ensure ownership matches the runtime `node` user, and restart. Verify a representative deal, account, and download. Never mix a snapshot database with an unrelated upload directory or stale SQLite WAL files. Do not restore over a running database.
+Run and export backups separately from each deployment. A staging backup remains inside `succera_staging_data`; a production backup remains inside `succera_production_data`. Never copy both environments into one backup directory or run the script with a parent directory as `DATA_DIR`.
+
+Test restoration into a **separate staging deployment and fresh volume** first. Stop that staging app, restore `northlane.sqlite` and `uploads/` into its data directory, ensure ownership matches the runtime `node` user, and restart. Verify a representative deal, account, and download. Never restore a staging snapshot into production, mix a snapshot database with an unrelated upload directory, include stale SQLite WAL files, or restore over a running database.
 
 Do not use `docker compose down -v` during routine updates: `-v` deletes persistent volumes.
 

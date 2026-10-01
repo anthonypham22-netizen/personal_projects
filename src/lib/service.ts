@@ -101,6 +101,7 @@ import {
   notifyUsers,
   saveNotificationPreferences,
 } from "./notifications";
+import { isDemoAllowed } from "./app-environment";
 
 export class AppError extends Error {
   constructor(
@@ -953,7 +954,7 @@ export function sessionUser(token?: string): User | undefined {
       )} FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires_at>? AND (u.is_demo=0 OR ?=1)`,
     tokenHash(token),
     Date.now(),
-    process.env.ALLOW_DEMO === "true" ? 1 : 0,
+    isDemoAllowed() ? 1 : 0,
   );
 }
 export function createSession(userId: string) {
@@ -1768,7 +1769,7 @@ export function workspace(user: User): WorkspaceData {
   );
   const advisors = all<WorkspaceData["advisors"][number]>(
     "SELECT id,name,company,province,bio FROM users WHERE role='advisor' AND (is_demo=0 OR ?=1)",
-    user.is_demo && process.env.ALLOW_DEMO === "true" ? 1 : 0,
+    user.is_demo && isDemoAllowed() ? 1 : 0,
   );
   const notifications = notificationsForUser(db(), user.id);
   const notificationUnreadCount = notificationUnreadCountForUser(db(), user.id);

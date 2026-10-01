@@ -6,6 +6,7 @@ import { PDFDocument } from "pdf-lib";
 
 async function previewAs(page: Page, role: "owner" | "advisor" | "buyer") {
   await page.goto("/dev/preview");
+  await expect(page.getByText("STAGING — FICTIONAL DATA")).toHaveCount(0);
   const label = role.charAt(0).toUpperCase() + role.slice(1);
   await page.getByRole("button", { name: `View as ${label}` }).click();
   await expect(page).toHaveURL(/\/app$/);
@@ -133,6 +134,56 @@ test("public website connects to all three registration journeys", async ({
     .getByRole("link", { name: "Bring your deal team together" })
     .click();
   await expect(page.getByLabel("I’m joining as")).toHaveValue("advisor");
+});
+
+test("new customer accounts receive intentional role-specific empty states", async ({
+  page,
+}) => {
+  const nonce = Date.now();
+  const cases = [
+    {
+      role: "buyer",
+      path: "/app/opportunities",
+      heading: "No opportunities yet",
+      body: "Complete your acquisition criteria and we’ll surface relevant businesses as they become available.",
+    },
+    {
+      role: "owner",
+      path: "/app/deals",
+      heading: "You haven’t listed a business yet.",
+      body: "Create a confidential mandate to begin connecting with qualified buyers.",
+    },
+    {
+      role: "advisor",
+      path: "/app/deals",
+      heading: "No active mandates yet.",
+      body: "Add your first client mandate to begin managing buyer interest and deal activity.",
+    },
+  ] as const;
+
+  for (const entry of cases) {
+    const response = await page.request.post("/api/auth", {
+      headers: { Origin: "http://localhost:3000" },
+      data: {
+        action: "register",
+        name: `${entry.role} empty state`,
+        company: `${entry.role} empty state firm`,
+        email: `${entry.role}-${nonce}@example.test`,
+        password: "environment-test-password-2026",
+        role: entry.role,
+      },
+    });
+    expect(response.status()).toBe(200);
+    await page.goto(entry.path);
+    await expect(
+      page.getByRole("heading", { name: entry.heading }),
+    ).toBeVisible();
+    await expect(page.getByText(entry.body)).toBeVisible();
+    await page.request.post("/api/auth", {
+      headers: { Origin: "http://localhost:3000" },
+      data: { action: "logout" },
+    });
+  }
 });
 
 test("development role preview switches between seeded demo identities", async ({

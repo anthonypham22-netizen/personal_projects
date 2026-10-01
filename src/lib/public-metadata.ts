@@ -1,14 +1,25 @@
 import type { Metadata } from "next";
+import { isStaging, type AppEnvironmentVariables } from "./app-environment";
 
-export const publicNetworkIndexingEnabled =
-  process.env.PUBLIC_NETWORK_INDEXING_ENABLED === "true";
+type PublicMetadataEnvironment = AppEnvironmentVariables & {
+  PUBLIC_NETWORK_INDEXING_ENABLED?: string;
+};
 
-const configuredSiteUrl = process.env.APP_URL?.trim().replace(/\/$/, "");
-export const siteUrl = configuredSiteUrl || "http://localhost:3000";
-export const siteMetadataBase = new URL(siteUrl);
+export const isPublicNetworkIndexingEnabled = (
+  environment: PublicMetadataEnvironment = process.env,
+) =>
+  environment.PUBLIC_NETWORK_INDEXING_ENABLED === "true" &&
+  !isStaging(environment);
+
+export const siteUrl = (environment: PublicMetadataEnvironment = process.env) =>
+  environment.APP_URL?.trim().replace(/\/$/, "") || "http://localhost:3000";
+
+export const siteMetadataBase = (
+  environment: PublicMetadataEnvironment = process.env,
+) => new URL(siteUrl(environment));
 
 export const publicAbsoluteUrl = (path: string) =>
-  new URL(path, `${siteUrl}/`).toString();
+  new URL(path, `${siteUrl()}/`).toString();
 
 export function publicPageMetadata({
   title,
@@ -22,13 +33,14 @@ export function publicPageMetadata({
   image?: string;
 }): Metadata {
   const url = publicAbsoluteUrl(path);
+  const indexingEnabled = isPublicNetworkIndexingEnabled();
   return {
     title,
     description,
     alternates: { canonical: url },
     robots: {
-      index: publicNetworkIndexingEnabled,
-      follow: publicNetworkIndexingEnabled,
+      index: indexingEnabled,
+      follow: indexingEnabled,
     },
     openGraph: {
       type: "website",

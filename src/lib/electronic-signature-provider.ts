@@ -3,6 +3,7 @@ import type {
   ElectronicSignatureCapability,
   ElectronicSignatureStatus,
 } from "./types";
+import { isDemoAllowed } from "./app-environment";
 
 export type CreateNdaEnvelopeInput = {
   localEnvelopeId: string;
@@ -113,11 +114,8 @@ const developmentProvider = (): ElectronicSignatureProvider => ({
 export function configuredElectronicSignatureProvider():
   ElectronicSignatureProvider | undefined {
   const selected = process.env.ELECTRONIC_SIGNATURE_PROVIDER?.trim();
-  if (process.env.NODE_ENV === "production") return undefined;
-  if (
-    selected === developmentProviderId ||
-    (!selected && process.env.ALLOW_DEMO === "true")
-  )
+  if (!isDemoAllowed()) return undefined;
+  if (selected === developmentProviderId || !selected)
     return developmentProvider();
   return undefined;
 }

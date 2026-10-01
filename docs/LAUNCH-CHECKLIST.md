@@ -2,6 +2,15 @@
 
 This list records concrete gaps in the implemented MVP. It is not a claim of comprehensive security or legal compliance.
 
+## Environment separation
+
+- Run local development with `APP_ENV=development`, `ALLOW_DEMO=true`, and `DATA_DIR=./data/dev`.
+- Deploy staging at `staging.succera.io` with `APP_ENV=staging`, `ALLOW_DEMO=true`, and the dedicated `succera_staging_data` volume. Confirm the persistent staging banner, `noindex`, role preview, and fictional-only data before each QA cycle.
+- Deploy production at `succera.io` with `APP_ENV=production`, `ALLOW_DEMO=false`, and the dedicated `succera_production_data` volume. Confirm `/dev/preview` returns 404, demo authentication is rejected, and the fresh production database has no demo users, deals, documents, tasks, messages, or offers.
+- Keep environment `.env` files, provider secrets, deployment credentials, backup destinations, SQLite databases, upload directories, and sessions physically separate. Never restore or copy staging data into production.
+- Back up and restore staging and production independently. Record the target environment and volume name in the operational runbook before every restore.
+- Restrict casual public access to staging with infrastructure controls where practical. The banner and `noindex` are safety layers, not access control.
+
 ## Build and verification
 
 - Resolve the dependency-install credit block, generate the lockfile, run the TypeScript, service, browser, and production-build checks, and fix failures.

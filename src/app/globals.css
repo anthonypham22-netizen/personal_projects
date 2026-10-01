@@ -119,6 +119,13 @@
   .badge-green {
     @apply bg-emerald-50 text-emerald-800;
   }
+  .environment-banner {
+    @apply sticky top-0 z-50 flex min-h-9 items-center justify-center bg-amber-300 px-4 py-2 text-center text-xs font-semibold text-slate-950 shadow-sm;
+    padding-top: calc(0.5rem + env(safe-area-inset-top));
+  }
+  .has-environment-banner {
+    --environment-banner-height: calc(2.25rem + env(safe-area-inset-top));
+  }
   .badge-amber {
     @apply bg-amber-50 text-amber-800;
   }
@@ -804,6 +811,9 @@
   }
   .sidebar {
     @apply fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-slate-200 bg-white p-5 lg:flex;
+  }
+  .has-environment-banner .sidebar {
+    top: var(--environment-banner-height);
   }
   .sidebar .brand {
     @apply mb-8;

@@ -13,7 +13,7 @@ import {
 } from "@/lib/public-network";
 import {
   publicPageMetadata,
-  publicNetworkIndexingEnabled,
+  isPublicNetworkIndexingEnabled,
 } from "@/lib/public-metadata";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +26,7 @@ export const metadata = publicPageMetadata({
 });
 
 export default function NetworkPage() {
+  const indexingEnabled = isPublicNetworkIndexingEnabled();
   const firms = listPublicFirms();
   const industries = listPublicIndustries();
   const locations = listPublicLocations();
@@ -136,7 +137,7 @@ export default function NetworkPage() {
           </div>
         </section>
       )}
-      {!publicNetworkIndexingEnabled && (
+      {!indexingEnabled && (
         <p className="public-network-indexing-note">
           Search indexing is disabled in this environment. Public pages remain
           available by direct link while the network is being prepared.

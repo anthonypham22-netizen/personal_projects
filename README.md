@@ -4,7 +4,7 @@ A standalone website and SaaS MVP for Canadian M&A, targeting businesses with ap
 
 ## Current delivery status
 
-The local MVP now installs and builds successfully. TypeScript checking, all 120 backend tests, and all 28 Chromium browser checks pass. `package-lock.json` is present. The local preview is available while `npm run dev` is running. This is not a publicly deployed or production-ready release; Docker deployment, broader security review, and live-launch requirements remain outstanding. See [validation status](docs/VALIDATION.md).
+The local MVP now installs and builds successfully. TypeScript checking, all 131 backend tests, and all 30 Chromium browser checks pass. `package-lock.json` is present. The local preview is available while `npm run dev` is running. This is not a publicly deployed or production-ready release; Docker deployment, broader security review, and live-launch requirements remain outstanding. See [validation status](docs/VALIDATION.md).
 
 ## Start locally
 
@@ -22,7 +22,7 @@ Create `.env.local` from `.env.example` if it does not already exist. The local 
 npm run dev
 ```
 
-Open [localhost:3000](http://localhost:3000). In a non-production environment with `ALLOW_DEMO=true`, open `/dev/preview` and choose **View as Owner**, **View as Advisor**, or **View as Buyer**. The customer login and registration pages never show demo controls. Passwords for demo records are random and are not exposed; the explicit developer preview actions establish their sessions.
+Open [localhost:3000](http://localhost:3000). In development or staging with `ALLOW_DEMO=true`, open `/dev/preview` and choose **View as Owner**, **View as Advisor**, or **View as Buyer**. The customer login and registration pages never show demo controls. Passwords for demo records are random and are not exposed; the explicit developer preview actions establish their sessions.
 
 Demo data is shared and persistent. Use fictional files only. Demo and registered-account marketplaces are isolated from each other. New registered accounts begin with an empty workspace; register an owner, advisor, and buyer to try the complete multi-account workflow with test information.
 
@@ -82,7 +82,8 @@ After the initial successful `npm install`, keep and commit the generated `packa
 - Passwords hashed using salted scrypt; sessions use random bearer tokens with only SHA-256 digests stored in the database.
 - HTTP-only, SameSite cookies; secure cookies under HTTPS; mutation origin checks against `APP_URL`.
 - Parameterized SQL, server-side input validation, and authorization on reads, mutations, and downloads.
-- `data/northlane.sqlite` and `data/uploads/` contain application records and files. Never commit these paths.
+- Local development uses `data/dev/northlane.sqlite` and `data/dev/uploads/`. Staging and production use physically separate Docker volumes mounted at `/app/data`; never copy or share those volumes between environments.
+- `APP_ENV` explicitly classifies `development`, `staging`, and `production`. Staging is visibly labelled and always noindex. Production refuses demo configuration and refuses to open a database containing demo users.
 - The visible product is branded Succera. Legacy internal identifiers (`northlane.sqlite`, `northlane_session`, package name, and Docker volume) are intentionally retained so the rebrand does not reset existing data, deployments, or sessions. Previously seeded demo files are not rewritten; newly generated examples use Succera.
 - Versioned SQLite migrations run automatically at startup from `src/lib/migrations/`. Applied versions are recorded in `schema_migrations`, so fresh and existing databases follow the same upgrade path and migration history remains directly inspectable.
 - Sell-side mandates capture transaction type, ownership available, rollover and financing flexibility, transition context, expected value, and one of three controlled distribution modes. Annual, year-to-date, and trailing-twelve-month financial periods are stored separately in `deal_financials`.

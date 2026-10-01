@@ -1,19 +1,22 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { Brand } from "@/components/brand";
+import { isDemoAllowed } from "@/lib/app-environment";
 export const metadata: Metadata = {
   title: "About this release",
   robots: { index: false, follow: false },
 };
 export default function Release() {
+  const demoEnabled = isDemoAllowed();
   return (
     <main className="release-page">
       <Brand />
       <h1>About this release</h1>
       <p>
         Succera is an early software MVP for Canadian business acquisitions. The
-        name is provisional. Demo companies, users, financial figures, and
-        agreements are fictional.
+        name is provisional.
+        {demoEnabled &&
+          " This environment contains fictional companies, users, financial figures, and agreements for testing."}
       </p>
       <h2>What works</h2>
       <p>
@@ -37,9 +40,9 @@ export default function Release() {
       <p>
         Teaser safety findings and rewrites can be incomplete or incorrect. The
         assistant never publishes content and does not replace seller, advisor,
-        legal, privacy, or confidentiality review. The local demo provider sends
-        no teaser data externally; any production AI provider requires separate
-        operator configuration and disclosure.
+        legal, privacy, or confidentiality review. Any enabled AI provider
+        requires separate operator configuration, privacy review, and user
+        disclosure.
       </p>
       <p>
         The operator must establish appropriate privacy notices, terms,

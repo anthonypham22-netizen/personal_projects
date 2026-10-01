@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { isPublicNetworkIndexingEnabled } from "../src/lib/public-metadata";
 
 let directory: string;
 
@@ -28,12 +29,15 @@ test("enabled indexing exposes only public-network routes", async () => {
       import("../src/lib/public-metadata"),
     ]);
 
-  assert.equal(metadata.publicNetworkIndexingEnabled, true);
-  assert.deepEqual(metadata.publicPageMetadata({
-    title: "Network",
-    description: "Public network",
-    path: "/network",
-  }).robots, { index: true, follow: true });
+  assert.equal(metadata.isPublicNetworkIndexingEnabled(), true);
+  assert.deepEqual(
+    metadata.publicPageMetadata({
+      title: "Network",
+      description: "Public network",
+      path: "/network",
+    }).robots,
+    { index: true, follow: true },
+  );
 
   const robotsResult = robots();
   assert.deepEqual(robotsResult.rules, {
@@ -41,10 +45,7 @@ test("enabled indexing exposes only public-network routes", async () => {
     allow: "/",
     disallow: ["/app", "/api", "/login", "/register"],
   });
-  assert.equal(
-    robotsResult.sitemap,
-    "https://succera.example/sitemap.xml",
-  );
+  assert.equal(robotsResult.sitemap, "https://succera.example/sitemap.xml");
 
   const paths = sitemap().map(({ url }) => new URL(url).pathname);
   assert.ok(paths.includes("/"));
@@ -55,7 +56,33 @@ test("enabled indexing exposes only public-network routes", async () => {
       "/transactions/industrial-services-ontario-evergreen-services",
     ),
   );
-  assert.equal(paths.some((value) => value.startsWith("/app")), false);
-  assert.equal(paths.some((value) => value.startsWith("/api")), false);
-  assert.equal(paths.some((value) => value.includes("cedar-co")), false);
+  assert.equal(
+    paths.some((value) => value.startsWith("/app")),
+    false,
+  );
+  assert.equal(
+    paths.some((value) => value.startsWith("/api")),
+    false,
+  );
+  assert.equal(
+    paths.some((value) => value.includes("cedar-co")),
+    false,
+  );
+});
+
+test("staging stays noindex even when the indexing flag is enabled", () => {
+  assert.equal(
+    isPublicNetworkIndexingEnabled({
+      APP_ENV: "staging",
+      PUBLIC_NETWORK_INDEXING_ENABLED: "true",
+    }),
+    false,
+  );
+  assert.equal(
+    isPublicNetworkIndexingEnabled({
+      APP_ENV: "production",
+      PUBLIC_NETWORK_INDEXING_ENABLED: "true",
+    }),
+    true,
+  );
 });

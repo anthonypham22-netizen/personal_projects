@@ -12,6 +12,7 @@ import {
 } from "./types";
 import { slugify } from "./utils";
 import { verificationStatusMeets } from "./verification";
+import { isDemoAllowed } from "./app-environment";
 
 export const publicDirectorySlug = (value: string) =>
   slugify(value, "directory");
@@ -43,7 +44,7 @@ type PublicFirmRow = {
 };
 
 const demoVisibilitySql = () =>
-  process.env.ALLOW_DEMO === "true"
+  isDemoAllowed()
     ? "1=1"
     : `EXISTS (
          SELECT 1

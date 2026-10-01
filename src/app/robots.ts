@@ -1,24 +1,23 @@
 import type { MetadataRoute } from "next";
 import {
   publicAbsoluteUrl,
-  publicNetworkIndexingEnabled,
+  isPublicNetworkIndexingEnabled,
 } from "@/lib/public-metadata";
 
 export const dynamic = "force-dynamic";
 
 export default function robots(): MetadataRoute.Robots {
+  const indexingEnabled = isPublicNetworkIndexingEnabled();
   return {
     rules: {
       userAgent: "*",
-      ...(publicNetworkIndexingEnabled
+      ...(indexingEnabled
         ? {
             allow: "/",
             disallow: ["/app", "/api", "/login", "/register"],
           }
         : { disallow: "/" }),
     },
-    ...(publicNetworkIndexingEnabled
-      ? { sitemap: publicAbsoluteUrl("/sitemap.xml") }
-      : {}),
+    ...(indexingEnabled ? { sitemap: publicAbsoluteUrl("/sitemap.xml") } : {}),
   };
 }

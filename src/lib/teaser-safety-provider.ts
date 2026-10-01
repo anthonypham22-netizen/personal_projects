@@ -7,6 +7,7 @@ import {
   type TeaserSafetyProviderOutput,
 } from "./teaser-safety";
 import type { TeaserSafetyCapability } from "./types";
+import { isDemoAllowed } from "./app-environment";
 
 const developmentProvider = (): TeaserSafetyProvider => ({
   id: "development",
@@ -159,11 +160,7 @@ export function configuredTeaserSafetyProvider():
     const model = process.env.OPENAI_TEASER_SAFETY_MODEL?.trim();
     return apiKey && model ? openAiProvider(apiKey, model) : undefined;
   }
-  if (
-    process.env.NODE_ENV !== "production" &&
-    (selected === "development" ||
-      (!selected && process.env.ALLOW_DEMO === "true"))
-  )
+  if (isDemoAllowed() && (selected === "development" || !selected))
     return developmentProvider();
   return undefined;
 }

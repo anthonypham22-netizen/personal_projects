@@ -9,6 +9,11 @@ import {
 } from "./match-store";
 import { ensureBuyerFunnelBackfill } from "./buyer-funnel";
 import { ensureTransactionAttributionBackfill } from "./transaction-attribution";
+import {
+  isDemoAllowed,
+  isProduction,
+  validateAppEnvironment,
+} from "./app-environment";
 
 export const dataDirectory = () =>
   path.resolve(process.env.DATA_DIR || "./data");
@@ -23,29 +28,53 @@ const demoProjectFingerprint = (database: DatabaseSync, projectId: string) =>
       )
       .get(projectId) ?? null,
   );
+
+const assertProductionDatabaseIsClean = (database: DatabaseSync) => {
+  if (!isProduction()) return;
+  const hasUsers = database
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'")
+    .get();
+  if (!hasUsers) return;
+  const hasDemoColumn = database
+    .prepare("PRAGMA table_info(users)")
+    .all()
+    .some(({ name }) => name === "is_demo");
+  if (!hasDemoColumn) return;
+  const demoUsers = database
+    .prepare("SELECT COUNT(*) count FROM users WHERE is_demo=1")
+    .get() as { count: number };
+  if (demoUsers.count > 0)
+    throw new Error(
+      "Production DATA_DIR contains demo users. Refusing to start; verify the production volume before retrying.",
+    );
+};
+
 export function db() {
   if (globalDb.northlaneDb) return globalDb.northlaneDb;
+  validateAppEnvironment();
   mkdirSync(dataDirectory(), { recursive: true, mode: 0o700 });
   const d = new DatabaseSync(path.join(dataDirectory(), "northlane.sqlite"));
   try {
+    assertProductionDatabaseIsClean(d);
     d.exec(
       "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000",
     );
     runMigrations(d);
+    assertProductionDatabaseIsClean(d);
     const demoProjectIds = [
       "buyer-project-maple",
       "buyer-project-northern-lights",
     ];
-    const demoFingerprints =
-      process.env.ALLOW_DEMO === "true"
-        ? new Map(
-            demoProjectIds.map((projectId) => [
-              projectId,
-              demoProjectFingerprint(d, projectId),
-            ]),
-          )
-        : new Map<string, string>();
-    if (process.env.ALLOW_DEMO === "true") seed(d, dataDirectory());
+    const demoEnabled = isDemoAllowed();
+    const demoFingerprints = demoEnabled
+      ? new Map(
+          demoProjectIds.map((projectId) => [
+            projectId,
+            demoProjectFingerprint(d, projectId),
+          ]),
+        )
+      : new Map<string, string>();
+    if (demoEnabled) seed(d, dataDirectory());
     ensureInitialMatchBackfill(d);
     ensureBuyerFunnelBackfill(d);
     ensureTransactionAttributionBackfill(d);

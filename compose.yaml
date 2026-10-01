@@ -3,14 +3,15 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      APP_URL: https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
+      APP_ENV: ${APP_ENV:?Set APP_ENV to staging or production in .env}
+      APP_URL: ${APP_URL:?Set APP_URL in .env}
       DATA_DIR: /app/data
       ALLOW_DEMO: ${ALLOW_DEMO:-false}
       COOKIE_SECURE: "true"
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
       PUBLIC_NETWORK_INDEXING_ENABLED: ${PUBLIC_NETWORK_INDEXING_ENABLED:-false}
     volumes:
-      - northlane_data:/app/data
+      - succera_data:/app/data
     expose:
       - "3000"
     cap_drop:
@@ -46,6 +47,7 @@ services:
       app:
         condition: service_healthy
 volumes:
-  northlane_data:
+  succera_data:
+    name: succera_${APP_ENV:?Set APP_ENV to staging or production}_data
   caddy_data:
   caddy_config:

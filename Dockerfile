@@ -13,7 +13,7 @@ RUN npm run build
 
 FROM node:24-bookworm-slim AS runner
 WORKDIR /app
-ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000 DATA_DIR=/app/data ALLOW_DEMO=false COOKIE_SECURE=true PUBLIC_NETWORK_INDEXING_ENABLED=false
+ENV NODE_ENV=production APP_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000 DATA_DIR=/app/data ALLOW_DEMO=false COOKIE_SECURE=true PUBLIC_NETWORK_INDEXING_ENABLED=false
 RUN mkdir -p /app/data && chown node:node /app/data
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static

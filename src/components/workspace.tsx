@@ -405,6 +405,30 @@ function Empty({
     </div>
   );
 }
+
+const emptyPipelineCopy = (role: WorkspaceData["user"]["role"]) => {
+  if (role === "buyer")
+    return {
+      title: "No opportunities yet",
+      body: "Complete your acquisition criteria and we’ll surface relevant businesses as they become available.",
+      href: "/app/projects",
+      label: "Complete acquisition criteria",
+    };
+  if (role === "owner")
+    return {
+      title: "You haven’t listed a business yet.",
+      body: "Create a confidential mandate to begin connecting with qualified buyers.",
+      href: "/app/new",
+      label: "Create a mandate",
+    };
+  return {
+    title: "No active mandates yet.",
+    body: "Add your first client mandate to begin managing buyer interest and deal activity.",
+    href: "/app/new",
+    label: "Add a client mandate",
+  };
+};
+
 function Heading({
   title,
   description,
@@ -1164,6 +1188,7 @@ export function Workspace({
 function Overview() {
   const { data } = useWorkspace(),
     { user } = data;
+  const pipelineEmpty = emptyPipelineCopy(user.role);
   const canCreateMandates =
     user.role !== "buyer" && data.organization.membership_role !== "viewer";
   const pipeline = data.deals.filter(
@@ -1317,18 +1342,10 @@ function Overview() {
               <DealTable deals={pipeline.slice(0, 5)} />
             ) : (
               <Empty
-                title="Your first deal starts here"
-                body={
-                  user.role === "buyer"
-                    ? "Explore opportunities and request access to start your pipeline."
-                    : "Create a private mandate and bring your deal team together."
-                }
-                href={user.role === "buyer" ? "/app/opportunities" : "/app/new"}
-                label={
-                  user.role === "buyer"
-                    ? "Explore opportunities"
-                    : "Create a mandate"
-                }
+                title={pipelineEmpty.title}
+                body={pipelineEmpty.body}
+                href={pipelineEmpty.href}
+                label={pipelineEmpty.label}
               />
             )}
           </Panel>
@@ -2319,14 +2336,14 @@ function Opportunities() {
       {!deals.length && (
         <Empty
           title={
-            discoveryVerificationRequired
-              ? "Qualified Discovery is not active yet"
+            data.user.role === "buyer"
+              ? "No opportunities yet"
               : "No qualified matches yet"
           }
           body={
-            discoveryVerificationRequired
-              ? "Submit your firm profile for internal review. Once the required trust level is approved, eligible matches will appear here automatically."
-              : "Activate an acquisition project or refine its criteria. New opportunities appear only when they meet the discovery threshold."
+            data.user.role === "buyer"
+              ? "Complete your acquisition criteria and we’ll surface relevant businesses as they become available."
+              : "Published mandates will appear here once they are ready for discovery."
           }
           href={
             data.user.role === "buyer"
@@ -2357,6 +2374,7 @@ function Pipeline() {
       (d.access_status !== "none" &&
         !["revoked", "denied"].includes(d.access_status || "")),
   );
+  const pipelineEmpty = emptyPipelineCopy(data.user.role);
   return (
     <>
       <Heading
@@ -2393,16 +2411,14 @@ function Pipeline() {
       </div>
       {!deals.length ? (
         <Empty
-          title="Build your pipeline"
-          body="Add a mandate or request access to an opportunity to get started."
+          title={pipelineEmpty.title}
+          body={pipelineEmpty.body}
           href={
-            data.user.role === "buyer"
-              ? "/app/opportunities"
-              : canCreateMandates
-                ? "/app/new"
-                : undefined
+            canCreateMandates || data.user.role === "buyer"
+              ? pipelineEmpty.href
+              : undefined
           }
-          label="Get started"
+          label={pipelineEmpty.label}
         />
       ) : view === "list" ? (
         <div className="panel">
@@ -2474,7 +2490,7 @@ function MandateDetailFields({
             label="Project name (shown in teaser)"
             name="title"
             value={deal?.title}
-            help="Use a code name, e.g. Project Cedar."
+            help="Use a confidential code name rather than the company name."
           />
           <Field
             label="Legal company name (confidential)"
