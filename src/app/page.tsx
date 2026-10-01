@@ -1,29 +1,42 @@
+import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 import {
   ArrowUpRight,
   ArrowRight,
-  Check,
   ShieldCheck,
   FolderLock,
   MessagesSquare,
   Building2,
   BriefcaseBusiness,
   Handshake,
-  MapPin,
-  MoveUpRight,
+  Search,
+  UsersRound,
+  FileSignature,
+  LockKeyhole,
 } from "lucide-react";
 import { Brand } from "@/components/brand";
+
+export const metadata: Metadata = {
+  title: {
+    absolute: "Succera | Private M&A Marketplace for Canadian Businesses",
+  },
+  description:
+    "Succera connects Canadian business owners, acquisition buyers, and M&A advisors in one private marketplace and deal workspace.",
+};
+
 export default function Home() {
   return (
     <>
       <header className="marketing-header">
-        <div className="marketing-nav">
+        <div className="marketing-nav homepage-nav">
           <Brand />
           <nav aria-label="Main navigation">
-            <a href="#platform">The platform</a>
-            <a href="#for-you">Who it’s for</a>
+            <Link href="/register?role=buyer">Opportunities</Link>
+            <a href="#for-sellers">For sellers</a>
+            <a href="#for-buyers">For buyers</a>
+            <a href="#for-advisors">For advisors</a>
             <a href="#process">How it works</a>
-            <Link href="/network">The network</Link>
           </nav>
           <div className="nav-actions">
             <Link className="text-link" href="/login">
@@ -40,8 +53,7 @@ export default function Home() {
           <div className="hero-inner">
             <div className="hero-copy">
               <p className="eyebrow">
-                <span className="tiny-maple">✳</span> BUILT FOR CANADIAN
-                BUSINESS
+                <span className="tiny-maple">✳</span> BUILT FOR CANADIAN M&A
               </p>
               <h1>
                 Great businesses.
@@ -49,83 +61,101 @@ export default function Home() {
                 New beginnings.
               </h1>
               <p className="hero-description">
-                Find the right opportunity. Bring the right people together. A
-                private workspace for the next chapter of Canadian business.
+                Succera is the private marketplace for Canadian business
+                acquisitions — connecting owners, qualified buyers, and advisors
+                from introduction to close.
               </p>
               <div className="hero-actions">
-                <Link href="/register" className="button button-green">
-                  Find your next chapter <ArrowRight size={18} />
+                <Link
+                  href="/register?role=buyer"
+                  className="button button-green"
+                >
+                  Explore opportunities <ArrowRight size={18} />
                 </Link>
-                <Link href="/login" className="button button-quiet">
-                  Explore the demo <ArrowUpRight size={17} />
+                <Link
+                  href="/register?role=owner"
+                  className="button button-quiet"
+                >
+                  List a business <ArrowUpRight size={17} />
                 </Link>
               </div>
               <div className="hero-proof">
                 <ShieldCheck size={18} />
                 <span>Confidential by design</span>
                 <span className="divider-dot">·</span>
-                <span>From introduction to diligence</span>
+                <span>Qualified buyers</span>
+                <span className="divider-dot">·</span>
+                <span>One secure deal workspace</span>
               </div>
             </div>
-            <div
-              className="hero-product"
-              aria-label="Illustrative Succera deal workspace"
-            >
+            <div className="hero-product" aria-label="How Succera works">
               <div className="mock-header">
-                <span className="mock-mark">S</span>
-                <span>Your next opportunity</span>
+                <Image
+                  className="mock-mark"
+                  src="/favicon.svg"
+                  alt=""
+                  aria-hidden="true"
+                  width={40}
+                  height={40}
+                />
+                <div className="product-card-title">
+                  <span>SUCCERA</span>
+                  <h2>Private M&A. One workspace.</h2>
+                </div>
                 <span className="badge badge-green">CANADA</span>
               </div>
-              <div className="mock-deal">
-                <div className="flex items-center justify-between">
-                  <span className="icon-tile">
-                    <Building2 size={22} />
-                  </span>
-                  <span className="badge">Business services</span>
-                </div>
-                <p className="eyebrow mt-6">CONFIDENTIAL OPPORTUNITY</p>
-                <h2>Project Cedar</h2>
-                <p className="muted flex items-center gap-1">
-                  <MapPin size={14} /> Ontario, Canada
-                </p>
-                <div className="mock-metrics">
-                  <div>
-                    <span>Annual revenue</span>
-                    <strong>C$8.4M</strong>
-                  </div>
-                  <div>
-                    <span>EBITDA</span>
-                    <strong>C$1.8M</strong>
-                  </div>
-                  <div>
-                    <span>Stage</span>
-                    <strong>Due diligence</strong>
-                  </div>
-                </div>
-              </div>
+              <ol className="product-steps">
+                {[
+                  {
+                    Icon: Search,
+                    label: "DISCOVER",
+                    text: "Private acquisition opportunities",
+                  },
+                  {
+                    Icon: UsersRound,
+                    label: "CONNECT",
+                    text: "Qualified owners, buyers and advisors",
+                  },
+                  {
+                    Icon: FileSignature,
+                    label: "TRANSACT",
+                    text: "NDA, diligence, LOI and close",
+                  },
+                ].map(({ Icon, label, text }, index) => (
+                  <li className="product-step" key={label}>
+                    <span className="product-step-index">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
+                    <span className="product-step-icon">
+                      <Icon size={20} strokeWidth={1.6} />
+                    </span>
+                    <div className="product-step-copy">
+                      <strong>{label}</strong>
+                      <span>{text}</span>
+                    </div>
+                  </li>
+                ))}
+              </ol>
               <div className="mock-progress">
                 <span className="check-icon">
-                  <Check size={15} />
+                  <LockKeyhole size={15} />
                 </span>
                 <div>
-                  <strong>The right people. In one place.</strong>
-                  <span>Deal team connected · Documents organized</span>
+                  <strong>Confidential by design.</strong>
+                  <span>
+                    Control access to sensitive information at every step.
+                  </span>
                 </div>
-                <FolderLock size={21} />
+                <ShieldCheck size={21} />
               </div>
-              <p className="mock-caption">
-                Illustrative transaction · Fictional company data
-              </p>
             </div>
           </div>
           <div className="hero-bottom">
-            <span>ONE SHARED WORKSPACE</span>
-            <span>Business owners</span>
-            <span>Acquisition buyers</span>
-            <span>M&A advisors</span>
-            <span className="canada-tag">
-              Coast to coast <MoveUpRight size={16} />
-            </span>
+            <span>PRIVATE BY DESIGN</span>
+            <span>Qualified buyers</span>
+            <span>Confidential opportunities</span>
+            <span>Secure deal rooms</span>
+            <span>Canadian businesses</span>
           </div>
         </section>
         <section id="platform" className="marketing-section">
@@ -139,8 +169,9 @@ export default function Home() {
               </h2>
             </div>
             <p>
-              Business acquisitions have enough moving parts. Give your team one
-              place to connect, share information, and take the next step.
+              Business acquisitions have enough moving parts. Give your deal
+              team one place to connect, share information, manage access, and
+              take the next step.
             </p>
           </div>
           <div className="feature-grid">
@@ -178,6 +209,7 @@ export default function Home() {
               {[
                 {
                   role: "buyer",
+                  sectionId: "for-buyers",
                   Icon: BriefcaseBusiness,
                   title: "For buyers",
                   text: "Build a focused pipeline. Review relevant Canadian businesses, request information, and manage diligence with your deal team.",
@@ -185,6 +217,7 @@ export default function Home() {
                 },
                 {
                   role: "owner",
+                  sectionId: "for-sellers",
                   Icon: Building2,
                   title: "For business owners",
                   text: "Prepare for what comes next. Choose your advisor, control what you share, and keep a clear view of buyer interest and offers.",
@@ -192,13 +225,14 @@ export default function Home() {
                 },
                 {
                   role: "advisor",
+                  sectionId: "for-advisors",
                   Icon: Handshake,
                   title: "For M&A advisors",
                   text: "Give every mandate a home. Coordinate buyers, organize documents, and keep your clients informed across the entire process.",
                   cta: "Bring your deal team together",
                 },
-              ].map(({ role, Icon, title, text, cta }) => (
-                <article key={role}>
+              ].map(({ role, sectionId, Icon, title, text, cta }) => (
+                <article id={sectionId} key={role}>
                   <Icon size={25} />
                   <h3>{title}</h3>
                   <p>{text}</p>
@@ -253,24 +287,21 @@ export default function Home() {
           <p className="eyebrow">THE NEXT CHAPTER IS YOURS</p>
           <h2>Let’s make the introduction.</h2>
           <p>
-            Start your workspace, or explore all three roles with fictional demo
-            data.
+            Create your account and bring your next acquisition or mandate into
+            one private workspace.
           </p>
           <Link className="button button-white" href="/register">
             Create your account <ArrowUpRight size={18} />
           </Link>
-          <Link className="cta-demo" href="/login">
-            Explore the demo
+          <Link className="cta-secondary" href="/login">
+            Already have an account? Sign in
           </Link>
         </section>
       </main>
       <footer className="marketing-footer">
         <Brand />
         <p>Connecting the next chapter of Canadian business.</p>
-        <div>
-          <Link href="/about-this-release">About this release</Link>
-          <span>© {new Date().getFullYear()} Succera</span>
-        </div>
+        <span>© {new Date().getFullYear()} Succera</span>
       </footer>
     </>
   );

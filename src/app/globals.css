@@ -125,6 +125,9 @@
   .marketing-nav nav {
     @apply hidden gap-8 text-sm text-slate-600 md:flex;
   }
+  .homepage-nav nav {
+    @apply md:hidden lg:flex;
+  }
   .nav-actions {
     @apply flex items-center gap-6;
   }
@@ -166,25 +169,37 @@
     @apply ml-auto;
   }
   .mock-mark {
-    @apply flex size-7 items-center justify-center rounded bg-emerald-900 text-white;
+    @apply size-10 shrink-0 rounded-lg;
   }
-  .mock-deal {
-    @apply p-7;
+  .product-card-title {
+    @apply min-w-0;
   }
-  .mock-deal h2 {
-    @apply mb-2 text-3xl font-semibold;
+  .product-card-title > span {
+    @apply block text-[10px] font-semibold tracking-[0.16em] text-emerald-800;
   }
-  .mock-metrics {
-    @apply mt-7 grid grid-cols-3 gap-3 border-t border-slate-100 pt-5;
+  .product-card-title h2 {
+    @apply mt-1 text-base font-semibold text-slate-950;
   }
-  .mock-metrics span {
-    @apply mb-2 block text-xs text-slate-500;
+  .product-steps {
+    @apply px-7 py-2;
   }
-  .mock-metrics strong {
-    @apply text-base font-semibold tabular-nums;
+  .product-step {
+    @apply grid grid-cols-[28px_42px_1fr] items-center gap-3 border-b border-slate-100 py-5 last:border-b-0;
+  }
+  .product-step-index {
+    @apply text-xs font-medium tabular-nums text-slate-400;
+  }
+  .product-step-icon {
+    @apply flex size-10 items-center justify-center rounded-xl bg-slate-50 text-emerald-800;
+  }
+  .product-step strong {
+    @apply block text-xs font-semibold tracking-[0.12em] text-slate-950;
+  }
+  .product-step-copy > span {
+    @apply mt-1 block text-sm leading-relaxed text-slate-500;
   }
   .mock-progress {
-    @apply mx-5 flex items-center gap-3 rounded-lg border border-emerald-100 bg-emerald-50 p-4 text-emerald-900;
+    @apply mx-5 mb-5 flex items-center gap-3 rounded-xl border border-emerald-100 bg-emerald-50 p-4 text-emerald-900;
   }
   .check-icon {
     @apply flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-800 text-white;
@@ -198,17 +213,11 @@
   .mock-progress > svg {
     @apply ml-auto shrink-0;
   }
-  .mock-caption {
-    @apply px-5 py-4 text-center text-xs text-slate-500;
-  }
   .hero-bottom {
     @apply mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-5 border-t border-slate-200 px-6 py-6 text-sm text-slate-600 lg:px-10;
   }
   .hero-bottom > span:first-child {
     @apply text-xs text-slate-500;
-  }
-  .canada-tag {
-    @apply inline-flex items-center gap-2 text-emerald-800;
   }
   .marketing-section {
     @apply mx-auto max-w-7xl px-6 py-20 lg:px-10;
@@ -290,7 +299,7 @@
   .closing-cta p:not(.eyebrow) {
     @apply mb-8 mt-5 text-emerald-100;
   }
-  .cta-demo {
+  .cta-secondary {
     @apply ml-5 inline-block text-sm font-semibold;
   }
   .marketing-footer {
@@ -2640,6 +2649,39 @@
   }
   .hero h1 {
     font-size: 42px;
+  }
+  .hero-inner {
+    gap: 48px;
+    padding-top: 48px;
+  }
+  .hero-actions .button {
+    width: 100%;
+  }
+  .hero-proof {
+    align-items: flex-start;
+    column-gap: 12px;
+    row-gap: 6px;
+  }
+  .divider-dot {
+    display: none;
+  }
+  .mock-header {
+    padding: 16px;
+  }
+  .product-steps {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .product-step {
+    grid-template-columns: 24px 40px 1fr;
+  }
+  .hero-bottom {
+    justify-content: flex-start;
+  }
+  .cta-secondary {
+    display: block;
+    margin-left: 0;
+    margin-top: 20px;
   }
   .topbar-right > span:first-child {
     display: none;

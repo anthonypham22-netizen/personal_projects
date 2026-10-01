@@ -23,15 +23,69 @@ test("public website connects to all three registration journeys", async ({
   page,
 }) => {
   await page.goto("/");
-  await expect(page).toHaveTitle("Succera — The next chapter starts here");
+  await expect(page).toHaveTitle(
+    "Succera | Private M&A Marketplace for Canadian Businesses",
+  );
   await expect(
     page.getByRole("link", { name: "Succera home", exact: true }).first(),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Great businesses. New beginnings." }),
   ).toBeVisible();
-  await page.getByRole("link", { name: "Plan your next chapter" }).click();
+  await expect(
+    page.getByText(
+      "Succera is the private marketplace for Canadian business acquisitions — connecting owners, qualified buyers, and advisors from introduction to close.",
+    ),
+  ).toBeVisible();
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+    "content",
+    "Succera connects Canadian business owners, acquisition buyers, and M&A advisors in one private marketplace and deal workspace.",
+  );
+  await expect(
+    page.getByRole("link", { name: "Explore opportunities" }).first(),
+  ).toHaveAttribute("href", "/register?role=buyer");
+  await expect(
+    page.getByRole("link", { name: "List a business" }).first(),
+  ).toHaveAttribute("href", "/register?role=owner");
+  await expect(
+    page.getByRole("heading", { name: "Private M&A. One workspace." }),
+  ).toBeVisible();
+  await expect(page.getByText("DISCOVER", { exact: true })).toBeVisible();
+  await expect(page.getByText("CONNECT", { exact: true })).toBeVisible();
+  await expect(page.getByText("TRANSACT", { exact: true })).toBeVisible();
+  await expect(page.getByText("Project Cedar")).toHaveCount(0);
+  await expect(page.getByText(/Explore the demo/i)).toHaveCount(0);
+  await expect(page.getByText(/fictional company data/i)).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "Product overview" }),
+  ).toHaveCount(0);
+  for (const [name, href, target] of [
+    ["For sellers", "#for-sellers", "#for-sellers"],
+    ["For buyers", "#for-buyers", "#for-buyers"],
+    ["For advisors", "#for-advisors", "#for-advisors"],
+  ] as const) {
+    await expect(page.getByRole("link", { name })).toHaveAttribute(
+      "href",
+      href,
+    );
+    await expect(page.locator(target)).toHaveCount(1);
+  }
+
+  await page
+    .getByRole("link", { name: "Explore opportunities" })
+    .first()
+    .click();
+  await expect(page.getByLabel("I’m joining as")).toHaveValue("buyer");
+
+  await page.goto("/");
+  await page.getByRole("link", { name: "List a business" }).first().click();
   await expect(page.getByLabel("I’m joining as")).toHaveValue("owner");
+
+  await page.goto("/");
+  await page
+    .getByRole("link", { name: "Bring your deal team together" })
+    .click();
+  await expect(page.getByLabel("I’m joining as")).toHaveValue("advisor");
 });
 
 test("public network exposes only opted-in firms and anonymized verified history", async ({
@@ -485,9 +539,7 @@ test("deal managers can review attribution while buyers cannot access it", async
     page.getByRole("status").getByText("Transaction attribution saved."),
   ).toBeVisible();
   await closedAttribution.getByLabel("Closing date").fill("2026-01-15");
-  await closedAttribution
-    .getByLabel("Enterprise value (C$)")
-    .fill("12500000");
+  await closedAttribution.getByLabel("Enterprise value (C$)").fill("12500000");
   await closedAttribution
     .getByRole("button", { name: "Save attribution" })
     .click();
@@ -1735,7 +1787,7 @@ test("mobile public page has no horizontal overflow", async ({ page }) => {
     ),
   ).toBe(true);
   await expect(
-    page.getByRole("link", { name: "Find your next chapter" }),
+    page.getByRole("link", { name: "Explore opportunities" }),
   ).toBeVisible();
   await page.goto("/network");
   expect(
@@ -1748,4 +1800,9 @@ test("mobile public page has no horizontal overflow", async ({ page }) => {
       name: "Find the people behind the next chapter.",
     }),
   ).toBeVisible();
+
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await expect(page.getByRole("link", { name: "The network" })).toBeVisible();
+  await page.goto("/");
+  await expect(page.getByRole("link", { name: "For sellers" })).toBeHidden();
 });
