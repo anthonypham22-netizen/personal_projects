@@ -815,10 +815,12 @@ export function Workspace({
   initial,
   section,
   dealId,
+  rolePreviewEnabled,
 }: {
   initial: WorkspaceData;
   section: string;
   dealId?: string;
+  rolePreviewEnabled: boolean;
 }) {
   const [data, setData] = useState(initial),
     [busy, setBusy] = useState(false),
@@ -1067,15 +1069,15 @@ export function Workspace({
                   ? "Fictional demonstration workspace"
                   : "Private workspace"}
               </span>
-              {data.demo ? (
-                <Link href="/login" className="badge badge-amber">
+              {data.demo && rolePreviewEnabled ? (
+                <Link href="/dev/preview" className="badge badge-amber">
                   Switch demo role <ChevronRight size={13} />
                 </Link>
-              ) : (
+              ) : !data.demo ? (
                 <Link href="/app/settings" className="badge">
                   Account
                 </Link>
-              )}
+              ) : null}
               <button
                 className="icon-button lg:hidden"
                 onClick={() => void logout()}

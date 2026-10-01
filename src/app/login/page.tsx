@@ -6,5 +6,5 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 export default function Login() {
-  return <AuthForm mode="login" demo={process.env.ALLOW_DEMO === "true"} />;
+  return <AuthForm mode="login" />;
 }

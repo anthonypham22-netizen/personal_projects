@@ -727,21 +727,59 @@
   .auth-switch a {
     @apply font-semibold text-emerald-800;
   }
-  .demo-entry {
-    @apply mt-9 border-t border-slate-200 pt-6;
-  }
-  .demo-entry > span {
-    @apply block text-center text-xs text-slate-500;
-  }
-  .demo-entry > div {
-    @apply mt-4 grid grid-cols-3 gap-2;
-  }
-  .demo-entry button {
-    @apply flex flex-col items-center gap-2 rounded-lg border border-slate-200 px-2 py-4 text-xs text-slate-600 hover:border-emerald-600;
-  }
-  .demo-entry p,
   .auth-release {
     @apply mt-4 text-center text-xs leading-relaxed text-slate-500;
+  }
+  .dev-preview-page {
+    @apply min-h-dvh bg-slate-950 px-5 py-10 text-slate-100 md:px-8 md:py-16;
+  }
+  .dev-preview-shell {
+    @apply mx-auto max-w-5xl;
+  }
+  .dev-preview-back {
+    @apply inline-flex items-center gap-2 text-sm text-slate-400 hover:text-white;
+  }
+  .dev-preview-header {
+    @apply mt-12 max-w-3xl;
+  }
+  .dev-preview-header > span {
+    @apply inline-flex rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-1.5 font-mono text-xs font-semibold text-amber-300;
+  }
+  .dev-preview-header h1 {
+    @apply mt-6 max-w-2xl text-balance text-4xl font-semibold leading-tight text-white md:text-5xl;
+  }
+  .dev-preview-header p {
+    @apply mt-5 max-w-2xl text-pretty text-base leading-7 text-slate-400;
+  }
+  .dev-preview-error {
+    @apply mt-8 rounded-lg border border-rose-400/40 bg-rose-400/10 p-4 text-sm text-rose-200;
+  }
+  .dev-preview-grid {
+    @apply mt-10 grid gap-4 md:grid-cols-3;
+  }
+  .dev-preview-card {
+    @apply flex min-h-64 flex-col rounded-xl border border-slate-700 bg-slate-900 p-6 shadow-lg;
+  }
+  .dev-preview-card > svg {
+    @apply text-amber-300;
+  }
+  .dev-preview-card h2 {
+    @apply mt-6 text-xl font-semibold text-white;
+  }
+  .dev-preview-card p {
+    @apply mt-2 text-pretty text-sm leading-6 text-slate-400;
+  }
+  .dev-preview-card button {
+    @apply mt-auto inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-amber-300 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .dev-preview-note {
+    @apply mt-6 rounded-xl border border-dashed border-slate-700 p-5 text-sm text-slate-400;
+  }
+  .dev-preview-note strong {
+    @apply text-slate-200;
+  }
+  .dev-preview-note p {
+    @apply mt-1 text-pretty leading-6;
   }
   .form-error {
     @apply my-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800;

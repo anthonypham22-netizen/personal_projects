@@ -1,8 +1,15 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { PDFDocument } from "pdf-lib";
+
+async function previewAs(page: Page, role: "owner" | "advisor" | "buyer") {
+  await page.goto("/dev/preview");
+  const label = role.charAt(0).toUpperCase() + role.slice(1);
+  await page.getByRole("button", { name: `View as ${label}` }).click();
+  await expect(page).toHaveURL(/\/app$/);
+}
 
 function provisionPlatformReviewer(email: string) {
   const database = new DatabaseSync(
@@ -128,6 +135,53 @@ test("public website connects to all three registration journeys", async ({
   await expect(page.getByLabel("I’m joining as")).toHaveValue("advisor");
 });
 
+test("development role preview switches between seeded demo identities", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await expect(page.getByText("DEV MODE — Role Preview")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /View as (Owner|Advisor|Buyer)/ }),
+  ).toHaveCount(0);
+
+  await page.goto("/register");
+  await expect(page.getByText("DEV MODE — Role Preview")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /View as (Owner|Advisor|Buyer)/ }),
+  ).toHaveCount(0);
+
+  await page.goto("/dev/preview");
+  await page.route("**/api/auth", async (route) => {
+    await route.fulfill({
+      status: 403,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Role preview is unavailable." }),
+    });
+  });
+  await page.getByRole("button", { name: "View as Owner" }).click();
+  await expect(page.locator(".dev-preview-error")).toHaveText(
+    "Role preview is unavailable.",
+  );
+  await expect(
+    page.getByRole("button", { name: "View as Owner" }),
+  ).toBeEnabled();
+  await page.unroute("**/api/auth");
+
+  for (const [role, name] of [
+    ["owner", "Jamie"],
+    ["advisor", "Alex"],
+    ["buyer", "Taylor"],
+  ] as const) {
+    await previewAs(page, role);
+    await expect(
+      page.getByRole("heading", { name: `Welcome back, ${name}.` }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Switch demo role" }),
+    ).toHaveAttribute("href", "/dev/preview");
+  }
+});
+
 test("public network exposes only opted-in firms and anonymized verified history", async ({
   page,
 }) => {
@@ -181,8 +235,7 @@ test("public network exposes only opted-in firms and anonymized verified history
 test("advisor overview summarizes recorded marketplace funnel activity", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Advisor demo" }).click();
+  await previewAs(page, "advisor");
   await expect(
     page.getByRole("heading", { name: "Marketplace analytics" }),
   ).toBeVisible();
@@ -238,8 +291,7 @@ test("buyer overview shows only organization-scoped marketplace activity", async
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await previewAs(page, "buyer");
   await expect(
     page.getByRole("heading", { name: "Marketplace activity" }),
   ).toBeVisible();
@@ -279,8 +331,7 @@ test("buyer overview shows only organization-scoped marketplace activity", async
 test("advisor can navigate mandates and record a shared diligence task", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Advisor demo" }).click();
+  await previewAs(page, "advisor");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Alex." }),
   ).toBeVisible();
@@ -308,8 +359,7 @@ test("advisor can navigate mandates and record a shared diligence task", async (
 test("owner can review financial history and choose a distribution strategy", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Owner demo" }).click();
+  await previewAs(page, "owner");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Jamie." }),
   ).toBeVisible();
@@ -330,8 +380,7 @@ test("owner can review financial history and choose a distribution strategy", as
 });
 
 test("owner can inspect and curate recommended buyers", async ({ page }) => {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Owner demo" }).click();
+  await previewAs(page, "owner");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Jamie." }),
   ).toBeVisible();
@@ -378,8 +427,7 @@ test("owner can inspect and curate recommended buyers", async ({ page }) => {
 });
 
 test("buyer can maintain a seller-facing firm profile", async ({ page }) => {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await previewAs(page, "buyer");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/verification");
 
@@ -419,8 +467,7 @@ test("buyer adds a transaction tombstone for review and sellers see its verifica
 }) => {
   const industry = `Specialty distribution ${Date.now()}`;
   const headers = { Origin: "http://localhost:3000" };
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await previewAs(page, "buyer");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/verification");
 
@@ -446,8 +493,7 @@ test("buyer adds a transaction tombstone for review and sellers see its verifica
     headers,
     data: { action: "logout" },
   });
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Advisor demo" }).click();
+  await previewAs(page, "advisor");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/verification");
   const review = page
@@ -467,8 +513,7 @@ test("buyer adds a transaction tombstone for review and sellers see its verifica
     headers,
     data: { action: "logout" },
   });
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Owner demo" }).click();
+  await previewAs(page, "owner");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/deals/cedar");
   await page.getByRole("button", { name: "Recommended buyers" }).click();
@@ -486,8 +531,7 @@ test("buyer adds a transaction tombstone for review and sellers see its verifica
 test("advisor can inspect the event-backed buyer funnel and record a milestone", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Advisor demo" }).click();
+  await previewAs(page, "advisor");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Alex." }),
   ).toBeVisible();
@@ -523,8 +567,7 @@ test("advisor can inspect the event-backed buyer funnel and record a milestone",
 test("deal managers can review attribution while buyers cannot access it", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Advisor demo" }).click();
+  await previewAs(page, "advisor");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/deals/cedar");
   await page.getByRole("button", { name: "Attribution", exact: true }).click();
@@ -598,8 +641,7 @@ test("deal managers can review attribution while buyers cannot access it", async
     persistedAttribution.getByLabel("Enterprise value (C$)"),
   ).toHaveValue("12500000");
 
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await previewAs(page, "buyer");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/deals/cedar");
   await expect(
@@ -614,8 +656,7 @@ test("deal managers can review attribution while buyers cannot access it", async
 test("seller-side teams can keep private notes out of buyer workspaces", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Advisor demo" }).click();
+  await previewAs(page, "advisor");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Alex." }),
   ).toBeVisible();
@@ -640,8 +681,7 @@ test("seller-side teams can keep private notes out of buyer workspaces", async (
     page.getByText("Alex Morgan", { exact: true }).first(),
   ).toBeVisible();
 
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await previewAs(page, "buyer");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Taylor." }),
   ).toBeVisible();
@@ -655,8 +695,7 @@ test("seller-side teams can keep private notes out of buyer workspaces", async (
 test("users can review notifications and control email delivery preferences", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await previewAs(page, "buyer");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Taylor." }),
   ).toBeVisible();
@@ -1171,8 +1210,7 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
 test("buyer sees approved documents but cannot download seller-only files", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await previewAs(page, "buyer");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Taylor." }),
   ).toBeVisible();
@@ -1203,8 +1241,7 @@ test("buyer receives a cached personalized CIM while the seller keeps the origin
   const original = Buffer.from(await pdf.save());
   const name = `Project Cedar CIM ${Date.now()}.pdf`;
 
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Owner demo" }).click();
+  await previewAs(page, "owner");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Jamie." }),
   ).toBeVisible();
@@ -1251,8 +1288,7 @@ test("buyer receives a cached personalized CIM while the seller keeps the origin
   );
   expect(Buffer.from(await ownerDownload.body())).toEqual(original);
 
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await previewAs(page, "buyer");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Taylor." }),
   ).toBeVisible();
@@ -1295,8 +1331,7 @@ test("buyer receives a cached personalized CIM while the seller keeps the origin
 test("owner can send a provider-managed electronic NDA without granting early access", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Owner demo" }).click();
+  await previewAs(page, "owner");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/deals/harbour");
   await page.getByRole("button", { name: "Buyer access" }).click();
@@ -1320,8 +1355,7 @@ test("seller reviews and explicitly applies a private teaser safety suggestion",
   page,
 }) => {
   const headers = { Origin: "http://localhost:3000" };
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Owner demo" }).click();
+  await previewAs(page, "owner");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/deals/atlas");
   await page.getByRole("button", { name: "Teaser safety" }).click();
@@ -1434,8 +1468,7 @@ test("seller reviews and explicitly applies a private teaser safety suggestion",
     headers,
     data: { action: "logout" },
   });
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await previewAs(page, "buyer");
   await expect(page).toHaveURL(/\/app$/);
   const unauthorized = await page.request.post("/api/teaser-safety", {
     headers,
@@ -1521,8 +1554,7 @@ test("buyer demo cannot enumerate registered Qualified Discovery inventory", asy
     ).status(),
   ).toBe(200);
 
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await previewAs(page, "buyer");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Taylor." }),
   ).toBeVisible();
@@ -1537,8 +1569,7 @@ test("buyer demo cannot enumerate registered Qualified Discovery inventory", asy
 test("buyer projects do not expose private matching records", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await previewAs(page, "buyer");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Taylor." }),
   ).toBeVisible();
@@ -1621,8 +1652,7 @@ test("registered buyer can create, edit, and manage an acquisition project", asy
 test("non-buyer organizations receive the acquisition project access state", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Owner demo" }).click();
+  await previewAs(page, "owner");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Jamie." }),
   ).toBeVisible();
@@ -1635,8 +1665,7 @@ test("mobile acquisition projects route has no horizontal overflow", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await previewAs(page, "buyer");
   await expect(
     page.getByRole("heading", { name: "Welcome back, Taylor." }),
   ).toBeVisible();

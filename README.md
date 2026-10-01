@@ -22,7 +22,7 @@ Create `.env.local` from `.env.example` if it does not already exist. The local 
 npm run dev
 ```
 
-Open [localhost:3000](http://localhost:3000). At `/login`, choose **Advisor demo**, **Buyer demo**, or **Owner demo**. These appear only with `ALLOW_DEMO=true`. Passwords for demo records are random and are not exposed; the explicit demo entry points establish their sessions.
+Open [localhost:3000](http://localhost:3000). In a non-production environment with `ALLOW_DEMO=true`, open `/dev/preview` and choose **View as Owner**, **View as Advisor**, or **View as Buyer**. The customer login and registration pages never show demo controls. Passwords for demo records are random and are not exposed; the explicit developer preview actions establish their sessions.
 
 Demo data is shared and persistent. Use fictional files only. Demo and registered-account marketplaces are isolated from each other. New registered accounts begin with an empty workspace; register an owner, advisor, and buyer to try the complete multi-account workflow with test information.
 
@@ -33,7 +33,8 @@ After the initial successful `npm install`, keep and commit the generated `packa
 | Path                  | Purpose                                                                                                    |
 | --------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `/`                   | Public website with product, audience, and process sections                                                |
-| `/register`, `/login` | Role-specific registration, password login, local demo entry                                               |
+| `/register`, `/login` | Role-specific registration and password login                                                              |
+| `/dev/preview`        | Development-only seeded role preview when `ALLOW_DEMO=true`                                                |
 | `/app`                | Role-aware overview, marketplace analytics, transaction pipeline, tasks, and recent activity               |
 | `/app/opportunities`  | Discover: eligible project-matched teasers and organization-scoped private invitations                     |
 | `/app/projects`       | Buyer acquisition projects with normalized sector, province, keyword, and financial criteria               |

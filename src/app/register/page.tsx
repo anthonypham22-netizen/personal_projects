@@ -15,7 +15,6 @@ export default async function Register({
   return (
     <AuthForm
       mode="register"
-      demo={process.env.ALLOW_DEMO === "true"}
       registration={process.env.ALLOW_REGISTRATION !== "false"}
       initialRole={
         ["buyer", "owner", "advisor"].includes(role || "")
