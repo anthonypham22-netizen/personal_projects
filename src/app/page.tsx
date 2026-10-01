@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
 import {
   ArrowUpRight,
@@ -15,7 +14,7 @@ import {
   FileSignature,
   LockKeyhole,
 } from "lucide-react";
-import { Brand } from "@/components/brand";
+import { Brand, BrandEmblem } from "@/components/brand";
 
 export const metadata: Metadata = {
   title: {
@@ -90,14 +89,7 @@ export default function Home() {
             </div>
             <div className="hero-product" aria-label="How Succera works">
               <div className="mock-header">
-                <Image
-                  className="mock-mark"
-                  src="/favicon.svg"
-                  alt=""
-                  aria-hidden="true"
-                  width={40}
-                  height={40}
-                />
+                <BrandEmblem />
                 <div className="product-card-title">
                   <span>SUCCERA</span>
                   <h2>Private M&A. One workspace.</h2>

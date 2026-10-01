@@ -50,6 +50,13 @@ test("public website connects to all three registration journeys", async ({
   await expect(
     page.getByRole("heading", { name: "Private M&A. One workspace." }),
   ).toBeVisible();
+  const navbarLogo = page.locator(".marketing-nav .brand img");
+  const productCardEmblem = page.locator(".hero-product .brand-emblem img");
+  await expect(navbarLogo).toHaveAttribute("src", /succera-logo\.png/);
+  await expect(productCardEmblem).toHaveAttribute("src", /succera-logo\.png/);
+  await expect(
+    page.locator('.hero-product img[src*="favicon.svg"]'),
+  ).toHaveCount(0);
   await expect(page.getByText("DISCOVER", { exact: true })).toBeVisible();
   await expect(page.getByText("CONNECT", { exact: true })).toBeVisible();
   await expect(page.getByText("TRANSACT", { exact: true })).toBeVisible();

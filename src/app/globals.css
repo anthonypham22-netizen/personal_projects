@@ -62,14 +62,29 @@
     width: var(--brand-width);
     height: calc(var(--brand-width) * 0.253);
   }
-  .brand img {
+  .brand img,
+  .brand-emblem-crop img {
     @apply absolute block h-auto max-w-none;
+  }
+  .brand img {
     width: calc(var(--brand-width) * 1.3);
     left: calc(var(--brand-width) * -0.148);
     top: calc(var(--brand-width) * -0.124);
   }
   .brand-light img {
     filter: brightness(0) invert(1);
+  }
+  .brand-emblem {
+    @apply inline-flex size-10 shrink-0 items-center justify-center rounded-lg bg-[#fbfaf5];
+  }
+  .brand-emblem-crop {
+    @apply relative block size-[30px] overflow-hidden;
+  }
+  .brand-emblem-crop img {
+    @apply object-contain;
+    width: 144px;
+    left: -15px;
+    top: -13px;
   }
   .button {
     @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-transparent px-4 py-2.5 text-sm font-semibold;
@@ -167,9 +182,6 @@
   }
   .mock-header .badge {
     @apply ml-auto;
-  }
-  .mock-mark {
-    @apply size-10 shrink-0 rounded-lg;
   }
   .product-card-title {
     @apply min-w-0;
