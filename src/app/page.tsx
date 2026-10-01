@@ -62,7 +62,7 @@ export default function Home() {
               </h1>
               <p className="hero-description">
                 Succera is the private marketplace for Canadian business
-                acquisitions — connecting owners, qualified buyers, and advisors
+                acquisitions, connecting owners, qualified buyers, and advisors
                 from introduction to close.
               </p>
               <div className="hero-actions">
@@ -159,7 +159,7 @@ export default function Home() {
           </div>
         </section>
         <section id="platform" className="marketing-section">
-          <div className="section-heading">
+          <div className="marketing-section-heading">
             <div>
               <p className="eyebrow">LESS FRICTION. MORE FORWARD.</p>
               <h2>
@@ -167,12 +167,34 @@ export default function Home() {
                 <br />
                 Keep everyone aligned.
               </h2>
+              <p className="section-lead">
+                A shared workspace for every introduction, document, decision,
+                and next step.
+              </p>
             </div>
-            <p>
-              Business acquisitions have enough moving parts. Give your deal
-              team one place to connect, share information, manage access, and
-              take the next step.
-            </p>
+            <div className="section-context">
+              <p className="eyebrow">ONE WORKSPACE. END TO END.</p>
+              <h3>One place for every moving part.</h3>
+              <p className="section-context-body">
+                Connect the right people, control access to sensitive
+                information, and keep every step moving from first introduction
+                to close.
+              </p>
+              <ul className="section-feature-list" aria-label="Deal workflow">
+                {[
+                  "Introductions",
+                  "NDAs",
+                  "Documents",
+                  "Offers",
+                  "Diligence",
+                ].map((capability) => (
+                  <li key={capability}>
+                    <span aria-hidden="true" />
+                    {capability}
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
           <div className="feature-grid">
             {[
@@ -246,15 +268,26 @@ export default function Home() {
           </div>
         </section>
         <section id="process" className="marketing-section">
-          <div className="section-heading">
+          <div className="marketing-section-heading">
             <div>
               <p className="eyebrow">FROM FIRST HELLO TO WHAT’S NEXT</p>
               <h2>A clear path through the process.</h2>
+              <p className="section-lead">
+                A practical four-step workflow designed around how private
+                acquisitions actually progress.
+              </p>
             </div>
-            <p>
-              Designed for established Canadian businesses with C$1M–C$20M in
-              annual revenue, and the people helping them change hands.
-            </p>
+            <div className="section-context">
+              <p className="eyebrow">BUILT FOR THE LOWER MIDDLE MARKET</p>
+              <p className="market-range">
+                <span className="market-range-value">C$1M–C$20M</span>{" "}
+                <span className="market-range-label">annual revenue</span>
+              </p>
+              <p className="section-context-body">
+                Purpose-built for established Canadian businesses, acquisition
+                buyers, and advisors navigating ownership transitions.
+              </p>
+            </div>
           </div>
           <ol className="process-grid">
             {[

@@ -34,7 +34,7 @@ test("public website connects to all three registration journeys", async ({
   ).toBeVisible();
   await expect(
     page.getByText(
-      "Succera is the private marketplace for Canadian business acquisitions — connecting owners, qualified buyers, and advisors from introduction to close.",
+      "Succera is the private marketplace for Canadian business acquisitions, connecting owners, qualified buyers, and advisors from introduction to close.",
     ),
   ).toBeVisible();
   await expect(page.locator('meta[name="description"]')).toHaveAttribute(
@@ -53,6 +53,39 @@ test("public website connects to all three registration journeys", async ({
   await expect(page.getByText("DISCOVER", { exact: true })).toBeVisible();
   await expect(page.getByText("CONNECT", { exact: true })).toBeVisible();
   await expect(page.getByText("TRANSACT", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "One place for every moving part." }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "A shared workspace for every introduction, document, decision, and next step.",
+    ),
+  ).toBeVisible();
+  const workflow = page.getByRole("list", { name: "Deal workflow" });
+  await expect(workflow).toBeVisible();
+  for (const capability of [
+    "Introductions",
+    "NDAs",
+    "Documents",
+    "Offers",
+    "Diligence",
+  ]) {
+    await expect(workflow.getByText(capability, { exact: true })).toBeVisible();
+  }
+  await expect(
+    page.getByText(
+      "A practical four-step workflow designed around how private acquisitions actually progress.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText("C$1M–C$20M annual revenue", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Purpose-built for established Canadian businesses, acquisition buyers, and advisors navigating ownership transitions.",
+      { exact: true },
+    ),
+  ).toBeVisible();
   await expect(page.getByText("Project Cedar")).toHaveCount(0);
   await expect(page.getByText(/Explore the demo/i)).toHaveCount(0);
   await expect(page.getByText(/fictional company data/i)).toHaveCount(0);

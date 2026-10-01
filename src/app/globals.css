@@ -229,23 +229,42 @@
     @apply text-3xl leading-tight md:text-4xl;
     font-family: Georgia, serif;
   }
-  .section-heading {
-    @apply mb-12 flex flex-col justify-between gap-5 md:flex-row md:items-end;
+  .marketing-section-heading {
+    @apply mb-12 grid gap-8 md:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] md:items-start md:gap-16;
   }
-  .section-heading > p {
-    @apply max-w-md leading-relaxed text-slate-500;
+  .section-lead {
+    @apply mt-5 max-w-md text-base leading-relaxed text-slate-500;
+  }
+  .section-context {
+    @apply max-w-md md:max-w-none;
+  }
+  .section-context h3 {
+    @apply text-3xl font-normal leading-tight text-slate-950;
+    font-family: Georgia, serif;
+  }
+  .section-context-body {
+    @apply mt-4 max-w-sm leading-relaxed text-slate-500;
+  }
+  .section-feature-list {
+    @apply mt-6 flex flex-wrap gap-x-5 gap-y-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3.5 text-xs font-medium text-slate-600;
+  }
+  .section-feature-list li {
+    @apply flex items-center gap-2;
+  }
+  .section-feature-list li > span {
+    @apply size-1.5 shrink-0 rounded-full bg-emerald-700;
   }
   .feature-grid {
-    @apply grid gap-8 md:grid-cols-3;
+    @apply grid gap-5 md:grid-cols-3;
   }
   .feature {
-    @apply relative border-t border-slate-200 pt-7;
+    @apply relative rounded-xl border border-slate-200 bg-slate-50/60 p-6;
   }
   .feature > svg {
     @apply mb-6 text-emerald-800;
   }
   .feature-number {
-    @apply absolute right-0 top-7 text-xs text-slate-400;
+    @apply absolute right-6 top-6 text-xs tabular-nums text-slate-400;
   }
   .feature h3 {
     @apply mb-3 text-lg font-semibold;
@@ -278,16 +297,29 @@
     @apply mt-7 flex items-center justify-between gap-2 text-sm font-semibold;
   }
   .process-grid {
-    @apply grid gap-8 md:grid-cols-4;
+    @apply grid gap-6 md:grid-cols-4;
+  }
+  .process-grid li {
+    @apply border-t border-slate-200 pt-6;
   }
   .process-grid li > span {
-    @apply mb-5 block text-sm text-emerald-800;
+    @apply mb-6 block text-sm tabular-nums text-emerald-800;
   }
   .process-grid h3 {
     @apply mb-3 text-lg font-semibold;
   }
   .process-grid p {
     @apply text-sm leading-relaxed text-slate-500;
+  }
+  .market-range {
+    @apply flex flex-wrap items-baseline gap-x-2 gap-y-1 text-slate-950;
+    font-family: Georgia, serif;
+  }
+  .market-range-value {
+    @apply text-3xl font-normal tabular-nums md:text-4xl;
+  }
+  .market-range-label {
+    @apply text-xl font-normal text-slate-500 md:text-2xl;
   }
   .closing-cta {
     @apply bg-emerald-900 px-6 py-16 text-center text-white;
