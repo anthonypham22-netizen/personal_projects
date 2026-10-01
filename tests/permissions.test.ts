@@ -2705,6 +2705,171 @@ test("deal managers receive an event-backed buyer funnel without exposing it to 
   );
 });
 
+test("transaction attribution is manager-only, revisioned, and records closing value separately from workflow", () => {
+  const ownerState = workspace(owner);
+  const attribution = ownerState.transaction_attributions?.find(
+    (entry) =>
+      entry.deal_id === "cedar" &&
+      entry.buyer_organization_id === "org-demo-buyer",
+  );
+  assert.ok(attribution);
+  assert.equal(attribution.source, "seller_invitation");
+  assert.equal(attribution.introduced_by_acquire, false);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      workspace(buyer),
+      "transaction_attributions",
+    ),
+    false,
+  );
+
+  mutate(owner, {
+    action: "upsertTransactionAttribution",
+    data: {
+      deal_id: "cedar",
+      buyer_organization_id: "org-demo-buyer",
+      source: "external_relationship",
+      introduction_date: "2025-01-15",
+      closed_date: "",
+      enterprise_value: "",
+      revision: attribution.revision,
+    },
+  });
+  const corrected = workspace(owner).transaction_attributions?.find(
+    (entry) =>
+      entry.deal_id === "cedar" &&
+      entry.buyer_organization_id === "org-demo-buyer",
+  );
+  assert.equal(corrected?.introduced_by_acquire, false);
+  assert.equal(corrected?.source, "external_relationship");
+
+  assert.throws(
+    () =>
+      mutate(owner, {
+        action: "upsertTransactionAttribution",
+        data: {
+          deal_id: "cedar",
+          buyer_organization_id: "org-demo-buyer",
+          source: "external_relationship",
+          introduction_date: "2025-01-15",
+          closed_date: "2026-01-15",
+          enterprise_value: "",
+          revision: corrected?.revision,
+        },
+      }),
+    /recorded together/,
+  );
+  assert.throws(
+    () =>
+      mutate(owner, {
+        action: "upsertTransactionAttribution",
+        data: {
+          deal_id: "cedar",
+          buyer_organization_id: "org-demo-buyer",
+          source: "external_relationship",
+          introduction_date: "2025-01-15",
+          closed_date: "2026-01-15",
+          enterprise_value: 12_500_000,
+          revision: corrected?.revision,
+        },
+      }),
+    /Closed buyer-funnel milestone/,
+  );
+
+  mutate(owner, {
+    action: "recordBuyerFunnelEvent",
+    data: {
+      deal_id: "cedar",
+      buyer_organization_id: "org-demo-buyer",
+      event_type: "closed",
+    },
+  });
+  mutate(owner, {
+    action: "upsertTransactionAttribution",
+    data: {
+      deal_id: "cedar",
+      buyer_organization_id: "org-demo-buyer",
+      source: "external_relationship",
+      introduction_date: "2025-01-15",
+      closed_date: "",
+      enterprise_value: "",
+      revision: corrected?.revision,
+    },
+  });
+  const correctedAfterClose = workspace(owner).transaction_attributions?.find(
+    (entry) =>
+      entry.deal_id === "cedar" &&
+      entry.buyer_organization_id === "org-demo-buyer",
+  );
+  assert.equal(correctedAfterClose?.closed_date, null);
+  assert.equal(correctedAfterClose?.enterprise_value, null);
+  mutate(owner, {
+    action: "upsertTransactionAttribution",
+    data: {
+      deal_id: "cedar",
+      buyer_organization_id: "org-demo-buyer",
+      source: "external_relationship",
+      introduction_date: "2025-01-15",
+      closed_date: "2026-01-15",
+      enterprise_value: 12_500_000,
+      revision: correctedAfterClose?.revision,
+    },
+  });
+  const closed = workspace(owner).transaction_attributions?.find(
+    (entry) =>
+      entry.deal_id === "cedar" &&
+      entry.buyer_organization_id === "org-demo-buyer",
+  );
+  assert.equal(closed?.closed_date, "2026-01-15");
+  assert.equal(closed?.enterprise_value, 12_500_000);
+  assert.equal(closed?.revision, (correctedAfterClose?.revision ?? 0) + 1);
+
+  assert.throws(
+    () =>
+      mutate(owner, {
+        action: "upsertTransactionAttribution",
+        data: {
+          deal_id: "cedar",
+          buyer_organization_id: "org-demo-buyer",
+          source: "acquire_match",
+          introduction_date: "2025-01-15",
+          closed_date: "2026-01-15",
+          enterprise_value: 12_500_000,
+          revision: corrected?.revision,
+        },
+      }),
+    /changed in another session/,
+  );
+  assert.throws(
+    () =>
+      mutate(buyer, {
+        action: "upsertTransactionAttribution",
+        data: {
+          deal_id: "cedar",
+          buyer_organization_id: "org-demo-buyer",
+          source: "acquire_match",
+          introduction_date: "2025-01-15",
+          closed_date: "2026-01-15",
+          enterprise_value: 12_500_000,
+          revision: closed?.revision,
+        },
+      }),
+    /deal-team|manage/,
+  );
+
+  mutate(owner, {
+    action: "inviteBuyer",
+    data: { deal_id: "harbour", email: otherBuyer.email },
+  });
+  const directInvitation = workspace(owner).transaction_attributions?.find(
+    (entry) =>
+      entry.deal_id === "harbour" &&
+      entry.buyer_organization_id === "org-demo-buyer-2",
+  );
+  assert.equal(directInvitation?.source, "seller_invitation");
+  assert.equal(directInvitation?.introduced_by_acquire, false);
+});
+
 test("internal deal notes stay inside the seller-side team", () => {
   const body = "Strong interest, but financing confirmation is still required.";
   const result = mutate(owner, {

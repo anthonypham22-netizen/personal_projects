@@ -14,6 +14,7 @@ import type {
 } from "./electronic-signature-provider";
 import { recalculateBuyerOrganizationDealMatches } from "./match-store";
 import { notifyUsers } from "./notifications";
+import { recordInitialTransactionAttribution } from "./transaction-attribution";
 import {
   AppError,
   getDeal,
@@ -166,7 +167,7 @@ export async function requestElectronicNda(
         "The electronic NDA request is no longer active.",
         409,
       );
-    if (buyerOrganizationId)
+    if (buyerOrganizationId) {
       recordDealBuyerEvent(database, {
         dealId: deal.id,
         buyerOrganizationId,
@@ -177,6 +178,13 @@ export async function requestElectronicNda(
         sourceKey: `electronic-envelope:${localEnvelopeId}:requested`,
         createdByUserId: user.id,
       });
+      recordInitialTransactionAttribution(database, {
+        dealId: deal.id,
+        buyerOrganizationId,
+        source: "seller_invitation",
+        createdByUserId: user.id,
+      });
+    }
     notifyUsers(database, {
       userIds: [buyerId],
       type: "nda_requested",

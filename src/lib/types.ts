@@ -615,6 +615,44 @@ export type DealBuyerFunnel = {
   buyers: BuyerFunnelEntry[];
   metrics: BuyerFunnelMetrics;
 };
+export const TRANSACTION_ATTRIBUTION_SOURCES = [
+  "acquire_match",
+  "seller_invitation",
+  "buyer_discovery",
+  "external_relationship",
+] as const;
+export type TransactionAttributionSource =
+  (typeof TRANSACTION_ATTRIBUTION_SOURCES)[number];
+export const introducedByAcquireForSource = (
+  source: TransactionAttributionSource,
+) => source === "acquire_match" || source === "buyer_discovery";
+export const transactionAttributionSourceForEvent = (
+  eventType: DealBuyerEventType,
+): TransactionAttributionSource | undefined =>
+  eventType === "intro_approved"
+    ? "buyer_discovery"
+    : eventType === "teaser_sent"
+      ? "acquire_match"
+      : eventType === "nda_requested"
+        ? "seller_invitation"
+        : undefined;
+export type TransactionAttribution = {
+  id: string;
+  deal_id: string;
+  buyer_organization_id: string;
+  buyer_organization_name: string;
+  source: TransactionAttributionSource;
+  introduced_by_acquire: boolean;
+  introduction_date: string;
+  closed_date: string | null;
+  enterprise_value: number | null;
+  origin_event_id: string | null;
+  created_by_user_id: string | null;
+  updated_by_user_id: string | null;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+};
 export type DealManagerMarketplaceAnalytics = {
   deal_id: string;
   deal_title: string;
@@ -810,6 +848,7 @@ export type WorkspaceData = {
   deal_outreach: DealOutreachRecipient[];
   introduction_requests: IntroductionRequest[];
   buyer_funnels?: DealBuyerFunnel[];
+  transaction_attributions?: TransactionAttribution[];
   deal_manager_marketplace_analytics?: DealManagerMarketplaceAnalytics[];
   buyer_marketplace_analytics?: BuyerMarketplaceAnalytics;
   deal_internal_notes?: DealInternalNote[];

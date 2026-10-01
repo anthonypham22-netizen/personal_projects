@@ -426,6 +426,99 @@ test("advisor can inspect the event-backed buyer funnel and record a milestone",
   await expect(buyerRow).toContainText("IOI");
 });
 
+test("deal managers can review attribution while buyers cannot access it", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Advisor demo" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goto("/app/deals/cedar");
+  await page.getByRole("button", { name: "Attribution", exact: true }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Transaction attribution" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("No fees are calculated or charged here."),
+  ).toBeVisible();
+  const attribution = page
+    .locator(".attribution-card")
+    .filter({ hasText: "Evergreen Capital" });
+  await expect(attribution).toContainText("Seller sourced");
+  await attribution
+    .getByLabel("Relationship source")
+    .selectOption("external_relationship");
+  await attribution.getByLabel("Introduction date").fill("2025-01-15");
+  await attribution.getByRole("button", { name: "Save attribution" }).click();
+  await expect(
+    page.getByRole("status").getByText("Transaction attribution saved."),
+  ).toBeVisible();
+  await expect(attribution.getByLabel("Relationship source")).toHaveValue(
+    "external_relationship",
+  );
+
+  await page.getByRole("button", { name: "Buyer funnel" }).click();
+  const buyerRow = page.getByRole("row").filter({
+    hasText: "Evergreen Capital",
+  });
+  await buyerRow
+    .getByRole("button", { name: /Inspect Evergreen Capital/ })
+    .click();
+  await page
+    .getByLabel("Record milestone for Evergreen Capital")
+    .selectOption("closed");
+  await page.getByRole("button", { name: "Record milestone" }).click();
+  await expect(buyerRow).toContainText("Closed");
+
+  await page.getByRole("button", { name: "Attribution", exact: true }).click();
+  const closedAttribution = page
+    .locator(".attribution-card")
+    .filter({ hasText: "Evergreen Capital" });
+  await expect(closedAttribution.getByLabel("Closing date")).toBeVisible();
+  await expect(
+    closedAttribution.getByLabel("Enterprise value (C$)"),
+  ).toBeVisible();
+  await closedAttribution
+    .getByRole("button", { name: "Save attribution" })
+    .click();
+  await expect(
+    page.getByRole("status").getByText("Transaction attribution saved."),
+  ).toBeVisible();
+  await closedAttribution.getByLabel("Closing date").fill("2026-01-15");
+  await closedAttribution
+    .getByLabel("Enterprise value (C$)")
+    .fill("12500000");
+  await closedAttribution
+    .getByRole("button", { name: "Save attribution" })
+    .click();
+  await expect(
+    page.getByRole("status").getByText("Transaction attribution saved."),
+  ).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "Attribution", exact: true }).click();
+  const persistedAttribution = page
+    .locator(".attribution-card")
+    .filter({ hasText: "Evergreen Capital" });
+  await expect(persistedAttribution.getByLabel("Closing date")).toHaveValue(
+    "2026-01-15",
+  );
+  await expect(
+    persistedAttribution.getByLabel("Enterprise value (C$)"),
+  ).toHaveValue("12500000");
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Buyer demo" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goto("/app/deals/cedar");
+  await expect(
+    page.getByRole("button", { name: "Attribution", exact: true }),
+  ).toHaveCount(0);
+  const buyerWorkspace = await (
+    await page.request.get("/api/workspace")
+  ).json();
+  expect(buyerWorkspace).not.toHaveProperty("transaction_attributions");
+});
+
 test("seller-side teams can keep private notes out of buyer workspaces", async ({
   page,
 }) => {
@@ -641,6 +734,16 @@ test("seller shares a private teaser and sees the buyer response", async ({
     page.getByText("Outreach activity", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText("Sent", { exact: true }).first()).toBeVisible();
+  const attributedSellerWorkspace = await (
+    await page.request.get("/api/workspace")
+  ).json();
+  expect(
+    attributedSellerWorkspace.transaction_attributions.find(
+      (candidate: { deal_id: string; buyer_organization_id: string }) =>
+        candidate.deal_id === dealId &&
+        candidate.buyer_organization_id === match.buyer_organization_id,
+    )?.source,
+  ).toBe("acquire_match");
 
   await page.request.post("/api/auth", {
     headers,
@@ -938,6 +1041,16 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
     .getByRole("button", { name: "Approve introduction" })
     .click();
   await expect(requestCard).toContainText("Approved");
+  const attributedDiscoveryWorkspace = await (
+    await page.request.get("/api/workspace")
+  ).json();
+  expect(
+    attributedDiscoveryWorkspace.transaction_attributions.find(
+      (candidate: { deal_id: string; buyer_organization_id: string }) =>
+        candidate.deal_id === dealId &&
+        candidate.buyer_organization_id === buyerWorkspace.organization.id,
+    )?.source,
+  ).toBe("buyer_discovery");
 
   await page.request.post("/api/auth", {
     headers,

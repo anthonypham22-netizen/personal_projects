@@ -32,8 +32,13 @@ import { electronicNdaMigration } from "../src/lib/migrations/019_electronic_nda
 import { personalizedCimWatermarkingMigration } from "../src/lib/migrations/020_personalized_cim_watermarking.ts";
 import { aiTeaserSafetyMigration } from "../src/lib/migrations/021_ai_teaser_safety.ts";
 import { publicNetworkMigration } from "../src/lib/migrations/022_public_network.ts";
+import { transactionAttributionMigration } from "../src/lib/migrations/023_transaction_attribution.ts";
 import { ensureInitialMatchBackfill } from "../src/lib/match-store.ts";
 import { ensureBuyerFunnelBackfill } from "../src/lib/buyer-funnel.ts";
+import {
+  ensureTransactionAttributionBackfill,
+  recordInitialTransactionAttribution,
+} from "../src/lib/transaction-attribution.ts";
 
 const legacySchemaSql = readFileSync(
   new URL("./fixtures/legacy-schema-v0.sql", import.meta.url),
@@ -86,6 +91,7 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { version: 20, name: "personalized_cim_watermarking" },
       { version: 21, name: "ai_teaser_safety" },
       { version: 22, name: "public_network" },
+      { version: 23, name: "transaction_attribution" },
     ]);
 
     const accessColumns = database
@@ -491,7 +497,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       },
     );
     const history = getMigrationHistory(database);
-    assert.equal(history.length, 22);
+    assert.equal(history.length, 23);
     assert.deepEqual(migrationSummary(database), [
       { version: 1, name: "initial_upgrade" },
       { version: 2, name: "organizations" },
@@ -515,6 +521,7 @@ test("an existing database upgrades to organizations without losing data", () =>
       { version: 20, name: "personalized_cim_watermarking" },
       { version: 21, name: "ai_teaser_safety" },
       { version: 22, name: "public_network" },
+      { version: 23, name: "transaction_attribution" },
     ]);
     assert.equal(
       database
@@ -1777,6 +1784,152 @@ test("an existing Phase 17 database adds default-private public network state wi
     const history = getMigrationHistory(database);
     applyMigrations(database, [...phaseTwentyOne, publicNetworkMigration]);
     assert.deepEqual(getMigrationHistory(database), history);
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an existing marketplace database adds idempotent transaction attribution without losing deal history", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase20-"));
+  const database = new DatabaseSync(":memory:");
+  const phaseNineteen = [
+    initialUpgrade,
+    organizationsMigration,
+    buyerProjectsMigration,
+    sellSideMandatesMigration,
+    matchingEngineMigration,
+    recommendedBuyersMigration,
+    privateTeaserDistributionMigration,
+    qualifiedDiscoveryMigration,
+    buyerFunnelMigration,
+    internalDealNotesMigration,
+    notificationsMigration,
+    emailProcessingLeaseMigration,
+    emailProcessingTokenMigration,
+    buyerVerificationMigration,
+    buyerFirmProfilesMigration,
+    buyerFirmProfileRevisionMigration,
+    closedTransactionsMigration,
+    buyerReputationMigration,
+    electronicNdaMigration,
+    personalizedCimWatermarkingMigration,
+    aiTeaserSafetyMigration,
+    publicNetworkMigration,
+  ];
+  try {
+    database.exec("PRAGMA foreign_keys=ON");
+    applyMigrations(database, phaseNineteen);
+    seed(database, directory);
+    ensureInitialMatchBackfill(database);
+    ensureBuyerFunnelBackfill(database);
+    const eventsBefore = database
+      .prepare("SELECT * FROM deal_buyer_events ORDER BY rowid")
+      .all()
+      .map((row) => ({ ...row }));
+
+    applyMigrations(database, [
+      ...phaseNineteen,
+      transactionAttributionMigration,
+    ]);
+    ensureTransactionAttributionBackfill(database);
+
+    assert.deepEqual(
+      database
+        .prepare("SELECT * FROM deal_buyer_events ORDER BY rowid")
+        .all()
+        .map((row) => ({ ...row })),
+      eventsBefore,
+    );
+    assert.deepEqual(migrationSummary(database).at(-1), {
+      version: 23,
+      name: "transaction_attribution",
+    });
+    const attribution = database
+      .prepare(
+        `SELECT source,introduced_by_acquire,introduction_date,closed_date,
+           enterprise_value,revision
+         FROM transaction_attribution
+         WHERE deal_id='cedar' AND buyer_organization_id='org-demo-buyer'`,
+      )
+      .get();
+    assert.deepEqual(
+      {
+        source: attribution.source,
+        introduced_by_acquire: attribution.introduced_by_acquire,
+        closed_date: attribution.closed_date,
+        enterprise_value: attribution.enterprise_value,
+        revision: attribution.revision,
+      },
+      {
+        source: "seller_invitation",
+        introduced_by_acquire: 0,
+        closed_date: null,
+        enterprise_value: null,
+        revision: 1,
+      },
+    );
+    assert.match(attribution.introduction_date, /^\d{4}-\d{2}-\d{2}$/);
+    assert.deepEqual(
+      {
+        ...database
+          .prepare(
+            `SELECT source,introduced_by_acquire
+             FROM transaction_attribution
+             WHERE deal_id='harbour' AND buyer_organization_id='org-demo-buyer'`,
+          )
+          .get(),
+      },
+      { source: "external_relationship", introduced_by_acquire: 0 },
+      "legacy access without a supported funnel event must retain attribution coverage",
+    );
+    assert.equal(
+      recordInitialTransactionAttribution(database, {
+        dealId: "cedar",
+        buyerOrganizationId: "org-demo-buyer",
+        source: "acquire_match",
+        introductionDate: "2020-01-01",
+        createdByUserId: "demo-advisor",
+      }),
+      false,
+      "later workflows must not replace first-touch attribution",
+    );
+    assert.deepEqual(
+      {
+        ...database
+          .prepare(
+            `SELECT source,introduction_date
+             FROM transaction_attribution
+             WHERE deal_id='cedar' AND buyer_organization_id='org-demo-buyer'`,
+          )
+          .get(),
+      },
+      {
+        source: "seller_invitation",
+        introduction_date: attribution.introduction_date,
+      },
+    );
+
+    const changes = database
+      .prepare("SELECT total_changes() value")
+      .get().value;
+    ensureTransactionAttributionBackfill(database);
+    assert.equal(
+      database.prepare("SELECT total_changes() value").get().value,
+      changes,
+      "the attribution backfill must run only once",
+    );
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            `UPDATE transaction_attribution
+             SET source='external_relationship',introduced_by_acquire=1
+             WHERE deal_id='cedar' AND buyer_organization_id='org-demo-buyer'`,
+          )
+          .run(),
+      /CHECK constraint/,
+    );
   } finally {
     database.close();
     rmSync(directory, { recursive: true, force: true });

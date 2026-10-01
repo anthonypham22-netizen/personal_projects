@@ -66,6 +66,9 @@ import {
   DEAL_DISTRIBUTION_MODES,
   DEAL_FINANCIAL_PERIOD_TYPES,
   BUYER_FUNNEL_STAGES,
+  TRANSACTION_ATTRIBUTION_SOURCES,
+  introducedByAcquireForSource,
+  transactionAttributionSourceForEvent,
   NOTIFICATION_TYPES,
   NOTIFICATION_FREQUENCIES,
   BUYER_VERIFICATION_STATUSES,
@@ -88,6 +91,8 @@ import {
   type ClosedTransaction,
   type SellerVisibleClosedTransaction,
   type TeaserSafetyReview,
+  type TransactionAttribution,
+  type TransactionAttributionSource,
 } from "@/lib/types";
 
 const buyerOrganizationTypes = new Set<string>(BUYER_ORGANIZATION_TYPES);
@@ -3246,6 +3251,7 @@ function DealDetail({ deal }: { deal: Deal }) {
         ...(deal.can_manage ? ["Teaser safety"] : []),
         ...(deal.can_manage ? ["Recommended buyers"] : []),
         ...(deal.can_manage ? ["Buyer funnel"] : []),
+        ...(deal.can_manage ? ["Attribution"] : []),
         ...(data.user.role !== "buyer" ? ["Internal notes"] : []),
         "Data room",
         "Messages",
@@ -3561,6 +3567,8 @@ function DealDetail({ deal }: { deal: Deal }) {
         <RecommendedBuyers deal={deal} />
       ) : tab === "Buyer funnel" ? (
         <BuyerFunnel deal={deal} />
+      ) : tab === "Attribution" ? (
+        <TransactionAttributionPanel deal={deal} />
       ) : tab === "Internal notes" ? (
         <InternalNotes deal={deal} />
       ) : tab === "Introduction requests" ? (
@@ -4030,6 +4038,205 @@ function BuyerFunnel({ deal }: { deal: Deal }) {
         />
       )}
     </section>
+  );
+}
+
+const transactionAttributionSourceLabel = (
+  source: TransactionAttributionSource,
+) =>
+  ({
+    acquire_match: "Succera match",
+    seller_invitation: "Seller invitation",
+    buyer_discovery: "Buyer discovery",
+    external_relationship: "External relationship",
+  })[source];
+
+const transactionAttributionSourceOptions = TRANSACTION_ATTRIBUTION_SOURCES.map(
+  (source) => ({
+    value: source,
+    label: transactionAttributionSourceLabel(source),
+  }),
+);
+
+function TransactionAttributionPanel({ deal }: { deal: Deal }) {
+  const { data } = useWorkspace();
+  const funnel = data.buyer_funnels?.find(
+    (candidate) => candidate.deal_id === deal.id,
+  );
+  const attributions = (data.transaction_attributions ?? []).filter(
+    (attribution) => attribution.deal_id === deal.id,
+  );
+  if (!funnel?.buyers.length)
+    return (
+      <Empty
+        title="No buyer relationships to attribute"
+        body="Attribution becomes available after a buyer enters this mandate’s funnel."
+      />
+    );
+  const attributionByBuyer = new Map(
+    attributions.map((attribution) => [
+      attribution.buyer_organization_id,
+      attribution,
+    ]),
+  );
+  const incompleteClosed = funnel.buyers.filter((buyer) => {
+    const attribution = attributionByBuyer.get(buyer.buyer_organization_id);
+    return (
+      buyer.events.some((event) => event.event_type === "closed") &&
+      (!attribution?.closed_date || attribution.enterprise_value === null)
+    );
+  }).length;
+  return (
+    <section
+      className="transaction-attribution"
+      aria-labelledby="transaction-attribution-title"
+    >
+      <header className="attribution-heading">
+        <div>
+          <p className="eyebrow">MARKETPLACE ATTRIBUTION</p>
+          <h2 id="transaction-attribution-title">Transaction attribution</h2>
+          <p>
+            Record how each buyer relationship began and complete the closing
+            record after a transaction closes. No fees are calculated or charged
+            here.
+          </p>
+        </div>
+        <div className="attribution-summary" aria-label="Attribution summary">
+          <span>{attributions.length} tracked</span>
+          {incompleteClosed > 0 && (
+            <span className="attention">
+              {incompleteClosed} close{incompleteClosed === 1 ? "" : "s"} need
+              details
+            </span>
+          )}
+        </div>
+      </header>
+      <div className="attribution-notice">
+        <ShieldCheck aria-hidden="true" size={19} />
+        <div>
+          <strong>Operational record only</strong>
+          <p>
+            Succera match and Buyer discovery are treated as Succera-introduced.
+            Seller invitations and external relationships are seller-sourced.
+            Billing remains separate and disabled.
+          </p>
+        </div>
+      </div>
+      <div className="attribution-list">
+        {funnel.buyers.map((buyer) => (
+          <TransactionAttributionCard
+            attribution={attributionByBuyer.get(buyer.buyer_organization_id)}
+            buyer={buyer}
+            deal={deal}
+            key={buyer.buyer_organization_id}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TransactionAttributionCard({
+  attribution,
+  buyer,
+  deal,
+}: {
+  attribution?: TransactionAttribution;
+  buyer: BuyerFunnelEntry;
+  deal: Deal;
+}) {
+  const firstRelationshipEvent = buyer.events.find((event) =>
+    transactionAttributionSourceForEvent(event.event_type),
+  );
+  const source =
+    attribution?.source ??
+    (firstRelationshipEvent &&
+      transactionAttributionSourceForEvent(
+        firstRelationshipEvent.event_type,
+      )) ??
+    "external_relationship";
+  const introductionDate =
+    attribution?.introduction_date ??
+    firstRelationshipEvent?.created_at.slice(0, 10) ??
+    buyer.events[0]?.created_at.slice(0, 10) ??
+    new Date().toISOString().slice(0, 10);
+  const isClosed = buyer.events.some((event) => event.event_type === "closed");
+  const introducedBySuccera = introducedByAcquireForSource(source);
+  return (
+    <article className="attribution-card">
+      <header>
+        <div>
+          <h3>{buyer.buyer_organization_name}</h3>
+          <p>{buyer.buyer_project_name || "No acquisition project"}</p>
+        </div>
+        <div className="attribution-badges">
+          <Status value={buyer.current_stage} />
+          <span className={cn("badge", introducedBySuccera && "verified")}>
+            {introducedBySuccera ? "Succera introduced" : "Seller sourced"}
+          </span>
+        </div>
+      </header>
+      <MutationForm
+        action="upsertTransactionAttribution"
+        extra={{
+          deal_id: deal.id,
+          buyer_organization_id: buyer.buyer_organization_id,
+          revision: attribution?.revision ?? 0,
+        }}
+        key={`${buyer.buyer_organization_id}-${attribution?.revision ?? 0}`}
+        label={attribution ? "Save attribution" : "Record attribution"}
+      >
+        <div className="attribution-fields">
+          <OptionSelectField
+            name="source"
+            label="Relationship source"
+            options={transactionAttributionSourceOptions}
+            value={source}
+            help="Choose the earliest source that actually connected these parties."
+          />
+          <label>
+            Introduction date
+            <input
+              name="introduction_date"
+              type="date"
+              defaultValue={introductionDate}
+              max={new Date().toISOString().slice(0, 10)}
+              required
+            />
+          </label>
+          {isClosed ? (
+            <>
+              <label>
+                Closing date
+                <input
+                  name="closed_date"
+                  type="date"
+                  defaultValue={attribution?.closed_date ?? ""}
+                  min={introductionDate}
+                  max={new Date().toISOString().slice(0, 10)}
+                />
+              </label>
+              <label>
+                Enterprise value (C$)
+                <input
+                  name="enterprise_value"
+                  type="number"
+                  defaultValue={attribution?.enterprise_value ?? ""}
+                  min={0}
+                  max={10_000_000_000}
+                  step={1}
+                />
+              </label>
+            </>
+          ) : (
+            <p className="attribution-close-note">
+              Closing date and enterprise value unlock after the Closed
+              milestone is recorded in Buyer funnel.
+            </p>
+          )}
+        </div>
+      </MutationForm>
+    </article>
   );
 }
 

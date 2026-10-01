@@ -8,6 +8,7 @@ import {
   recalculateBuyerProjectMatches,
 } from "./match-store";
 import { ensureBuyerFunnelBackfill } from "./buyer-funnel";
+import { ensureTransactionAttributionBackfill } from "./transaction-attribution";
 
 export const dataDirectory = () =>
   path.resolve(process.env.DATA_DIR || "./data");
@@ -47,6 +48,7 @@ export function db() {
     if (process.env.ALLOW_DEMO === "true") seed(d, dataDirectory());
     ensureInitialMatchBackfill(d);
     ensureBuyerFunnelBackfill(d);
+    ensureTransactionAttributionBackfill(d);
     for (const projectId of demoProjectIds)
       if (
         demoFingerprints.has(projectId) &&

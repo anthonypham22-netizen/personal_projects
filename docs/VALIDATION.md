@@ -1,6 +1,6 @@
 # Validation status
 
-Date: 2026-09-29
+Date: 2026-09-30
 
 ## Phase 4 — deterministic matching engine
 
@@ -117,11 +117,11 @@ Dependencies and `package-lock.json` are present. TypeScript, backend tests, pro
 
 - `npm install`: succeeded; npm reported zero known vulnerabilities at installation time (not a security certification).
 - `npm run typecheck`: passed.
-- `npm test`: **118 passed, 0 failed**. Coverage includes Phase 19 role boundaries, explicit marketplace milestones and conversions, organization isolation, direct-response view capture, active-diligence outcomes, teaser identifier detection, provider-outage fallback, stale-review protection, personalized watermarking, electronic NDA orchestration, and all earlier reputation, verification, matching, outreach, discovery, funnel, notification, document, organization, migration, session, password, and backup behavior.
+- `npm test`: **120 passed, 0 failed**. Coverage includes Phase 20 attribution constraints, migration backfill and seller-only authorization; Phase 19 role boundaries; explicit marketplace milestones and conversions; organization isolation; direct-response view capture; active-diligence outcomes; teaser identifier detection; provider-outage fallback; stale-review protection; personalized watermarking; electronic NDA orchestration; and all earlier reputation, verification, matching, outreach, discovery, funnel, notification, document, organization, migration, session, password, and backup behavior.
 - `npm run build`: passed using Next.js 16's documented Webpack build mode. Turbopack's PostCSS evaluator attempted to bind a local worker port that this execution host prohibits, so the production script is pinned to `next build --webpack`; application compilation, type checking, prerendering, and build tracing completed successfully.
-- `npm run test:e2e`: **27 passed, 0 failed** in Chromium. This includes the advisor marketplace analytics panel, the buyer organization-scoped activity panel at a mobile viewport, the public network, a seller safety review, personalized PDF delivery, electronic NDA pending state, reputation aggregates, transaction tombstones, platform verification, profiles, notifications, the buyer funnel, Qualified Discovery, private teasers, Recommended Buyers, authorization, tasks, environment isolation, and mobile checks.
+- `npm run test:e2e`: **28 passed, 0 failed** in Chromium. This includes manager transaction-attribution editing and buyer payload omission, the advisor marketplace analytics panel, the buyer organization-scoped activity panel at a mobile viewport, the public network, a seller safety review, personalized PDF delivery, electronic NDA pending state, reputation aggregates, transaction tombstones, platform verification, profiles, notifications, the buyer funnel, Qualified Discovery, private teasers, Recommended Buyers, authorization, tasks, environment isolation, and mobile checks.
 - The test runner's IPC socket initially required permissions outside the sandbox. Running the same check through the approval mechanism succeeded.
-- `npm run test:core`: **33 passed, 0 failed**. Covers password and session safety, migration ordering and rollback, fresh/existing database upgrades through Phase 18, public-network defaults, empty review-history preservation, watermark defaults, electronic NDA initialization, reputation and transaction constraints, legacy upgrades, notification and outbox constraints, buyer-funnel backfill, matching, outreach, introductions, and backup integrity.
+- `npm run test:core`: **34 passed, 0 failed**. Covers password and session safety, migration ordering and rollback, fresh/existing database upgrades through Phase 20, transaction-attribution constraints and idempotent backfill, public-network defaults, empty review-history preservation, watermark defaults, electronic NDA initialization, reputation and transaction constraints, legacy upgrades, notification and outbox constraints, buyer-funnel backfill, matching, outreach, introductions, and backup integrity.
 - `package.json` and `tsconfig.json`: valid JSON.
 - Git ignore checks confirm `.env.local`, the SQLite data path, and uploaded-file paths are ignored.
 
@@ -148,6 +148,48 @@ Phase 19 adds no schema migration and stores no mutable analytics counters. The 
 Authorized owner and advisor deal managers receive per-mandate Recommended buyers, Teasers sent, Teaser views, Interested, NDAs, CIMs, IOIs, LOIs, and Exclusive counts. View, pursuit, NDA, IOI, and LOI conversion rates use explicit funnel denominators; a missing denominator renders as unavailable. Average buyer response includes only invitations with a recorded pursued or passed response.
 
 Eligible buyer organizations receive aggregate counts for opportunities received, viewed, pursued, LOIs submitted, and approved processes whose mandate is currently in Due diligence and whose latest buyer-relationship outcome remains active. “Opportunities viewed” means a recorded private invitation teaser view; Qualified Discovery teaser opens are not included because that workflow does not yet record a view event. The service groups evidence by mandate, returns only the signed-in buyer organization's totals, and does not expose another firm's events, identities, or seller-side conversion analytics. These operational metrics depend on complete workflow event capture and are informational rather than financial, performance, or attribution claims.
+
+## Phase 20 transaction attribution
+
+Migration `023_transaction_attribution` adds one attribution record per mandate and buyer organization, a constrained source (`acquire_match`, `seller_invitation`, `buyer_discovery`, or `external_relationship`), a source-consistent `introduced_by_acquire` flag, optional close date and enterprise value, optimistic revision, editor attribution, and timestamps. A one-time idempotent backfill uses the earliest supported marketplace connection event and leaves the append-only buyer-event ledger unchanged. Fresh databases, upgraded databases, repeated initialization, foreign keys, and source/close constraints are covered by schema tests.
+
+Private teaser sharing records an `acquire_match` source, approved Qualified Discovery introductions record `buyer_discovery`, and direct seller invitations record `seller_invitation`. Authorized owner and advisor managers can review or correct the source in the deal-level **Attribution** tab. Close date and enterprise value remain paired and unavailable until an explicit Closed funnel milestone exists. Buyer workspace responses omit the attribution collection entirely; unrelated firms cannot read or write it; concurrent edits use a revision conflict instead of silently overwriting data.
+
+This phase provides operational evidence for future commercial reconciliation only. It does not calculate success fees, enforce subscriptions or entitlements, create invoices, collect payments, recognize revenue, or alter any buyer's access. Historical first-touch attribution is a best-evidence backfill and remains manager-reviewable before any future billing system relies on it.
+
+Before any future commercial rollout relies on this evidence, run these read-only reconciliation checks against the deployed database and investigate every unexpected row:
+
+```sql
+-- Supported marketplace connections without attribution.
+SELECT event.deal_id,event.buyer_organization_id
+FROM deal_buyer_events event
+LEFT JOIN transaction_attribution attribution
+  ON attribution.deal_id=event.deal_id
+ AND attribution.buyer_organization_id=event.buyer_organization_id
+WHERE event.event_type IN ('teaser_sent','intro_approved','nda_requested')
+  AND attribution.id IS NULL
+GROUP BY event.deal_id,event.buyer_organization_id;
+
+-- Attribution volume and Acquire-introduced classification by source.
+SELECT source,introduced_by_acquire,COUNT(*) records
+FROM transaction_attribution
+GROUP BY source,introduced_by_acquire
+ORDER BY source,introduced_by_acquire;
+
+-- Missing or mismatched event evidence for event-backed attribution rows.
+SELECT attribution.id,attribution.deal_id,
+       attribution.buyer_organization_id,attribution.origin_event_id
+FROM transaction_attribution attribution
+LEFT JOIN deal_buyer_events event ON event.id=attribution.origin_event_id
+WHERE attribution.origin_event_id IS NOT NULL
+  AND (
+    event.id IS NULL OR
+    event.deal_id<>attribution.deal_id OR
+    event.buyer_organization_id<>attribution.buyer_organization_id
+  );
+```
+
+Rows classified as `external_relationship` should also receive explicit human review before any billing policy is introduced.
 
 ## Required continuation
 

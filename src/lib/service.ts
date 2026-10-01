@@ -16,6 +16,8 @@ import {
   DEAL_FINANCIAL_PERIOD_TYPES,
   DEAL_MATCH_STATUSES,
   DEAL_BUYER_EVENT_TYPES,
+  TRANSACTION_ATTRIBUTION_SOURCES,
+  introducedByAcquireForSource,
   NOTIFICATION_TYPES,
   NOTIFICATION_FREQUENCIES,
   type User,
@@ -85,6 +87,10 @@ import {
   buyerMarketplaceAnalytics as buyerMarketplaceAnalyticsFor,
   deriveDealManagerMarketplaceAnalytics,
 } from "./marketplace-analytics";
+import {
+  recordInitialTransactionAttribution,
+  transactionAttributionsForDeals,
+} from "./transaction-attribution";
 import {
   activeOrganizationUserIds,
   dealManagerUserIds,
@@ -1833,6 +1839,10 @@ export function workspace(user: User): WorkspaceData {
     user.role !== "buyer" && managedDealIds.length
       ? buyerFunnelsForDeals(db(), managedDealIds)
       : undefined;
+  const transactionAttributions =
+    user.role !== "buyer" && managedDealIds.length
+      ? transactionAttributionsForDeals(db(), managedDealIds)
+      : undefined;
   const dealManagerMarketplaceAnalytics = buyerFunnels?.map((funnel) =>
     deriveDealManagerMarketplaceAnalytics(
       funnel,
@@ -1871,6 +1881,9 @@ export function workspace(user: User): WorkspaceData {
     deal_outreach: dealOutreach,
     introduction_requests: introductionRequests,
     ...(buyerFunnels ? { buyer_funnels: buyerFunnels } : {}),
+    ...(transactionAttributions
+      ? { transaction_attributions: transactionAttributions }
+      : {}),
     ...(dealManagerMarketplaceAnalytics
       ? { deal_manager_marketplace_analytics: dealManagerMarketplaceAnalytics }
       : {}),
@@ -2948,6 +2961,130 @@ export function mutate(
         "Suggestion applied to the private teaser draft. Review and publish it separately when ready.",
     };
   }
+  if (action === "upsertTransactionAttribution") {
+    requireManager(user, deal);
+    const optionalAttributionDate = z.preprocess(
+      (value) =>
+        value === "" || value === undefined || value === null ? null : value,
+      closedDate.nullable(),
+    );
+    const p = parse(
+      z.object({
+        buyer_organization_id: idSchema,
+        source: z.enum(TRANSACTION_ATTRIBUTION_SOURCES),
+        introduction_date: closedDate,
+        closed_date: optionalAttributionDate,
+        enterprise_value: optionalAmount,
+        revision: z.coerce.number().int().min(0),
+      }),
+      data,
+    );
+    if ((p.closed_date === null) !== (p.enterprise_value === null))
+      throw new AppError(
+        "Closing date and enterprise value must be recorded together.",
+      );
+    if (p.closed_date && p.closed_date < p.introduction_date)
+      throw new AppError(
+        "Closing date cannot be earlier than the introduction date.",
+      );
+    const database = db();
+    const relationship = database
+      .prepare(
+        `SELECT 1 FROM deal_buyer_events
+         WHERE deal_id=? AND buyer_organization_id=? LIMIT 1`,
+      )
+      .get(deal.id, p.buyer_organization_id);
+    if (!relationship)
+      throw new AppError("This buyer is not part of the deal funnel.", 404);
+    if (
+      p.closed_date &&
+      !database
+        .prepare(
+          `SELECT 1 FROM deal_buyer_events
+           WHERE deal_id=? AND buyer_organization_id=? AND event_type='closed'
+           LIMIT 1`,
+        )
+        .get(deal.id, p.buyer_organization_id)
+    )
+      throw new AppError(
+        "Record the Closed buyer-funnel milestone before adding closing details.",
+        409,
+      );
+    const existing = database
+      .prepare(
+        `SELECT id,revision FROM transaction_attribution
+         WHERE deal_id=? AND buyer_organization_id=?`,
+      )
+      .get(deal.id, p.buyer_organization_id) as
+      { id: string; revision: number } | undefined;
+    inImmediateTransaction(database, () => {
+      if (existing) {
+        const updated = database
+          .prepare(
+            `UPDATE transaction_attribution SET
+               source=?,introduced_by_acquire=?,introduction_date=?,
+               closed_date=?,enterprise_value=?,origin_event_id=NULL,
+               updated_by_user_id=?,revision=revision+1,
+               updated_at=strftime('%Y-%m-%d %H:%M:%f','now')
+             WHERE id=? AND deal_id=? AND revision=?`,
+          )
+          .run(
+            p.source,
+            introducedByAcquireForSource(p.source) ? 1 : 0,
+            p.introduction_date,
+            p.closed_date,
+            p.enterprise_value,
+            user.id,
+            existing.id,
+            deal.id,
+            p.revision,
+          );
+        if (updated.changes !== 1)
+          throw new AppError(
+            "This attribution record changed in another session. Refresh and try again.",
+            409,
+          );
+      } else {
+        if (p.revision !== 0)
+          throw new AppError(
+            "This attribution record changed in another session. Refresh and try again.",
+            409,
+          );
+        const inserted = database
+          .prepare(
+            `INSERT INTO transaction_attribution(
+               id,deal_id,buyer_organization_id,source,introduced_by_acquire,
+               introduction_date,closed_date,enterprise_value,
+               created_by_user_id,updated_by_user_id
+             ) VALUES(?,?,?,?,?,?,?,?,?,?)
+             ON CONFLICT(deal_id,buyer_organization_id) DO NOTHING`,
+          )
+          .run(
+            randomUUID(),
+            deal.id,
+            p.buyer_organization_id,
+            p.source,
+            introducedByAcquireForSource(p.source) ? 1 : 0,
+            p.introduction_date,
+            p.closed_date,
+            p.enterprise_value,
+            user.id,
+            user.id,
+          );
+        if (inserted.changes !== 1)
+          throw new AppError(
+            "This attribution record changed in another session. Refresh and try again.",
+            409,
+          );
+      }
+      audit(
+        user,
+        deal.id,
+        `Updated transaction attribution: ${p.source.replaceAll("_", " ")}`,
+      );
+    });
+    return { message: "Transaction attribution saved." };
+  }
   if (action === "recordBuyerFunnelEvent") {
     requireManager(user, deal);
     const p = parse(
@@ -3110,6 +3247,12 @@ export function mutate(
           buyerProjectId: recipient.buyer_project_id,
           eventType: "teaser_sent",
           sourceKey: `outreach:${recipientId}:sent`,
+          createdByUserId: user.id,
+        });
+        recordInitialTransactionAttribution(database, {
+          dealId: deal.id,
+          buyerOrganizationId: recipient.buyer_organization_id,
+          source: "acquire_match",
           createdByUserId: user.id,
         });
         notifyUsers(database, {
@@ -3581,6 +3724,13 @@ export function mutate(
         createdByUserId: user.id,
       });
       if (p.status === "approved")
+        recordInitialTransactionAttribution(database, {
+          dealId: deal.id,
+          buyerOrganizationId: request.buyer_organization_id,
+          source: "buyer_discovery",
+          createdByUserId: user.id,
+        });
+      if (p.status === "approved")
         notifyUsers(database, {
           userIds: activeOrganizationUserIds(
             database,
@@ -3858,6 +4008,12 @@ export function mutate(
         sourceKey: `access:${accessId}:nda-requested`,
         createdByUserId: user.id,
       });
+      recordInitialTransactionAttribution(database, {
+        dealId: deal.id,
+        buyerOrganizationId: buyerOrganization.id,
+        source: "seller_invitation",
+        createdByUserId: user.id,
+      });
       notifyUsers(database, {
         userIds: [buyer.id],
         type: "nda_requested",
@@ -3979,7 +4135,7 @@ export function mutate(
             buyerOrganization.id,
             deal.id,
           );
-        if (buyerOrganization && p.status === "nda_pending")
+        if (buyerOrganization && p.status === "nda_pending") {
           recordDealBuyerEvent(database, {
             dealId: deal.id,
             buyerOrganizationId: buyerOrganization.id,
@@ -3988,6 +4144,13 @@ export function mutate(
             sourceKey: `access:${member.id}:nda-requested`,
             createdByUserId: user.id,
           });
+          recordInitialTransactionAttribution(database, {
+            dealId: deal.id,
+            buyerOrganizationId: buyerOrganization.id,
+            source: "seller_invitation",
+            createdByUserId: user.id,
+          });
+        }
         if (p.status === "nda_pending")
           notifyUsers(database, {
             userIds: [p.buyer_id],

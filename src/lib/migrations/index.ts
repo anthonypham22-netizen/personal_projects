@@ -22,6 +22,7 @@ import { electronicNdaMigration } from "./019_electronic_nda.ts";
 import { personalizedCimWatermarkingMigration } from "./020_personalized_cim_watermarking.ts";
 import { aiTeaserSafetyMigration } from "./021_ai_teaser_safety.ts";
 import { publicNetworkMigration } from "./022_public_network.ts";
+import { transactionAttributionMigration } from "./023_transaction_attribution.ts";
 
 export type Migration = {
   version: number;
@@ -58,6 +59,7 @@ const migrations: readonly Migration[] = [
   personalizedCimWatermarkingMigration,
   aiTeaserSafetyMigration,
   publicNetworkMigration,
+  transactionAttributionMigration,
 ];
 
 const migrationTableSql = `
