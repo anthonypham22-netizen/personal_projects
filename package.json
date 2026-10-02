@@ -1,21 +1,51 @@
 {
-  "name": "northlane", "version": "0.1.0", "private": true,
-  "engines": { "node": ">=24.14.0 <25" },
+  "name": "northlane",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=24.14.0 <25"
+  },
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
-    "build": "next build --webpack", "start": "next start --hostname 0.0.0.0",
-    "typecheck": "tsc --noEmit", "test": "tsx --test tests/*.test.ts tests/*.test.mjs",
+    "build": "next build --webpack",
+    "start": "next start --hostname 0.0.0.0",
+    "typecheck": "tsc --noEmit",
+    "test": "NODE_OPTIONS=--conditions=react-server tsx --test tests/*.test.ts tests/*.test.mjs",
     "test:core": "node --test tests/*.test.mjs",
-    "test:e2e": "playwright test", "check": "npm run typecheck && npm test && npm run build",
-    "backup": "node scripts/backup.mjs", "format": "prettier --write src tests e2e *.ts *.mjs"
+    "test:e2e": "playwright test",
+    "check": "npm run typecheck && npm test && npm run build",
+    "backup": "node scripts/backup.mjs",
+    "db:migration:new": "supabase migration new",
+    "db:push": "supabase db push",
+    "db:import:sqlite": "node scripts/migrate-sqlite-to-postgres.mjs",
+    "db:verify": "node scripts/verify-postgres.mjs",
+    "format": "prettier --write src tests e2e *.ts *.mjs"
   },
   "dependencies": {
-    "next": "16.3.5", "react": "19.3.0", "react-dom": "19.3.0",
-    "lucide-react": "^0.577.0", "pdf-lib": "^1.17.1", "zod": "^4.3.6", "clsx": "^2.1.1", "tailwind-merge": "^3.5.0"
+    "@electric-sql/pglite": "^0.5.8",
+    "@vercel/blob": "^2.8.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.577.0",
+    "next": "^16.3.8",
+    "pdf-lib": "^1.17.1",
+    "pg": "^8.23.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "server-only": "^0.0.1",
+    "tailwind-merge": "^3.5.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "4.3.3", "tailwindcss": "4.3.3", "typescript": "^5.9.3",
-    "@types/node": "^24.10.0", "@types/react": "^19.2.0", "@types/react-dom": "^19.2.0",
-    "tsx": "^4.21.0", "@playwright/test": "^1.58.2", "prettier": "^3.8.1"
+    "@playwright/test": "^1.58.2",
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "^24.10.0",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "prettier": "^3.8.1",
+    "supabase": "^2.119.0",
+    "tailwindcss": "4.3.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
   }
 }

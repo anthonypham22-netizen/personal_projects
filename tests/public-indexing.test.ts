@@ -16,8 +16,8 @@ before(() => {
 });
 
 after(async () => {
-  const { db } = await import("../src/lib/db");
-  db().close();
+  const { closeDatabase } = await import("../src/lib/db");
+  await closeDatabase();
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -47,7 +47,7 @@ test("enabled indexing exposes only public-network routes", async () => {
   });
   assert.equal(robotsResult.sitemap, "https://succera.example/sitemap.xml");
 
-  const paths = sitemap().map(({ url }) => new URL(url).pathname);
+  const paths = (await sitemap()).map(({ url }) => new URL(url).pathname);
   assert.ok(paths.includes("/"));
   assert.ok(paths.includes("/network"));
   assert.ok(paths.includes("/buyers/evergreen-capital-demo-buyer"));

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db";
 import {
   type DealManagerMarketplaceAnalytics,
   type BuyerMarketplaceAnalytics,
@@ -89,17 +89,17 @@ export function deriveDealManagerMarketplaceAnalytics(
   };
 }
 
-export function buyerMarketplaceAnalytics(
-  database: DatabaseSync,
+export async function buyerMarketplaceAnalytics(
+  database: DatabaseClient,
   organizationId: string,
-): BuyerMarketplaceAnalytics {
-  const analytics = database
+): Promise<BuyerMarketplaceAnalytics> {
+  const analytics = (await database
     .prepare(
       `WITH effective_events AS (
          SELECT deal_id,buyer_organization_id,event_type,
            ROW_NUMBER() OVER (
              PARTITION BY deal_id,buyer_organization_id
-             ORDER BY created_at DESC,rowid DESC
+             ORDER BY created_at DESC,id DESC
            ) event_rank
          FROM deal_buyer_events
          WHERE buyer_organization_id=?
@@ -160,6 +160,6 @@ export function buyerMarketplaceAnalytics(
       organizationId,
       organizationId,
       organizationId,
-    ) as BuyerMarketplaceAnalytics;
+    )) as BuyerMarketplaceAnalytics;
   return { ...analytics };
 }

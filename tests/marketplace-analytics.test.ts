@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { db, run } from "../src/lib/db";
+import { closeDatabase, databaseReady, db, run } from "../src/lib/db";
 import { recordDealBuyerEvent } from "../src/lib/buyer-funnel";
 import { workspace } from "../src/lib/service";
 import {
@@ -21,15 +21,15 @@ import type {
 
 let directory: string;
 
-before(() => {
+before(async () => {
   directory = mkdtempSync(path.join(tmpdir(), "succera-market-analytics-"));
   process.env.DATA_DIR = directory;
   process.env.ALLOW_DEMO = "true";
-  db();
+  await databaseReady();
 });
 
-after(() => {
-  db().close();
+after(async () => {
+  await closeDatabase();
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -230,122 +230,133 @@ test("analytics return null rates when there is no recorded denominator", () => 
   );
 });
 
-function seedBuyerAnalyticsFixture() {
+async function seedBuyerAnalyticsFixture() {
   const database = db();
-  run("DELETE FROM deal_buyer_events");
-  const add = (
+  await run("DELETE FROM deal_buyer_events");
+  const add = async (
     dealId: string,
     organizationId: string,
     eventType: DealBuyerEventType,
     sourceKey: string,
   ) =>
-    recordDealBuyerEvent(database, {
+    await recordDealBuyerEvent(database, {
       dealId,
       buyerOrganizationId: organizationId,
       eventType,
       sourceKey,
     });
 
-  add("cedar", "org-demo-buyer", "teaser_sent", "cedar-sent");
-  add("cedar", "org-demo-buyer", "teaser_viewed", "cedar-viewed");
-  add("cedar", "org-demo-buyer", "teaser_viewed", "cedar-viewed-again");
-  add("cedar", "org-demo-buyer", "pursued", "cedar-pursued");
-  add("cedar", "org-demo-buyer", "loi_received", "cedar-loi-1");
-  add("cedar", "org-demo-buyer", "loi_received", "cedar-loi-2");
-  add("summit", "org-demo-buyer", "teaser_sent", "summit-sent");
-  add("harbour", "org-demo-buyer", "intro_approved", "harbour-approved");
-  add("harbour", "org-demo-buyer", "intro_requested", "harbour-requested");
-  add("maple", "org-demo-buyer-2", "teaser_sent", "other-org-sent");
+  await add("cedar", "org-demo-buyer", "teaser_sent", "cedar-sent");
+  await add("cedar", "org-demo-buyer", "teaser_viewed", "cedar-viewed");
+  await add("cedar", "org-demo-buyer", "teaser_viewed", "cedar-viewed-again");
+  await add("cedar", "org-demo-buyer", "pursued", "cedar-pursued");
+  await add("cedar", "org-demo-buyer", "loi_received", "cedar-loi-1");
+  await add("cedar", "org-demo-buyer", "loi_received", "cedar-loi-2");
+  await add("summit", "org-demo-buyer", "teaser_sent", "summit-sent");
+  await add("harbour", "org-demo-buyer", "intro_approved", "harbour-approved");
+  await add(
+    "harbour",
+    "org-demo-buyer",
+    "intro_requested",
+    "harbour-requested",
+  );
+  await add("maple", "org-demo-buyer-2", "teaser_sent", "other-org-sent");
 
-  run("UPDATE deals SET stage='Due diligence' WHERE id='cedar'");
-  run("UPDATE deals SET stage='LOI review' WHERE id='summit'");
+  await run("UPDATE deals SET stage='Due diligence' WHERE id='cedar'");
+  await run("UPDATE deals SET stage='LOI review' WHERE id='summit'");
 }
 
-test("buyer analytics are organization-scoped and count each opportunity once", () => {
-  seedBuyerAnalyticsFixture();
+test("buyer analytics are organization-scoped and count each opportunity once", async () => {
+  await seedBuyerAnalyticsFixture();
   const database = db();
 
-  assert.deepEqual(buyerMarketplaceAnalytics(database, "org-demo-buyer"), {
-    opportunities_received: 3,
-    opportunities_viewed: 1,
-    opportunities_pursued: 2,
-    lois_submitted: 1,
-    active_diligence_processes: 1,
-  });
-  assert.deepEqual(buyerMarketplaceAnalytics(database, "org-demo-buyer-2"), {
-    opportunities_received: 1,
-    opportunities_viewed: 0,
-    opportunities_pursued: 0,
-    lois_submitted: 0,
-    active_diligence_processes: 0,
-  });
+  assert.deepEqual(
+    await buyerMarketplaceAnalytics(database, "org-demo-buyer"),
+    {
+      opportunities_received: 3,
+      opportunities_viewed: 1,
+      opportunities_pursued: 2,
+      lois_submitted: 1,
+      active_diligence_processes: 1,
+    },
+  );
+  assert.deepEqual(
+    await buyerMarketplaceAnalytics(database, "org-demo-buyer-2"),
+    {
+      opportunities_received: 1,
+      opportunities_viewed: 0,
+      opportunities_pursued: 0,
+      lois_submitted: 0,
+      active_diligence_processes: 0,
+    },
+  );
 });
 
-test("active diligence follows the latest effective buyer relationship outcome", () => {
-  seedBuyerAnalyticsFixture();
+test("active diligence follows the latest effective buyer relationship outcome", async () => {
+  await seedBuyerAnalyticsFixture();
   const database = db();
-  run("UPDATE deals SET stage='Due diligence' WHERE id='summit'");
+  await run("UPDATE deals SET stage='Due diligence' WHERE id='summit'");
 
   assert.equal(
-    buyerMarketplaceAnalytics(database, "org-demo-buyer")
+    (await buyerMarketplaceAnalytics(database, "org-demo-buyer"))
       .active_diligence_processes,
     2,
   );
 
-  recordDealBuyerEvent(database, {
+  await recordDealBuyerEvent(database, {
     dealId: "summit",
     buyerOrganizationId: "org-demo-buyer",
     eventType: "not_proceeding",
     sourceKey: "summit-not-proceeding",
   });
   assert.equal(
-    buyerMarketplaceAnalytics(database, "org-demo-buyer")
+    (await buyerMarketplaceAnalytics(database, "org-demo-buyer"))
       .active_diligence_processes,
     1,
   );
 
-  recordDealBuyerEvent(database, {
+  await recordDealBuyerEvent(database, {
     dealId: "summit",
     buyerOrganizationId: "org-demo-buyer",
     eventType: "cim_shared",
     sourceKey: "summit-reactivated",
   });
   assert.equal(
-    buyerMarketplaceAnalytics(database, "org-demo-buyer")
+    (await buyerMarketplaceAnalytics(database, "org-demo-buyer"))
       .active_diligence_processes,
     2,
   );
 
-  recordDealBuyerEvent(database, {
+  await recordDealBuyerEvent(database, {
     dealId: "cedar",
     buyerOrganizationId: "org-demo-buyer",
     eventType: "closed",
     sourceKey: "cedar-closed",
   });
-  recordDealBuyerEvent(database, {
+  await recordDealBuyerEvent(database, {
     dealId: "cedar",
     buyerOrganizationId: "org-demo-buyer",
     eventType: "cim_shared",
     sourceKey: "cedar-after-close",
   });
   assert.equal(
-    buyerMarketplaceAnalytics(database, "org-demo-buyer")
+    (await buyerMarketplaceAnalytics(database, "org-demo-buyer"))
       .active_diligence_processes,
     1,
     "a closed relationship stays inactive even if a later event is appended",
   );
 });
 
-test("workspace exposes only the role-appropriate analytics boundary", () => {
-  seedBuyerAnalyticsFixture();
-  const advisor = db()
+test("workspace exposes only the role-appropriate analytics boundary", async () => {
+  await seedBuyerAnalyticsFixture();
+  const advisor = (await db()
     .prepare("SELECT * FROM users WHERE id='demo-advisor'")
-    .get() as User;
-  const buyer = db()
+    .get()) as User;
+  const buyer = (await db()
     .prepare("SELECT * FROM users WHERE id='demo-buyer'")
-    .get() as User;
-  const advisorState = workspace(advisor);
-  const buyerState = workspace(buyer);
+    .get()) as User;
+  const advisorState = await workspace(advisor);
+  const buyerState = await workspace(buyer);
 
   assert.ok(advisorState.deal_manager_marketplace_analytics?.length);
   assert.equal(advisorState.buyer_marketplace_analytics, undefined);
@@ -367,14 +378,14 @@ test("workspace exposes only the role-appropriate analytics boundary", () => {
     true,
   );
 
-  let viewerState: ReturnType<typeof workspace>;
-  run(
+  let viewerState: Awaited<ReturnType<typeof workspace>>;
+  await run(
     "UPDATE organization_members SET role='viewer' WHERE organization_id='org-demo-advisor' AND user_id='demo-advisor'",
   );
   try {
-    viewerState = workspace(advisor);
+    viewerState = await workspace(advisor);
   } finally {
-    run(
+    await run(
       "UPDATE organization_members SET role='owner' WHERE organization_id='org-demo-advisor' AND user_id='demo-advisor'",
     );
   }

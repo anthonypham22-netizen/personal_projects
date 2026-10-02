@@ -1,30 +1,14 @@
 import { test, expect, type Page } from "@playwright/test";
-import { DatabaseSync } from "node:sqlite";
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { PDFDocument } from "pdf-lib";
 
+const E2E_ORIGIN = "http://localhost:3317";
+
 async function previewAs(page: Page, role: "owner" | "advisor" | "buyer") {
-  await page.goto("/dev/preview");
+  await page.goto("/dev/preview", { waitUntil: "domcontentloaded" });
   await expect(page.getByText("STAGING — FICTIONAL DATA")).toHaveCount(0);
   const label = role.charAt(0).toUpperCase() + role.slice(1);
   await page.getByRole("button", { name: `View as ${label}` }).click();
   await expect(page).toHaveURL(/\/app$/);
-}
-
-function provisionPlatformReviewer(email: string) {
-  const database = new DatabaseSync(
-    path.resolve("test-results/app-data/northlane.sqlite"),
-  );
-  try {
-    database.exec("PRAGMA busy_timeout=5000");
-    const result = database
-      .prepare("UPDATE users SET is_platform_admin=1 WHERE email=?")
-      .run(email);
-    expect(result.changes).toBe(1);
-  } finally {
-    database.close();
-  }
 }
 
 test("public website connects to all three registration journeys", async ({
@@ -163,7 +147,7 @@ test("new customer accounts receive intentional role-specific empty states", asy
 
   for (const entry of cases) {
     const response = await page.request.post("/api/auth", {
-      headers: { Origin: "http://localhost:3000" },
+      headers: { Origin: E2E_ORIGIN },
       data: {
         action: "register",
         name: `${entry.role} empty state`,
@@ -180,7 +164,7 @@ test("new customer accounts receive intentional role-specific empty states", asy
     ).toBeVisible();
     await expect(page.getByText(entry.body)).toBeVisible();
     await page.request.post("/api/auth", {
-      headers: { Origin: "http://localhost:3000" },
+      headers: { Origin: E2E_ORIGIN },
       data: { action: "logout" },
     });
   }
@@ -517,7 +501,7 @@ test("buyer adds a transaction tombstone for review and sellers see its verifica
   page,
 }) => {
   const industry = `Specialty distribution ${Date.now()}`;
-  const headers = { Origin: "http://localhost:3000" };
+  const headers = { Origin: E2E_ORIGIN };
   await previewAs(page, "buyer");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/verification");
@@ -798,7 +782,7 @@ test("seller shares a private teaser and sees the buyer response", async ({
   page,
 }) => {
   const suffix = Date.now();
-  const headers = { Origin: "http://localhost:3000" };
+  const headers = { Origin: E2E_ORIGIN };
   const password = "private-outreach-password-2026";
   const buyerEmail = `outreach-buyer-${suffix}@example.test`;
   const sellerEmail = `outreach-seller-${suffix}@example.test`;
@@ -967,7 +951,7 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
   page,
 }) => {
   const suffix = Date.now();
-  const headers = { Origin: "http://localhost:3000" };
+  const headers = { Origin: E2E_ORIGIN };
   const password = "qualified-discovery-password-2026";
   const buyerEmail = `discovery-buyer-${suffix}@example.test`;
   const sellerEmail = `discovery-seller-${suffix}@example.test`;
@@ -1044,6 +1028,29 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
       })
     ).status(),
   ).toBe(200);
+  expect(
+    (
+      await page.request.post("/api/workspace", {
+        headers,
+        data: {
+          action: "submitBuyerIdentityVerification",
+          data: {
+            buyer_type: "private_equity_firm",
+            linkedin_url: null,
+            website_url: `https://maple-ridge-${suffix}.example.test`,
+            source_of_capital: "committed_investment_fund",
+            equity_range: "2_5m_5m",
+            completed_acquisitions: 3,
+            experience_summary:
+              "Canadian software acquisition and operating experience with direct board oversight.",
+            acquisition_strategy:
+              "Acquire profitable Canadian software businesses with recurring revenue and capable management teams.",
+            authorized_to_represent: true,
+          },
+        },
+      })
+    ).status(),
+  ).toBe(200);
   const submittedBuyerWorkspace = await (
     await page.request.get("/api/workspace")
   ).json();
@@ -1051,7 +1058,7 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
     headers,
     data: { action: "logout" },
   });
-  const reviewerEmail = `discovery-reviewer-${suffix}@example.test`;
+  const reviewerEmail = "discovery-reviewer@example.test";
   expect(
     (
       await page.request.post("/api/auth", {
@@ -1067,7 +1074,6 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
       })
     ).status(),
   ).toBe(200);
-  provisionPlatformReviewer(reviewerEmail);
   expect(
     (
       await page.request.post("/api/workspace", {
@@ -1084,6 +1090,20 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
           },
         },
       })
+    ).status(),
+  ).toBe(200);
+  expect(
+    (
+      await page.request.post(
+        `/api/admin/buyer-verifications/${submittedBuyerWorkspace.buyer_identity_verification.id}`,
+        {
+          headers,
+          data: {
+            status: "approved",
+            notes: "Buyer identity and profile reviewed for discovery testing.",
+          },
+        },
+      )
     ).status(),
   ).toBe(200);
   await page.request.post("/api/auth", {
@@ -1351,32 +1371,6 @@ test("buyer receives a cached personalized CIM while the seller keeps the origin
   const personalized = Buffer.from(await buyerDownload.body());
   expect(personalized).not.toEqual(original);
   expect((await PDFDocument.load(personalized)).getPageCount()).toBe(1);
-
-  const databasePath = path.resolve("test-results/app-data/northlane.sqlite");
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    const stored = database
-      .prepare(
-        "SELECT storage_key FROM documents WHERE id=? AND watermark_enabled=1",
-      )
-      .get(document.id) as { storage_key: string };
-    expect(
-      readFileSync(
-        path.resolve("test-results/app-data/uploads", stored.storage_key),
-      ),
-    ).toEqual(original);
-    expect(
-      (
-        database
-          .prepare(
-            "SELECT COUNT(*) count FROM document_watermark_variants WHERE document_id=? AND buyer_id='demo-buyer'",
-          )
-          .get(document.id) as { count: number }
-      ).count,
-    ).toBe(1);
-  } finally {
-    database.close();
-  }
 });
 
 test("owner can send a provider-managed electronic NDA without granting early access", async ({
@@ -1405,7 +1399,7 @@ test("owner can send a provider-managed electronic NDA without granting early ac
 test("seller reviews and explicitly applies a private teaser safety suggestion", async ({
   page,
 }) => {
-  const headers = { Origin: "http://localhost:3000" };
+  const headers = { Origin: E2E_ORIGIN };
   await previewAs(page, "owner");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/deals/atlas");
@@ -1543,7 +1537,7 @@ test("buyer demo cannot enumerate registered Qualified Discovery inventory", asy
 }) => {
   const suffix = Date.now();
   const project = `Project Preview ${suffix}`;
-  const headers = { Origin: "http://localhost:3000" };
+  const headers = { Origin: E2E_ORIGIN };
   const registered = await page.request.post("/api/auth", {
     headers,
     data: {
@@ -1646,7 +1640,7 @@ test("registered buyer can create, edit, and manage an acquisition project", asy
 }) => {
   const suffix = Date.now();
   const project = `Project Healthcare ${suffix}`;
-  const headers = { Origin: "http://localhost:3000" };
+  const headers = { Origin: E2E_ORIGIN };
   const registered = await page.request.post("/api/auth", {
     headers,
     data: {
@@ -1684,7 +1678,7 @@ test("registered buyer can create, edit, and manage an acquisition project", asy
   const card = page.getByRole("article").filter({ hasText: project });
   await expect(card).toContainText("Draft");
   await expect(card).toContainText("Business services, Healthcare");
-  await expect(card).toContainText("Ontario, Alberta");
+  await expect(card).toContainText("Alberta, Ontario");
   await expect(card).toContainText("healthcare, recurring contracts");
   await card.getByRole("button", { name: "Activate project" }).click();
   await expect(card).toContainText("Active");
@@ -1693,7 +1687,7 @@ test("registered buyer can create, edit, and manage an acquisition project", asy
     .getByLabel("Keywords")
     .fill("healthcare, contracted revenue, healthcare");
   await card.getByRole("button", { name: "Save project" }).click();
-  await expect(card).toContainText("healthcare, contracted revenue");
+  await expect(card).toContainText("contracted revenue, healthcare");
   await card.getByRole("button", { name: "Pause project" }).click();
   await expect(card).toContainText("Paused");
   await card.getByRole("button", { name: "Archive project" }).click();
@@ -1734,7 +1728,7 @@ test("a registered account receives an editable firm profile and team membership
   const suffix = Date.now();
   const firm = `North Star Holdings ${suffix}`;
   const renamedFirm = `North Star Partners ${suffix}`;
-  const headers = { Origin: "http://localhost:3000" };
+  const headers = { Origin: E2E_ORIGIN };
   const registered = await page.request.post("/api/auth", {
     headers,
     data: {
@@ -1779,12 +1773,14 @@ test("a registered account receives an editable firm profile and team membership
   ).toBeVisible();
 });
 
-test("buyer submits a verification profile and an internal reviewer records the decision", async ({
+test("buyer submits a profile and a Succera admin approves it", async ({
   page,
 }) => {
   const suffix = Date.now();
   const firm = `Verification Capital ${suffix}`;
-  const headers = { Origin: "http://localhost:3000" };
+  const buyerEmail = `verification-buyer-${suffix}@example.test`;
+  const password = "verification-password-2026";
+  const headers = { Origin: E2E_ORIGIN };
   expect(
     (
       await page.request.post("/api/auth", {
@@ -1793,8 +1789,8 @@ test("buyer submits a verification profile and an internal reviewer records the 
           action: "register",
           name: "Casey Morgan",
           company: firm,
-          email: `verification-buyer-${suffix}@example.test`,
-          password: "verification-password-2026",
+          email: buyerEmail,
+          password,
           role: "buyer",
         },
       })
@@ -1803,44 +1799,60 @@ test("buyer submits a verification profile and an internal reviewer records the 
 
   await page.goto("/app/verification");
   await expect(
-    page.getByRole("heading", { name: "Build buyer credibility." }),
+    page
+      .getByRole("heading", { name: "Buyer profile review", exact: true })
+      .first(),
   ).toBeVisible();
-  await expect(
-    page.getByText("Unverified", { exact: true }).first(),
-  ).toBeVisible();
-  await page.getByLabel("Legal firm name").fill(`${firm} Inc.`);
   await page
-    .getByLabel("Website")
-    .fill(`https://verification-${suffix}.example.test`);
-  await page.getByLabel("Buyer type").selectOption("private_equity");
-  await page.getByLabel("Principals").fill("Casey Morgan, Managing Partner");
+    .getByLabel("Buyer type")
+    .first()
+    .selectOption("private_equity_firm");
+  await expect(page.getByLabel("LinkedIn profile")).toHaveAttribute(
+    "placeholder",
+    "https://linkedin.com/in/your-profile",
+  );
   await page
-    .getByLabel("Acquisition history")
+    .getByLabel("LinkedIn profile")
+    .fill("linkedin.com/in/casey-morgan");
+  await expect(page.getByLabel("Firm or personal website")).toHaveAttribute(
+    "placeholder",
+    "https://example.com",
+  );
+  await page
+    .getByLabel("Firm or personal website")
+    .fill(`verification-${suffix}.example.test`);
+  await page
+    .getByLabel("Source of acquisition capital · self-reported")
+    .selectOption("committed_investment_fund");
+  await page
+    .getByLabel("Equity available for an acquisition")
+    .selectOption("2_5m_5m");
+  await page.getByLabel("Completed acquisitions").first().fill("2");
+  await page
+    .getByLabel(
+      "Tell us briefly about your acquisition, investing, operating, or industry experience.",
+    )
     .fill(
-      "Two Canadian business-services acquisitions with operating oversight.",
+      "Two Canadian acquisitions with direct operating oversight and board experience.",
     );
   await page
-    .getByLabel("Capital source")
-    .fill("Committed private investment capital from a closed fund.");
-  await page.getByLabel("Typical minimum equity cheque (CAD)").fill("2000000");
-  await page.getByLabel("Typical maximum equity cheque (CAD)").fill("15000000");
+    .getByLabel("What kinds of businesses are you looking to acquire and why?")
+    .fill(
+      "Established Canadian service businesses with recurring revenue and durable customer relationships.",
+    );
   await page
-    .getByLabel("Financing approach")
-    .fill("Equity capital supported by senior acquisition financing.");
-  await page.getByRole("button", { name: "Save verification profile" }).click();
-  await expect(
-    page.getByRole("status").getByText("Verification profile saved."),
-  ).toBeVisible();
+    .getByLabel(/I confirm that the information provided is accurate/)
+    .check();
   await page
-    .getByRole("button", { name: "Submit for internal review" })
+    .getByRole("button", { name: "Submit for review", exact: true })
     .click();
-  await expect(page.getByText("Internal review in progress")).toBeVisible();
+  await expect(page.getByText("Pending review", { exact: true })).toBeVisible();
 
   await page.request.post("/api/auth", {
     headers,
     data: { action: "logout" },
   });
-  const reviewerEmail = `verification-reviewer-${suffix}@example.test`;
+  const reviewerEmail = "verification-reviewer@example.test";
   expect(
     (
       await page.request.post("/api/auth", {
@@ -1850,34 +1862,39 @@ test("buyer submits a verification profile and an internal reviewer records the 
           name: "Verification Operations Reviewer",
           company: `Platform Operations ${suffix}`,
           email: reviewerEmail,
-          password: "verification-password-2026",
+          password,
           role: "advisor",
         },
       })
     ).status(),
   ).toBe(200);
-  provisionPlatformReviewer(reviewerEmail);
+  await page.goto("/app/admin/buyers");
+  await expect(
+    page.getByRole("heading", { name: "Buyer reviews" }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: new RegExp(firm) }).click();
+  await page.getByLabel("Decision").selectOption("approved");
+  await page
+    .getByLabel("Review note")
+    .fill("Profile and representative identity reviewed.");
+  await page.getByRole("button", { name: "Save decision" }).click();
+  await expect(
+    page.getByRole("status").getByText("Buyer verification updated."),
+  ).toBeVisible();
+
+  await page.request.post("/api/auth", { headers, data: { action: "logout" } });
+  expect(
+    (
+      await page.request.post("/api/auth", {
+        headers,
+        data: { action: "login", email: buyerEmail, password },
+      })
+    ).status(),
+  ).toBe(200);
   await page.goto("/app/verification");
   await expect(
-    page.getByRole("heading", { name: "Review buyer credibility." }),
+    page.getByText("Buyer profile reviewed", { exact: true }),
   ).toBeVisible();
-  const review = page.getByRole("article").filter({ hasText: firm });
-  await expect(review).toContainText(`${firm} Inc.`);
-  await review.getByLabel("Decision").selectOption("firm_verified");
-  await review
-    .getByLabel("Internal review notes")
-    .fill("Firm identity and public operating website reviewed.");
-  await review
-    .getByRole("button", { name: "Record verification decision" })
-    .click();
-  await expect(
-    page.getByText("Buyer verification decision recorded."),
-  ).toBeVisible();
-  await expect(
-    page.locator(".verification-history").getByRole("article").filter({
-      hasText: firm,
-    }),
-  ).toContainText("Firm verified");
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,

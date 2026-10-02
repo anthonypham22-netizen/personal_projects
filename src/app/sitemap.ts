@@ -7,12 +7,12 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   if (!isPublicNetworkIndexingEnabled()) return [];
   return [
     { url: publicAbsoluteUrl("/") },
     { url: publicAbsoluteUrl("/network") },
-    ...listPublicSitemapPaths().map((path) => ({
+    ...(await listPublicSitemapPaths()).map((path) => ({
       url: publicAbsoluteUrl(path),
     })),
   ];

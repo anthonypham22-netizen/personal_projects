@@ -1,0 +1,46 @@
+-- PostgreSQL does not create indexes for foreign keys automatically. These
+-- indexes keep permission-scoped joins and parent-row deletes predictable as
+-- marketplace volume grows.
+create index if not exists idx_activity_actor on public.activity(actor_id);
+create index if not exists idx_activity_deal on public.activity(deal_id);
+create index if not exists idx_buyer_firm_profiles_updated_by on public.buyer_firm_profiles(updated_by_user_id);
+create index if not exists idx_buyer_verification_profiles_submitted_by on public.buyer_verification_profiles(submitted_by_user_id);
+create index if not exists idx_buyer_verification_profiles_updated_by on public.buyer_verification_profiles(updated_by_user_id);
+create index if not exists idx_buyer_verifications_reviewed_by on public.buyer_verifications(reviewed_by);
+create index if not exists idx_closed_transactions_advisor_org on public.closed_transactions(advisor_organization_id);
+create index if not exists idx_closed_transactions_created_by on public.closed_transactions(created_by_user_id);
+create index if not exists idx_closed_transactions_seller_org on public.closed_transactions(seller_organization_id);
+create index if not exists idx_closed_transactions_verified_by on public.closed_transactions(verified_by_user_id);
+create index if not exists idx_deal_buyer_events_project on public.deal_buyer_events(buyer_project_id);
+create index if not exists idx_deal_buyer_events_created_by on public.deal_buyer_events(created_by_user_id);
+create index if not exists idx_deal_internal_notes_author on public.deal_internal_notes(author_user_id);
+create index if not exists idx_deal_outreach_sender on public.deal_outreach(sender_user_id);
+create index if not exists idx_deals_advisor on public.deals(advisor_id);
+create index if not exists idx_deals_created_by on public.deals(created_by_user_id);
+create index if not exists idx_document_watermark_variants_buyer on public.document_watermark_variants(buyer_id);
+create index if not exists idx_documents_buyer on public.documents(buyer_id);
+create index if not exists idx_documents_uploaded_by on public.documents(uploaded_by);
+create index if not exists idx_electronic_envelopes_buyer on public.electronic_signature_envelopes(buyer_id);
+create index if not exists idx_electronic_envelopes_executed_document on public.electronic_signature_envelopes(executed_document_id);
+create index if not exists idx_electronic_envelopes_requested_by on public.electronic_signature_envelopes(requested_by_user_id);
+create index if not exists idx_introduction_requests_requested_by on public.introduction_requests(requested_by_user_id);
+create index if not exists idx_introduction_requests_reviewed_by on public.introduction_requests(reviewed_by_user_id);
+create index if not exists idx_messages_buyer on public.messages(buyer_id);
+create index if not exists idx_messages_sender on public.messages(sender_id);
+create index if not exists idx_notifications_actor on public.notifications(actor_user_id);
+create index if not exists idx_notifications_deal on public.notifications(deal_id);
+create index if not exists idx_offers_buyer on public.offers(buyer_id);
+create index if not exists idx_offers_deal on public.offers(deal_id);
+create index if not exists idx_offers_document on public.offers(document_id);
+create index if not exists idx_public_profiles_updated_by on public.organization_public_profiles(updated_by_user_id);
+create index if not exists idx_sessions_user on public.sessions(user_id);
+create index if not exists idx_tasks_buyer on public.tasks(buyer_id);
+create index if not exists idx_tasks_created_by on public.tasks(created_by);
+create index if not exists idx_tasks_deal on public.tasks(deal_id);
+create index if not exists idx_teaser_reviews_applied_by on public.teaser_safety_reviews(applied_by_user_id);
+create index if not exists idx_teaser_reviews_requested_by on public.teaser_safety_reviews(requested_by_user_id);
+create index if not exists idx_attribution_created_by on public.transaction_attribution(created_by_user_id);
+create index if not exists idx_attribution_origin_event on public.transaction_attribution(origin_event_id);
+create index if not exists idx_attribution_updated_by on public.transaction_attribution(updated_by_user_id);
+create index if not exists idx_verification_reviews_organization on public.verification_reviews(organization_id);
+create index if not exists idx_verification_reviews_reviewer on public.verification_reviews(reviewer_user_id);

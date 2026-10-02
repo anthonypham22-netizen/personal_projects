@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { currentUser } from "@/lib/auth";
-import { dataDirectory, db, one } from "@/lib/db";
+import { db, one } from "@/lib/db";
 import {
   AppError,
   getDeal,
@@ -14,7 +13,7 @@ import {
   limit,
 } from "@/lib/service";
 import { checkOrigin, failure } from "@/lib/http";
-import { inImmediateTransaction } from "@/lib/sqlite-transaction";
+import { inTransaction } from "@/lib/transaction";
 import {
   bestBuyerProjectForDeal,
   buyerOrganizationIdForUser,
@@ -26,14 +25,15 @@ import {
   notifyUsers,
 } from "@/lib/notifications";
 import { assertWatermarkablePdf } from "@/lib/document-watermarks";
+import { privateFileStore } from "@/lib/private-file-store";
 export const runtime = "nodejs";
 export async function POST(request: Request) {
-  let storedPath: string | undefined;
+  let storedKey: string | undefined;
   try {
     checkOrigin(request);
     const user = await currentUser();
     if (!user) throw new AppError("Please sign in.", 401);
-    limit(`upload:${user.id}`, 20, 60);
+    await limit(`upload:${user.id}`, 20, 60);
     const length = Number(request.headers.get("content-length"));
     if (!length || length > 11 * 1024 * 1024)
       throw new AppError(
@@ -44,8 +44,8 @@ export async function POST(request: Request) {
     const file = form.get("file");
     if (!(file instanceof File) || !file.size || file.size > 10 * 1024 * 1024)
       throw new AppError("Select a non-empty file up to 10 MB.");
-    const deal = getDeal(String(form.get("deal_id") || ""));
-    const managing = isManager(user, deal);
+    const deal = await getDeal(String(form.get("deal_id") || ""));
+    const managing = await isManager(user, deal);
     const category = String(form.get("category") || "Other");
     if (
       ![
@@ -63,10 +63,10 @@ export async function POST(request: Request) {
         "Read-only deal-team members cannot upload documents.",
         403,
       );
-    const member = membership(deal.id, user.id);
+    const member = await membership(deal.id, user.id);
     if (
       !managing &&
-      !canAccess(user, deal) &&
+      !(await canAccess(user, deal)) &&
       !(category === "NDA" && member?.status === "nda_pending")
     )
       throw new AppError("Document access has not been approved.", 403);
@@ -99,7 +99,7 @@ export async function POST(request: Request) {
       audience = "buyer";
       if (!buyerId) throw new AppError("Choose the buyer for this agreement.");
     }
-    if (audience === "buyer" && !membership(deal.id, buyerId))
+    if (audience === "buyer" && !(await membership(deal.id, buyerId)))
       throw new AppError("Choose an invited buyer for this document.");
     if (audience !== "buyer") buyerId = "";
     const watermarkEnabled = String(form.get("watermark_enabled")) === "true";
@@ -120,22 +120,23 @@ export async function POST(request: Request) {
       await assertWatermarkablePdf(buffer);
     }
     const version =
-      (one<{ version: number }>(
-        "SELECT MAX(version) version FROM documents WHERE deal_id=? AND name=? AND audience=? AND COALESCE(buyer_id,'')=?",
-        deal.id,
-        name,
-        audience,
-        buyerId,
+      ((
+        await one<{ version: number }>(
+          "SELECT MAX(version) version FROM documents WHERE deal_id=? AND name=? AND audience=? AND COALESCE(buyer_id,'')=?",
+          deal.id,
+          name,
+          audience,
+          buyerId,
+        )
       )?.version || 0) + 1;
     const id = randomUUID(),
       key = randomUUID();
-    const directory = path.join(dataDirectory(), "uploads");
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    storedPath = path.join(directory, key);
-    await writeFile(storedPath, buffer, { mode: 0o600, flag: "wx" });
+    const fileStore = privateFileStore();
+    storedKey = key;
+    await fileStore.write("uploads", key, buffer, { contentType: mime[ext] });
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           "INSERT INTO documents(id,deal_id,name,storage_key,mime,category,size,version,audience,buyer_id,uploaded_by,watermark_enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         )
@@ -153,49 +154,56 @@ export async function POST(request: Request) {
           user.id,
           watermarkEnabled ? 1 : 0,
         );
-      const recipientIds =
+      const recipientIds: string[] =
         category === "NDA" && buyerId
           ? [buyerId]
           : category === "Company overview" && audience === "buyer" && buyerId
             ? [buyerId]
             : category === "Company overview" && audience === "approved"
               ? (
-                  database
+                  await transaction
                     .prepare(
                       "SELECT buyer_id FROM access WHERE deal_id=? AND status='approved'",
                     )
-                    .all(deal.id) as { buyer_id: string }[]
+                    .all<{ buyer_id: string }>(deal.id)
                 ).map(({ buyer_id }) => buyer_id)
               : [];
       const notificationUserIds = managing
-        ? documentAudienceUserIds(
-            database,
+        ? await documentAudienceUserIds(
+            transaction,
             deal.id,
             audience as "team" | "approved" | "buyer",
             buyerId,
           )
-        : dealTeamUserIds(database, deal.id);
+        : await dealTeamUserIds(transaction, deal.id);
       const organizationIds = new Set(
-        recipientIds
-          .map((recipientId) =>
-            buyerOrganizationIdForUser(database, recipientId),
+        (
+          await Promise.all(
+            recipientIds.map((recipientId) =>
+              buyerOrganizationIdForUser(transaction, recipientId),
+            ),
           )
-          .filter((organizationId): organizationId is string =>
-            Boolean(organizationId),
-          ),
+        ).filter((organizationId): organizationId is string =>
+          Boolean(organizationId),
+        ),
       );
       for (const organizationId of organizationIds)
-        recordDealBuyerEvent(database, {
+        await recordDealBuyerEvent(transaction, {
           dealId: deal.id,
           buyerOrganizationId: organizationId,
           buyerProjectId:
-            bestBuyerProjectForDeal(database, deal.id, organizationId)
-              ?.buyer_project_id ?? null,
+            (
+              await bestBuyerProjectForDeal(
+                transaction,
+                deal.id,
+                organizationId,
+              )
+            )?.buyer_project_id ?? null,
           eventType: category === "NDA" ? "nda_uploaded" : "cim_shared",
           sourceKey: `document:${id}`,
           createdByUserId: user.id,
         });
-      notifyUsers(database, {
+      await notifyUsers(transaction, {
         userIds: notificationUserIds,
         type: "document_shared",
         title: "Document shared",
@@ -205,9 +213,9 @@ export async function POST(request: Request) {
         actorUserId: user.id,
         sourceKey: `document:${id}:shared`,
       });
-      audit(user, deal.id, `Uploaded ${category.toLowerCase()} document`);
     });
-    storedPath = undefined;
+    await audit(user, deal.id, `Uploaded ${category.toLowerCase()} document`);
+    storedKey = undefined;
     return NextResponse.json({
       id,
       message: watermarkEnabled
@@ -215,7 +223,8 @@ export async function POST(request: Request) {
         : "Document uploaded. Agreement uploads require separate review; they are not automatically signed.",
     });
   } catch (e) {
-    if (storedPath) await unlink(storedPath).catch(() => {});
+    if (storedKey)
+      await privateFileStore().delete("uploads", storedKey).catch(() => {});
     return failure(e);
   }
 }

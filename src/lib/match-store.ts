@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db";
 import { matchDealToBuyerProject } from "./matching.ts";
-import { inImmediateTransaction } from "./sqlite-transaction.ts";
+import { inTransaction } from "./transaction";
 import {
   BUYER_ORGANIZATION_TYPES,
   type BuyerProject,
@@ -10,59 +10,60 @@ import {
 } from "./types.ts";
 import { recordDealBuyerEvent } from "./buyer-funnel.ts";
 import { dealManagerUserIds, notifyUsers } from "./notifications.ts";
-import { tableExists } from "./sqlite-schema.ts";
+import { tableExists } from "./schema";
 
-const list = (database: DatabaseSync, sql: string, id: string) =>
-  database
+const list = async (database: DatabaseClient, sql: string, id: string) =>
+  await database
     .prepare(sql)
     .all(id)
     .map((row) => String((row as { value: string }).value));
 
-function projectFor(database: DatabaseSync, projectId: string) {
-  const row = database
+async function projectFor(database: DatabaseClient, projectId: string) {
+  const row = (await database
     .prepare("SELECT * FROM buyer_projects WHERE id=?")
-    .get(projectId) as
+    .get(projectId)) as
     | Omit<BuyerProject, "sectors" | "provinces" | "keywords" | "can_manage">
     | undefined;
   if (!row) return undefined;
   return {
     ...row,
-    sectors: list(
+    sectors: await list(
       database,
-      "SELECT sector value FROM buyer_project_sectors WHERE buyer_project_id=? ORDER BY rowid",
+      "SELECT sector value FROM buyer_project_sectors WHERE buyer_project_id=? ORDER BY sector",
       projectId,
     ),
-    provinces: list(
+    provinces: await list(
       database,
-      "SELECT province value FROM buyer_project_provinces WHERE buyer_project_id=? ORDER BY rowid",
+      "SELECT province value FROM buyer_project_provinces WHERE buyer_project_id=? ORDER BY province",
       projectId,
     ),
-    keywords: list(
+    keywords: await list(
       database,
-      "SELECT keyword value FROM buyer_project_keywords WHERE buyer_project_id=? ORDER BY rowid",
+      "SELECT keyword value FROM buyer_project_keywords WHERE buyer_project_id=? ORDER BY keyword",
       projectId,
     ),
     can_manage: false,
   } satisfies BuyerProject;
 }
 
-const dealFor = (database: DatabaseSync, dealId: string) =>
-  database.prepare("SELECT * FROM deals WHERE id=?").get(dealId) as
+const dealFor = async (database: DatabaseClient, dealId: string) =>
+  (await database.prepare("SELECT * FROM deals WHERE id=?").get(dealId)) as
     Deal | undefined;
 
-const userIsDemo = (database: DatabaseSync, userId: string) =>
+const userIsDemo = async (database: DatabaseClient, userId: string) =>
   (
-    database.prepare("SELECT is_demo FROM users WHERE id=?").get(userId) as
-      { is_demo: number } | undefined
+    (await database
+      .prepare("SELECT is_demo FROM users WHERE id=?")
+      .get(userId)) as { is_demo: number } | undefined
   )?.is_demo;
 
-function buyerIsBlocked(
-  database: DatabaseSync,
+async function buyerIsBlocked(
+  database: DatabaseClient,
   dealId: string,
   organizationId: string,
 ) {
   return Boolean(
-    database
+    await database
       .prepare(
         `SELECT 1 FROM access a
          JOIN organization_members om ON om.user_id=a.buyer_id AND om.status='active'
@@ -73,13 +74,13 @@ function buyerIsBlocked(
   );
 }
 
-function marketplaceEnvironmentsMatch(
-  database: DatabaseSync,
+async function marketplaceEnvironmentsMatch(
+  database: DatabaseClient,
   deal: Deal,
   project: BuyerProject,
 ) {
-  const dealOwner = userIsDemo(database, deal.owner_id);
-  const projectCreator = userIsDemo(database, project.created_by_user_id);
+  const dealOwner = await userIsDemo(database, deal.owner_id);
+  const projectCreator = await userIsDemo(database, project.created_by_user_id);
   return Boolean(
     dealOwner !== undefined &&
     projectCreator !== undefined &&
@@ -87,24 +88,22 @@ function marketplaceEnvironmentsMatch(
   );
 }
 
-function recalculatePair(
-  database: DatabaseSync,
+async function recalculatePair(
+  database: DatabaseClient,
   deal: Deal,
   project: BuyerProject,
 ) {
-  const existing = database
+  const existing = (await database
     .prepare(
       "SELECT id,status,eligible FROM deal_matches WHERE deal_id=? AND buyer_project_id=?",
     )
-    .get(deal.id, project.id) as
+    .get(deal.id, project.id)) as
     { id: string; status: DealMatch["status"]; eligible: number } | undefined;
-  const buyerOrganization = database
+  const buyerOrganization = (await database
     .prepare("SELECT organization_type FROM organizations WHERE id=?")
-    .get(project.organization_id) as
-    | { organization_type: string }
-    | undefined;
+    .get(project.organization_id)) as { organization_type: string } | undefined;
   const result = matchDealToBuyerProject(deal, project, {
-    buyerExplicitlyBlocked: buyerIsBlocked(
+    buyerExplicitlyBlocked: await buyerIsBlocked(
       database,
       deal.id,
       project.organization_id,
@@ -119,14 +118,16 @@ function recalculatePair(
       buyerOrganization.organization_type as (typeof BUYER_ORGANIZATION_TYPES)[number],
     )
   )
-    hardExclusions.push("The buyer organization is not currently an eligible buyer.");
+    hardExclusions.push(
+      "The buyer organization is not currently an eligible buyer.",
+    );
   const eligible = hardExclusions.length === 0;
   const breakdown = JSON.stringify({
     reasons: result.reasons,
     hard_exclusions: hardExclusions,
   });
   const matchId = existing?.id ?? randomUUID();
-  database
+  await database
     .prepare(
       `INSERT INTO deal_matches(
         id,deal_id,buyer_project_id,buyer_organization_id,score,eligible,
@@ -150,7 +151,7 @@ function recalculatePair(
       existing?.status ?? "recommended",
     );
   if (eligible)
-    recordDealBuyerEvent(database, {
+    await recordDealBuyerEvent(database, {
       dealId: deal.id,
       buyerOrganizationId: project.organization_id,
       buyerProjectId: project.id,
@@ -158,11 +159,11 @@ function recalculatePair(
       sourceKey: `match:${matchId}`,
     });
   if (eligible && !existing?.eligible) {
-    const organization = database
+    const organization = (await database
       .prepare("SELECT name FROM organizations WHERE id=?")
-      .get(project.organization_id) as { name: string } | undefined;
-    notifyUsers(database, {
-      userIds: dealManagerUserIds(database, deal.id),
+      .get(project.organization_id)) as { name: string } | undefined;
+    await notifyUsers(database, {
+      userIds: await dealManagerUserIds(database, deal.id),
       type: "new_match",
       title: "New buyer match",
       body: `${organization?.name ?? "A buyer"} matched ${deal.title} through ${project.name} at ${result.score}%.`,
@@ -173,119 +174,132 @@ function recalculatePair(
   }
 }
 
-export function recalculateDealMatch(
-  database: DatabaseSync,
+export async function recalculateDealMatch(
+  database: DatabaseClient,
   dealId: string,
   projectId: string,
 ) {
-  if (!tableExists(database, "deal_matches")) return;
-  const deal = dealFor(database, dealId);
-  const project = projectFor(database, projectId);
-  if (deal && project && marketplaceEnvironmentsMatch(database, deal, project))
-    recalculatePair(database, deal, project);
+  if (!(await tableExists(database, "deal_matches"))) return;
+  const deal = await dealFor(database, dealId);
+  const project = await projectFor(database, projectId);
+  if (
+    deal &&
+    project &&
+    (await marketplaceEnvironmentsMatch(database, deal, project))
+  )
+    await recalculatePair(database, deal, project);
 }
 
-export function recalculateDealMatches(database: DatabaseSync, dealId: string) {
-  if (!tableExists(database, "deal_matches")) return;
-  const deal = dealFor(database, dealId);
+export async function recalculateDealMatches(
+  database: DatabaseClient,
+  dealId: string,
+) {
+  if (!(await tableExists(database, "deal_matches"))) return;
+  const deal = await dealFor(database, dealId);
   if (!deal) return;
-  const isDemo = userIsDemo(database, deal.owner_id);
+  const isDemo = await userIsDemo(database, deal.owner_id);
   if (isDemo === undefined) return;
-  const projects = database
+  const projects = (await database
     .prepare(
       `SELECT bp.id FROM buyer_projects bp
        JOIN users u ON u.id=bp.created_by_user_id
        WHERE u.is_demo=? ORDER BY bp.id`,
     )
-    .all(isDemo) as { id: string }[];
+    .all(isDemo)) as { id: string }[];
   for (const { id } of projects) {
-    const project = projectFor(database, id);
-    if (project) recalculatePair(database, deal, project);
+    const project = await projectFor(database, id);
+    if (project) await recalculatePair(database, deal, project);
   }
 }
 
-export function recalculateBuyerProjectMatches(
-  database: DatabaseSync,
+export async function recalculateBuyerProjectMatches(
+  database: DatabaseClient,
   projectId: string,
 ) {
-  if (!tableExists(database, "deal_matches")) return;
-  const project = projectFor(database, projectId);
+  if (!(await tableExists(database, "deal_matches"))) return;
+  const project = await projectFor(database, projectId);
   if (!project) return;
-  const isDemo = userIsDemo(database, project.created_by_user_id);
+  const isDemo = await userIsDemo(database, project.created_by_user_id);
   if (isDemo === undefined) return;
-  const deals = database
+  const deals = (await database
     .prepare(
       `SELECT d.* FROM deals d
        JOIN users u ON u.id=d.owner_id
        WHERE u.is_demo=? ORDER BY d.id`,
     )
-    .all(isDemo) as unknown as Deal[];
-  for (const deal of deals) recalculatePair(database, deal, project);
+    .all(isDemo)) as unknown as Deal[];
+  for (const deal of deals) await recalculatePair(database, deal, project);
 }
 
-export function recalculateBuyerOrganizationMatches(
-  database: DatabaseSync,
+export async function recalculateBuyerOrganizationMatches(
+  database: DatabaseClient,
   organizationId: string,
 ) {
-  if (!tableExists(database, "deal_matches")) return;
-  const projects = database
+  if (!(await tableExists(database, "deal_matches"))) return;
+  const projects = (await database
     .prepare(
       "SELECT id FROM buyer_projects WHERE organization_id=? ORDER BY id",
     )
-    .all(organizationId) as { id: string }[];
-  for (const { id } of projects) recalculateBuyerProjectMatches(database, id);
+    .all(organizationId)) as { id: string }[];
+  for (const { id } of projects)
+    await recalculateBuyerProjectMatches(database, id);
 }
 
-export function recalculateBuyerOrganizationDealMatches(
-  database: DatabaseSync,
+export async function recalculateBuyerOrganizationDealMatches(
+  database: DatabaseClient,
   organizationId: string,
   dealId: string,
 ) {
-  if (!tableExists(database, "deal_matches")) return;
-  const deal = dealFor(database, dealId);
+  if (!(await tableExists(database, "deal_matches"))) return;
+  const deal = await dealFor(database, dealId);
   if (!deal) return;
-  const projects = database
+  const projects = (await database
     .prepare(
       "SELECT id FROM buyer_projects WHERE organization_id=? ORDER BY id",
     )
-    .all(organizationId) as { id: string }[];
+    .all(organizationId)) as { id: string }[];
   for (const { id } of projects) {
-    const project = projectFor(database, id);
-    if (project && marketplaceEnvironmentsMatch(database, deal, project))
-      recalculatePair(database, deal, project);
+    const project = await projectFor(database, id);
+    if (
+      project &&
+      (await marketplaceEnvironmentsMatch(database, deal, project))
+    )
+      await recalculatePair(database, deal, project);
   }
 }
 
-export function recalculateAllMatches(database: DatabaseSync) {
-  if (!tableExists(database, "deal_matches")) return;
-  const deals = database.prepare("SELECT id FROM deals ORDER BY id").all() as {
+export async function recalculateAllMatches(database: DatabaseClient) {
+  if (!(await tableExists(database, "deal_matches"))) return;
+  const deals = (await database
+    .prepare("SELECT id FROM deals ORDER BY id")
+    .all()) as {
     id: string;
   }[];
-  for (const { id } of deals) recalculateDealMatches(database, id);
+  for (const { id } of deals) await recalculateDealMatches(database, id);
 }
 
-export function ensureInitialMatchBackfill(database: DatabaseSync) {
+export async function ensureInitialMatchBackfill(database: DatabaseClient) {
   if (
-    !tableExists(database, "deal_matches") ||
-    !tableExists(database, "matching_engine_state") ||
-    database
+    !(await tableExists(database, "deal_matches")) ||
+    !(await tableExists(database, "matching_engine_state")) ||
+    (await database
       .prepare(
         "SELECT value FROM matching_engine_state WHERE key='initial_backfill_v1'",
       )
-      .get()
+      .get())
   )
     return;
-  inImmediateTransaction(database, () => {
+  await inTransaction(database, async (transaction) => {
     if (
-      database
+      await transaction
         .prepare(
           "SELECT value FROM matching_engine_state WHERE key='initial_backfill_v1'",
         )
         .get()
     )
       return;
-    recalculateAllMatches(database);
-    database
+    await recalculateAllMatches(transaction);
+    await transaction
       .prepare(
         "INSERT INTO matching_engine_state(key,value) VALUES('initial_backfill_v1','complete')",
       )

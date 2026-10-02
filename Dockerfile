@@ -1,6 +1,6 @@
 FROM node:24-bookworm-slim AS dependencies
 WORKDIR /app
-# Generate and commit package-lock.json with npm install before building this image.
+# Dependencies are installed from the committed lockfile for reproducible builds.
 COPY package.json package-lock.json ./
 RUN npm ci
 

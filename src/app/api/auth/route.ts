@@ -14,7 +14,10 @@ export async function POST(request: Request) {
     if (body.action === "logout") {
       const existing = (await cookies()).get("northlane_session")?.value;
       if (existing)
-        run("DELETE FROM sessions WHERE token_hash=?", tokenHash(existing));
+        await run(
+          "DELETE FROM sessions WHERE token_hash=?",
+          tokenHash(existing),
+        );
       const response = NextResponse.json({ ok: true });
       response.cookies.delete("northlane_session");
       return response;
@@ -25,10 +28,10 @@ export async function POST(request: Request) {
       if (!["buyer", "owner", "advisor"].includes(body.role))
         throw new AppError("Invalid role.");
       db();
-      limit("demo-login", 100, 60);
-      token = createSession(`demo-${body.role}`);
-    } else if (body.action === "register") token = register(body);
-    else if (body.action === "login") token = login(body);
+      await limit("demo-login", 100, 60);
+      token = await createSession(`demo-${body.role}`);
+    } else if (body.action === "register") token = await register(body);
+    else if (body.action === "login") token = await login(body);
     else throw new AppError("Unknown action.");
     const response = NextResponse.json({ ok: true });
     response.cookies.set("northlane_session", token, {

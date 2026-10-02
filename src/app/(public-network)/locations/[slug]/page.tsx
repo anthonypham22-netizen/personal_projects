@@ -13,7 +13,7 @@ export async function generateMetadata({
 }: {
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
-  const directory = getPublicLocationBySlug((await params).slug);
+  const directory = await getPublicLocationBySlug((await params).slug);
   if (!directory)
     return {
       title: "Location directory not found",
@@ -31,7 +31,7 @@ export default async function LocationRoute({
 }: {
   params: Promise<{ slug: string }>;
 }) {
-  const directory = getPublicLocationBySlug((await params).slug);
+  const directory = await getPublicLocationBySlug((await params).slug);
   if (!directory) notFound();
   return (
     <section className="public-directory-hero">

@@ -73,6 +73,9 @@ import {
   NOTIFICATION_FREQUENCIES,
   BUYER_VERIFICATION_STATUSES,
   BUYER_VERIFICATION_STATUS_LABELS,
+  BUYER_IDENTITY_TYPES,
+  BUYER_CAPITAL_SOURCES,
+  BUYER_EQUITY_RANGES,
   type WorkspaceData,
   type Deal,
   type BuyerProject,
@@ -654,6 +657,9 @@ function Field({
   min,
   max,
   help,
+  placeholder,
+  inputMode,
+  maxLength,
 }: {
   label: string;
   name: string;
@@ -663,6 +669,9 @@ function Field({
   min?: number;
   max?: number;
   help?: string;
+  placeholder?: string;
+  inputMode?: "url";
+  maxLength?: number;
 }) {
   return (
     <label>
@@ -674,7 +683,9 @@ function Field({
         required={required}
         min={min}
         max={max}
-        maxLength={type === "text" ? 200 : undefined}
+        maxLength={maxLength ?? (type === "text" ? 200 : undefined)}
+        placeholder={placeholder}
+        inputMode={inputMode}
       />
       {help && <span className="field-hint">{help}</span>}
     </label>
@@ -988,6 +999,15 @@ export function Workspace({
           },
         ]
       : []),
+    ...(data.is_admin
+      ? [
+          {
+            id: "admin/buyers",
+            label: "Buyer approvals",
+            Icon: ShieldAlert,
+          },
+        ]
+      : []),
     { id: "settings", label: "Settings", Icon: Settings },
   ];
   const current = nav.find((n) => n.id === section)?.label || "Workspace";
@@ -1198,6 +1218,16 @@ function Overview() {
   );
   const open = data.tasks.filter((t) => t.status === "open");
   const pending = data.access.filter((a) => a.status === "requested");
+  const buyerReview = data.buyer_identity_verification;
+  const buyerReviewState = !buyerReview
+    ? { label: "Not submitted", cta: "Complete profile" }
+    : buyerReview.status === "pending"
+      ? { label: "Pending review", cta: null }
+      : buyerReview.status === "needs_info"
+        ? { label: "Action required", cta: "View request" }
+        : buyerReview.status === "approved"
+          ? { label: "Reviewed", cta: null }
+          : { label: "Unable to approve", cta: "View feedback" };
   const stats =
     user.role === "buyer"
       ? [
@@ -1287,6 +1317,26 @@ function Overview() {
           </div>
         ))}
       </div>
+      {user.role === "buyer" && (
+        <div className="buyer-review-state">
+          <div>
+            <span>Buyer profile</span>
+            <strong>{buyerReviewState.label}</strong>
+          </div>
+          <p>
+            Profile review is required before confidential deal access can be
+            requested.
+          </p>
+          {buyerReviewState.cta && (
+            <Link
+              className="button button-quiet button-small"
+              href="/app/verification"
+            >
+              {buyerReviewState.cta} <ArrowRight size={15} />
+            </Link>
+          )}
+        </div>
+      )}
       <MarketplaceAnalytics />
       <div className="dashboard-grid">
         <div className="dashboard-primary">
@@ -4308,6 +4358,12 @@ function IntroductionRequests({ deal }: { deal: Deal }) {
               <div className="introduction-proof">
                 <span>
                   <ShieldCheck size={15} />
+                  {request.buyer_profile_reviewed
+                    ? "Buyer profile reviewed"
+                    : "Buyer profile review pending"}
+                </span>
+                <span>
+                  <ShieldCheck size={15} />
                   {isFirmVerified(
                     request.buyer_organization_verification_status,
                   )
@@ -5537,6 +5593,11 @@ function AccessCard({ access: a, deal }: { access: Access; deal: Deal }) {
           <p>
             {a.name} · {a.email}
           </p>
+          <p className="mt-1 text-xs text-slate-500">
+            {a.buyer_identity_verified
+              ? "Buyer verification approved"
+              : "Buyer verification not yet approved"}
+          </p>
         </div>
         <Status value={a.status} />
       </div>
@@ -6218,6 +6279,213 @@ const verificationLadder = BUYER_VERIFICATION_STATUSES.filter(
   (status) => status !== "rejected",
 );
 
+const humanizeVerificationValue = (value: string) =>
+  value
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ")
+    .replace("2 5", "2.5");
+
+function BuyerIdentityVerificationPanel() {
+  const { data } = useWorkspace();
+  if (data.user.role !== "buyer") return null;
+  const verification = data.buyer_identity_verification;
+  const locked =
+    verification?.status === "pending" || verification?.status === "approved";
+  const statusTitle =
+    verification?.status === "approved"
+      ? "Buyer profile reviewed"
+      : verification?.status === "pending"
+        ? "Pending review"
+        : verification?.status === "needs_info"
+          ? "More information required"
+          : verification?.status === "rejected"
+            ? "Unable to approve"
+            : "Buyer profile not submitted";
+  return (
+    <Panel title="Buyer profile review">
+      <div className="panel-body">
+        <div className="verification-admin-intro">
+          <ShieldCheck size={20} />
+          <div>
+            <strong>{statusTitle}</strong>
+            <p>
+              {verification?.status === "approved"
+                ? "Succera has reviewed your buyer profile. Individual sellers and advisors still control access to each confidential opportunity."
+                : verification?.status === "pending"
+                  ? "Your buyer profile has been submitted to Succera for review."
+                  : "Help us maintain a credible acquisition network. Succera reviews buyer profiles before confidential deal access can be requested."}
+            </p>
+          </div>
+          {verification && <Status value={verification.status} />}
+        </div>
+        {verification?.review_notes && (
+          <div
+            className={cn(
+              "verification-notice",
+              verification.status === "rejected" && "error",
+            )}
+          >
+            <CircleHelp size={18} />
+            <div>
+              <strong>Reviewer note</strong>
+              <p>{verification.review_notes}</p>
+            </div>
+          </div>
+        )}
+        {locked ? (
+          <div className="verification-evidence-sheet">
+            <div>
+              <span>Buyer type</span>
+              <strong>
+                {humanizeVerificationValue(verification.buyer_type)}
+              </strong>
+            </div>
+            <div>
+              <span>Source of capital · self-reported</span>
+              <strong>
+                {humanizeVerificationValue(verification.source_of_capital)}
+              </strong>
+            </div>
+            <div>
+              <span>Equity range</span>
+              <strong>
+                {humanizeVerificationValue(verification.equity_range)}
+              </strong>
+            </div>
+            <div>
+              <span>Completed acquisitions</span>
+              <strong>{verification.completed_acquisitions}</strong>
+            </div>
+            <div className="full">
+              <span>Experience</span>
+              <p>{verification.experience_summary}</p>
+            </div>
+            <div className="full">
+              <span>Acquisition strategy</span>
+              <p>{verification.acquisition_strategy}</p>
+            </div>
+          </div>
+        ) : (
+          <MutationForm
+            action="submitBuyerIdentityVerification"
+            label={verification ? "Resubmit for review" : "Submit for review"}
+          >
+            <div className="form-grid">
+              <label>
+                Buyer type
+                <select
+                  name="buyer_type"
+                  defaultValue={verification?.buyer_type ?? "search_fund"}
+                  required
+                >
+                  {BUYER_IDENTITY_TYPES.map((value) => (
+                    <option key={value} value={value}>
+                      {humanizeVerificationValue(value)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Source of acquisition capital · self-reported
+                <select
+                  name="source_of_capital"
+                  defaultValue={
+                    verification?.source_of_capital ?? "personal_capital"
+                  }
+                  required
+                >
+                  {BUYER_CAPITAL_SOURCES.map((value) => (
+                    <option key={value} value={value}>
+                      {humanizeVerificationValue(value)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Equity available for an acquisition
+                <select
+                  name="equity_range"
+                  defaultValue={verification?.equity_range ?? "500k_1m"}
+                  required
+                >
+                  {BUYER_EQUITY_RANGES.map((value) => (
+                    <option key={value} value={value}>
+                      {humanizeVerificationValue(value)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Field
+                label="Completed acquisitions"
+                name="completed_acquisitions"
+                type="number"
+                min={0}
+                max={10000}
+                value={verification?.completed_acquisitions ?? 0}
+              />
+              <Field
+                label="LinkedIn profile"
+                name="linkedin_url"
+                required={false}
+                value={verification?.linkedin_url ?? ""}
+                placeholder="https://linkedin.com/in/your-profile"
+                inputMode="url"
+                maxLength={500}
+              />
+              <Field
+                label="Firm or personal website"
+                name="website_url"
+                required={false}
+                value={verification?.website_url ?? ""}
+                placeholder="https://example.com"
+                inputMode="url"
+                maxLength={500}
+              />
+              <label className="full">
+                Tell us briefly about your acquisition, investing, operating, or
+                industry experience.
+                <textarea
+                  name="experience_summary"
+                  minLength={20}
+                  maxLength={4000}
+                  defaultValue={verification?.experience_summary ?? ""}
+                  required
+                />
+              </label>
+              <label className="full">
+                What kinds of businesses are you looking to acquire and why?
+                <textarea
+                  name="acquisition_strategy"
+                  minLength={20}
+                  maxLength={4000}
+                  defaultValue={verification?.acquisition_strategy ?? ""}
+                  required
+                />
+              </label>
+              <label className="full checkbox-row">
+                <input
+                  name="authorized_to_represent"
+                  type="checkbox"
+                  required
+                  defaultChecked={
+                    verification?.authorized_to_represent ?? false
+                  }
+                />
+                <span>
+                  I confirm that the information provided is accurate and that I
+                  am authorized to represent the buyer or organization listed on
+                  this account.
+                </span>
+              </label>
+            </div>
+          </MutationForm>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
 function BuyerTransactionHistoryPanel() {
   const { data } = useWorkspace();
   const transactions = data.closed_transactions;
@@ -6878,7 +7146,7 @@ function VerificationReviewQueue() {
 function VerificationPage() {
   const { data } = useWorkspace();
   const hasBuyerProfile = Boolean(data.buyer_verification_profile);
-  if (!hasBuyerProfile && !data.is_platform_admin)
+  if (!hasBuyerProfile && !data.is_platform_admin && data.user.role !== "buyer")
     return (
       <Empty
         title="Buyer organization required"
@@ -6894,10 +7162,17 @@ function VerificationPage() {
         title={
           data.is_platform_admin && !hasBuyerProfile
             ? "Review buyer credibility."
-            : "Build buyer credibility."
+            : data.user.role === "buyer"
+              ? "Buyer profile review"
+              : "Build buyer credibility."
         }
-        description="Collect consistent firm evidence and keep Qualified Discovery limited to reviewed buyers."
+        description={
+          data.user.role === "buyer"
+            ? "Help us maintain a credible acquisition network. Succera reviews buyer profiles before confidential deal access can be requested."
+            : "Collect consistent firm evidence and keep Qualified Discovery limited to reviewed buyers."
+        }
       />
+      <BuyerIdentityVerificationPanel />
       {hasBuyerProfile && <BuyerVerificationPanel />}
       {data.is_platform_admin && <VerificationReviewQueue />}
     </>

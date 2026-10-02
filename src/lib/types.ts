@@ -42,6 +42,76 @@ export const BUYER_VERIFICATION_STATUSES = [
 ] as const;
 export type BuyerVerificationStatus =
   (typeof BUYER_VERIFICATION_STATUSES)[number];
+export const BUYER_IDENTITY_VERIFICATION_STATUSES = [
+  "pending",
+  "needs_info",
+  "approved",
+  "rejected",
+] as const;
+export type BuyerIdentityVerificationStatus =
+  (typeof BUYER_IDENTITY_VERIFICATION_STATUSES)[number];
+export const BUYER_IDENTITY_TYPES = [
+  "independent_sponsor",
+  "search_fund",
+  "self_funded_searcher",
+  "private_equity_firm",
+  "family_office",
+  "holding_company",
+  "strategic_corporate_acquirer",
+  "individual_buyer",
+  "other",
+] as const;
+export type BuyerIdentityType = (typeof BUYER_IDENTITY_TYPES)[number];
+export const BUYER_CAPITAL_SOURCES = [
+  "personal_capital",
+  "committed_investment_fund",
+  "family_office_capital",
+  "corporate_balance_sheet",
+  "investor_sponsor_equity",
+  "equity_plus_acquisition_financing",
+  "other",
+] as const;
+export type BuyerCapitalSource = (typeof BUYER_CAPITAL_SOURCES)[number];
+export const BUYER_EQUITY_RANGES = [
+  "under_250k",
+  "250k_500k",
+  "500k_1m",
+  "1m_2_5m",
+  "2_5m_5m",
+  "5m_plus",
+] as const;
+export type BuyerEquityRange = (typeof BUYER_EQUITY_RANGES)[number];
+export type BuyerIdentityVerification = {
+  id: string;
+  user_id: string;
+  status: BuyerIdentityVerificationStatus;
+  buyer_type: BuyerIdentityType;
+  linkedin_url: string | null;
+  website_url: string | null;
+  source_of_capital: BuyerCapitalSource;
+  equity_range: BuyerEquityRange;
+  completed_acquisitions: number;
+  experience_summary: string;
+  acquisition_strategy: string;
+  authorized_to_represent: boolean;
+  submitted_at: string | null;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+  review_notes: string;
+  created_at: string;
+  updated_at: string;
+};
+export type BuyerVerificationAdminEntry = BuyerIdentityVerification & {
+  buyer_name: string;
+  buyer_email: string;
+  buyer_company: string;
+  buyer_province: string;
+  buyer_sectors: string;
+  buyer_min_revenue: number;
+  buyer_max_revenue: number;
+  reviewer_name: string | null;
+  reviewer_email: string | null;
+};
 export const BUYER_VERIFICATION_STATUS_LABELS: Record<
   BuyerVerificationStatus,
   string
@@ -528,6 +598,7 @@ export type IntroductionRequest = {
   buyer_project_name: string;
   requested_by_user_id: string;
   requested_by_user_name: string;
+  buyer_profile_reviewed: boolean;
   message: string;
   status: IntroductionRequestStatus;
   created_at: string;
@@ -699,6 +770,7 @@ export type Access = {
   name: string;
   company: string;
   email: string;
+  buyer_identity_verified: boolean;
 };
 export const ELECTRONIC_SIGNATURE_STATUSES = [
   "creating",
@@ -867,10 +939,12 @@ export type WorkspaceData = {
   notification_unread_count: number;
   notification_preferences: NotificationPreferences;
   buyer_verification_profile?: BuyerVerificationProfile;
+  buyer_identity_verification?: BuyerIdentityVerification;
   buyer_firm_profile?: BuyerFirmProfile;
   public_network_profile?: PublicOrganizationProfile;
   closed_transactions: ClosedTransaction[];
   is_platform_admin: boolean;
+  is_admin: boolean;
   verification_admin_queue?: VerificationAdminEntry[];
   verification_reviews?: VerificationReview[];
   closed_transaction_review_queue?: ClosedTransactionReviewEntry[];

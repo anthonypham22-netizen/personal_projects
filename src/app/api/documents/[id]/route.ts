@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { currentUser } from "@/lib/auth";
 import { dataDirectory, db, one } from "@/lib/db";
 import {
@@ -12,6 +10,7 @@ import {
 import { failure } from "@/lib/http";
 import type { Document } from "@/lib/types";
 import { getOrCreatePersonalizedPdf } from "@/lib/document-watermarks";
+import { privateFileStore } from "@/lib/private-file-store";
 
 export const runtime = "nodejs";
 
@@ -23,19 +22,17 @@ export async function GET(
     const user = await currentUser();
     if (!user) throw new AppError("Please sign in.", 401);
     const { id } = await params;
-    const doc = one<
+    const doc = await one<
       Omit<Document, "watermark_enabled"> & {
         storage_key: string;
         mime: string;
         watermark_enabled: number;
       }
     >("SELECT * FROM documents WHERE id=?", id);
-    const deal = doc ? getDeal(doc.deal_id) : undefined;
-    if (!doc || !deal || !canReadDocument(user, deal, doc))
+    const deal = doc ? await getDeal(doc.deal_id) : undefined;
+    if (!doc || !deal || !(await canReadDocument(user, deal, doc)))
       throw new AppError("Document not found or access is restricted.", 404);
-    const original = await readFile(
-      path.join(dataDirectory(), "uploads", path.basename(doc.storage_key)),
-    );
+    const original = await privateFileStore().read("uploads", doc.storage_key);
     let file: Uint8Array = original;
     let personalized = false;
     if (
@@ -43,7 +40,7 @@ export async function GET(
       Boolean(doc.watermark_enabled) &&
       doc.mime === "application/pdf"
     ) {
-      const organization = organizationFor(user.id);
+      const organization = await organizationFor(user.id);
       if (!organization)
         throw new AppError(
           "Your buyer account is not connected to an organization.",
@@ -62,7 +59,7 @@ export async function GET(
       ).bytes;
       personalized = true;
     }
-    audit(
+    await audit(
       user,
       doc.deal_id,
       personalized

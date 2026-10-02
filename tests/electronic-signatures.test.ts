@@ -4,7 +4,7 @@ import { createHmac } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { db, one } from "../src/lib/db";
+import { databaseReady, closeDatabase, one } from "../src/lib/db";
 import { mutate } from "../src/lib/service";
 import {
   processElectronicSignatureEvent,
@@ -30,16 +30,16 @@ const provider: ElectronicSignatureProvider = {
   },
 };
 
-before(() => {
+before(async () => {
   directory = mkdtempSync(path.join(tmpdir(), "succera-electronic-nda-"));
   process.env.DATA_DIR = directory;
   process.env.ALLOW_DEMO = "true";
-  db();
-  owner = one<User>("SELECT * FROM users WHERE id='demo-owner'")!;
+  await databaseReady();
+  owner = (await one<User>("SELECT * FROM users WHERE id='demo-owner'"))!;
 });
 
-after(() => {
-  db().close();
+after(async () => {
+  await closeDatabase();
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -51,7 +51,7 @@ test("provider completion stores the executed NDA and grants access exactly once
   );
   assert.ok(requested.id);
   assert.deepEqual(
-    one<{
+    await one<{
       status: string;
       nda_status: string;
       nda_method: string;
@@ -67,10 +67,10 @@ test("provider completion stores the executed NDA and grants access exactly once
     },
   );
 
-  const envelope = one<{ provider_envelope_id: string }>(
+  const envelope = (await one<{ provider_envelope_id: string }>(
     "SELECT provider_envelope_id FROM electronic_signature_envelopes WHERE id=?",
     requested.id!,
-  )!;
+  ))!;
   await processElectronicSignatureEvent({
     provider: provider.id,
     providerEventId: "event-buyer-signed",
@@ -79,8 +79,10 @@ test("provider completion stores the executed NDA and grants access exactly once
     occurredAt: "2026-09-29T12:00:00.000Z",
   });
   assert.equal(
-    one<{ status: string }>(
-      "SELECT status FROM access WHERE deal_id='harbour' AND buyer_id='demo-buyer'",
+    (
+      await one<{ status: string }>(
+        "SELECT status FROM access WHERE deal_id='harbour' AND buyer_id='demo-buyer'",
+      )
     )?.status,
     "nda_pending",
     "a buyer signature must not grant access before provider completion",
@@ -102,16 +104,16 @@ test("provider completion stores the executed NDA and grants access exactly once
   await processElectronicSignatureEvent(completed);
   await processElectronicSignatureEvent(completed);
 
-  const access = one<{
+  const access = (await one<{
     status: string;
     nda_status: string;
     nda_document_id: string;
   }>(
     "SELECT status,nda_status,nda_document_id FROM access WHERE deal_id='harbour' AND buyer_id='demo-buyer'",
-  )!;
+  ))!;
   assert.equal(access.status, "approved");
   assert.equal(access.nda_status, "verified");
-  const document = one<{
+  const document = (await one<{
     category: string;
     audience: string;
     buyer_id: string;
@@ -119,7 +121,7 @@ test("provider completion stores the executed NDA and grants access exactly once
   }>(
     "SELECT category,audience,buyer_id,storage_key FROM documents WHERE id=?",
     access.nda_document_id,
-  )!;
+  ))!;
   assert.deepEqual(
     {
       category: document.category,
@@ -133,14 +135,18 @@ test("provider completion stores the executed NDA and grants access exactly once
     pdf,
   );
   assert.equal(
-    one<{ count: number }>(
-      "SELECT COUNT(*) count FROM electronic_signature_events WHERE provider_event_id='event-completed'",
+    (
+      await one<{ count: number }>(
+        "SELECT COUNT(*) count FROM electronic_signature_events WHERE provider_event_id='event-completed'",
+      )
     )?.count,
     1,
   );
   assert.equal(
-    one<{ count: number }>(
-      "SELECT COUNT(*) count FROM documents WHERE deal_id='harbour' AND category='NDA' AND buyer_id='demo-buyer'",
+    (
+      await one<{ count: number }>(
+        "SELECT COUNT(*) count FROM documents WHERE deal_id='harbour' AND category='NDA' AND buyer_id='demo-buyer'",
+      )
     )?.count,
     1,
   );
@@ -161,7 +167,7 @@ test("provider failure stays gated until the seller explicitly chooses fallback"
     ),
     /could not create the NDA request/,
   );
-  const failed = one<{
+  const failed = (await one<{
     status: string;
     nda_method: string;
     electronic_signature_envelope_id: string;
@@ -172,12 +178,12 @@ test("provider failure stays gated until the seller explicitly chooses fallback"
      FROM access a JOIN electronic_signature_envelopes e
        ON e.id=a.electronic_signature_envelope_id
      WHERE a.deal_id='cedar' AND a.buyer_id='demo-buyer-2'`,
-  )!;
+  ))!;
   assert.equal(failed.status, "nda_pending");
   assert.equal(failed.nda_method, "electronic_signature");
   assert.equal(failed.envelope_status, "failed");
 
-  mutate(owner, {
+  await mutate(owner, {
     action: "reviewAccess",
     data: {
       deal_id: "cedar",
@@ -186,7 +192,7 @@ test("provider failure stays gated until the seller explicitly chooses fallback"
     },
   });
   assert.deepEqual(
-    one<{
+    await one<{
       nda_method: string;
       electronic_signature_envelope_id: string | null;
     }>(

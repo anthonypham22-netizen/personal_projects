@@ -9,8 +9,11 @@ import {
 } from "@/lib/public-metadata";
 import type { PublicFirmKind } from "@/lib/types";
 
-export function firmMetadata(slug: string, kind: PublicFirmKind): Metadata {
-  const firm = getPublicFirmBySlug(slug, kind);
+export async function firmMetadata(
+  slug: string,
+  kind: PublicFirmKind,
+): Promise<Metadata> {
+  const firm = await getPublicFirmBySlug(slug, kind);
   if (!firm) {
     return {
       title: "Public profile not found",
@@ -28,14 +31,14 @@ export function firmMetadata(slug: string, kind: PublicFirmKind): Metadata {
   });
 }
 
-export function FirmPage({
+export async function FirmPage({
   slug,
   kind,
 }: {
   slug: string;
   kind: PublicFirmKind;
 }) {
-  const firm = getPublicFirmBySlug(slug, kind);
+  const firm = await getPublicFirmBySlug(slug, kind);
   if (!firm) notFound();
   const path = publicFirmPath(firm);
   const jsonLd = {

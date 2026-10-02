@@ -11,7 +11,7 @@ import {
 import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "../src/lib/db";
 import {
   decodePDFRawStream,
   PDFArray,
@@ -23,24 +23,23 @@ import {
   personalizedWatermarkDetails,
   assertWatermarkablePdf,
 } from "../src/lib/document-watermarks";
-import { runMigrations } from "../src/lib/migrations/index.ts";
-import { seed } from "../src/lib/seed.ts";
+import { freshPostgresDatabase } from "./postgres-test-db";
 
-let database: DatabaseSync;
+let database: DatabaseClient;
 let directory: string;
 let originalBytes: Buffer;
 
-const variantCount = (documentId: string, buyerId = "demo-buyer") =>
+const variantCount = async (documentId: string, buyerId = "demo-buyer") =>
   (
-    database
+    (await database
       .prepare(
         "SELECT COUNT(*) count FROM document_watermark_variants WHERE document_id=? AND buyer_id=?",
       )
-      .get(documentId, buyerId) as { count: number }
+      .get(documentId, buyerId)) as { count: number }
   ).count;
 
-const insertWatermarkDocument = (id: string) => {
-  database
+const insertWatermarkDocument = async (id: string) => {
+  await database
     .prepare(
       `INSERT INTO documents(
         id,deal_id,name,storage_key,mime,category,size,version,audience,buyer_id,
@@ -88,10 +87,7 @@ const renderedText = async (bytes: Uint8Array) => {
 
 before(async () => {
   directory = mkdtempSync(path.join(tmpdir(), "succera-watermarks-"));
-  database = new DatabaseSync(":memory:");
-  database.exec("PRAGMA foreign_keys=ON");
-  runMigrations(database);
-  seed(database, directory);
+  database = await freshPostgresDatabase(directory);
 
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([612, 792]);
@@ -108,8 +104,8 @@ before(async () => {
   );
 });
 
-after(() => {
-  database.close();
+after(async () => {
+  await database.close();
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -132,7 +128,7 @@ test("personalized watermark details identify the recipient and transaction", ()
 });
 
 test("a personalized PDF is cached per buyer without changing the original", async () => {
-  insertWatermarkDocument("cached-document");
+  await insertWatermarkDocument("cached-document");
   const input = {
     database,
     dataDirectory: directory,
@@ -165,11 +161,11 @@ test("a personalized PDF is cached per buyer without changing the original", asy
     readFileSync(path.join(directory, "watermarks", first.storageKey)),
     first.bytes,
   );
-  assert.equal(variantCount("cached-document"), 1);
+  assert.equal(await variantCount("cached-document"), 1);
 });
 
 test("a changed watermark identity replaces the cached derivative", async () => {
-  insertWatermarkDocument("changed-document");
+  await insertWatermarkDocument("changed-document");
   const before = await getOrCreatePersonalizedPdf({
     database,
     dataDirectory: directory,
@@ -198,11 +194,11 @@ test("a changed watermark identity replaces the cached derivative", async () => 
     false,
     "obsolete derivatives should not accumulate",
   );
-  assert.equal(variantCount("changed-document"), 1);
+  assert.equal(await variantCount("changed-document"), 1);
 });
 
 test("a missing cached derivative is regenerated safely", async () => {
-  insertWatermarkDocument("missing-document");
+  await insertWatermarkDocument("missing-document");
   const before = await getOrCreatePersonalizedPdf({
     database,
     dataDirectory: directory,
@@ -228,11 +224,11 @@ test("a missing cached derivative is regenerated safely", async () => {
 
   assert.equal(replacement.cacheHit, false);
   assert.notEqual(replacement.storageKey, before.storageKey);
-  assert.equal(variantCount("missing-document"), 1);
+  assert.equal(await variantCount("missing-document"), 1);
 });
 
 test("Unicode buyer identities still produce a recoverable personalized PDF", async () => {
-  insertWatermarkDocument("unicode-document");
+  await insertWatermarkDocument("unicode-document");
   const result = await getOrCreatePersonalizedPdf({
     database,
     dataDirectory: directory,
@@ -252,7 +248,7 @@ test("Unicode buyer identities still produce a recoverable personalized PDF", as
 });
 
 test("concurrent cache misses generate one variant per buyer", async () => {
-  insertWatermarkDocument("concurrent-document");
+  await insertWatermarkDocument("concurrent-document");
   const input = {
     database,
     dataDirectory: directory,
@@ -269,14 +265,14 @@ test("concurrent cache misses generate one variant per buyer", async () => {
     getOrCreatePersonalizedPdf(input),
   ]);
   assert.equal(new Set(results.map((result) => result.storageKey)).size, 1);
-  assert.equal(variantCount("concurrent-document"), 1);
+  assert.equal(await variantCount("concurrent-document"), 1);
   const followUp = await getOrCreatePersonalizedPdf(input);
   assert.equal(followUp.cacheHit, true);
   assert.equal(followUp.storageKey, results[0].storageKey);
 });
 
 test("watermark cache variants remain isolated between buyers", async () => {
-  insertWatermarkDocument("buyer-isolation-document");
+  await insertWatermarkDocument("buyer-isolation-document");
   const first = await getOrCreatePersonalizedPdf({
     database,
     dataDirectory: directory,
@@ -304,8 +300,11 @@ test("watermark cache variants remain isolated between buyers", async () => {
     now: new Date("2026-09-23T14:00:00.000Z"),
   });
   assert.notEqual(first.storageKey, second.storageKey);
-  assert.equal(variantCount("buyer-isolation-document", "demo-buyer"), 1);
-  assert.equal(variantCount("buyer-isolation-document", "demo-buyer-2"), 1);
+  assert.equal(await variantCount("buyer-isolation-document", "demo-buyer"), 1);
+  assert.equal(
+    await variantCount("buyer-isolation-document", "demo-buyer-2"),
+    1,
+  );
   assert.match(await renderedText(second.bytes), /second@example\.test/);
 });
 

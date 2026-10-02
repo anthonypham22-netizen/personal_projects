@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
-import { tableExists } from "./sqlite-schema.ts";
-import { inImmediateTransaction } from "./sqlite-transaction.ts";
+import type { DatabaseClient } from "./db";
+import { tableExists } from "./schema";
+import { inTransaction } from "./transaction";
 import { buyerOrganizationIdForUser } from "./buyer-funnel.ts";
 import {
   introducedByAcquireForSource,
@@ -16,8 +16,8 @@ const dateOnly = (value?: string | null) => {
   return matched ?? new Date().toISOString().slice(0, 10);
 };
 
-export function recordInitialTransactionAttribution(
-  database: DatabaseSync,
+export async function recordInitialTransactionAttribution(
+  database: DatabaseClient,
   input: {
     dealId: string;
     buyerOrganizationId: string;
@@ -27,7 +27,7 @@ export function recordInitialTransactionAttribution(
     createdByUserId?: string | null;
   },
 ) {
-  const result = database
+  const result = await database
     .prepare(
       `INSERT INTO transaction_attribution(
          id,deal_id,buyer_organization_id,source,introduced_by_acquire,
@@ -68,36 +68,38 @@ type LegacyAccessRelationship = {
   created_at: string;
 };
 
-export function ensureTransactionAttributionBackfill(database: DatabaseSync) {
+export async function ensureTransactionAttributionBackfill(
+  database: DatabaseClient,
+) {
   if (
-    !tableExists(database, "transaction_attribution") ||
-    !tableExists(database, "transaction_attribution_state") ||
-    !tableExists(database, "deal_buyer_events") ||
-    database
+    !(await tableExists(database, "transaction_attribution")) ||
+    !(await tableExists(database, "transaction_attribution_state")) ||
+    !(await tableExists(database, "deal_buyer_events")) ||
+    (await database
       .prepare(
         "SELECT 1 FROM transaction_attribution_state WHERE key='initial_backfill_v1'",
       )
-      .get()
+      .get())
   )
     return;
 
-  inImmediateTransaction(database, () => {
+  await inTransaction(database, async (transaction) => {
     if (
-      database
+      await transaction
         .prepare(
           "SELECT 1 FROM transaction_attribution_state WHERE key='initial_backfill_v1'",
         )
         .get()
     )
       return;
-    const events = database
+    const events = (await transaction
       .prepare(
         `WITH ranked_events AS (
            SELECT id,deal_id,buyer_organization_id,event_type,
              created_by_user_id,created_at,
              ROW_NUMBER() OVER (
                PARTITION BY deal_id,buyer_organization_id
-               ORDER BY created_at,rowid
+               ORDER BY created_at,id
              ) event_rank
            FROM deal_buyer_events
            WHERE event_type IN ('teaser_sent','intro_approved','nda_requested')
@@ -108,9 +110,9 @@ export function ensureTransactionAttributionBackfill(database: DatabaseSync) {
          WHERE event_rank=1
          ORDER BY created_at,id`,
       )
-      .all() as AttributionEvent[];
+      .all()) as AttributionEvent[];
     for (const event of events) {
-      recordInitialTransactionAttribution(database, {
+      await recordInitialTransactionAttribution(transaction, {
         dealId: event.deal_id,
         buyerOrganizationId: event.buyer_organization_id,
         source: transactionAttributionSourceForEvent(event.event_type)!,
@@ -119,21 +121,21 @@ export function ensureTransactionAttributionBackfill(database: DatabaseSync) {
         createdByUserId: event.created_by_user_id,
       });
     }
-    const legacyRelationships = database
+    const legacyRelationships = (await transaction
       .prepare(
         `SELECT access.id,access.deal_id,access.buyer_id,access.created_at
          FROM access
          WHERE access.status NOT IN ('denied','revoked')
          ORDER BY access.created_at,access.id`,
       )
-      .all() as LegacyAccessRelationship[];
+      .all()) as LegacyAccessRelationship[];
     for (const relationship of legacyRelationships) {
-      const buyerOrganizationId = buyerOrganizationIdForUser(
-        database,
+      const buyerOrganizationId = await buyerOrganizationIdForUser(
+        transaction,
         relationship.buyer_id,
       );
       if (!buyerOrganizationId) continue;
-      recordInitialTransactionAttribution(database, {
+      await recordInitialTransactionAttribution(transaction, {
         dealId: relationship.deal_id,
         buyerOrganizationId,
         source: "external_relationship",
@@ -141,7 +143,7 @@ export function ensureTransactionAttributionBackfill(database: DatabaseSync) {
         createdByUserId: relationship.buyer_id,
       });
     }
-    database
+    await transaction
       .prepare(
         "INSERT INTO transaction_attribution_state(key,value) VALUES('initial_backfill_v1','complete')",
       )
@@ -149,15 +151,18 @@ export function ensureTransactionAttributionBackfill(database: DatabaseSync) {
   });
 }
 
-export function transactionAttributionsForDeals(
-  database: DatabaseSync,
+export async function transactionAttributionsForDeals(
+  database: DatabaseClient,
   dealIds: string[],
-): TransactionAttribution[] {
-  if (!dealIds.length || !tableExists(database, "transaction_attribution"))
+): Promise<TransactionAttribution[]> {
+  if (
+    !dealIds.length ||
+    !(await tableExists(database, "transaction_attribution"))
+  )
     return [];
   const placeholders = dealIds.map(() => "?").join(",");
   return (
-    database
+    (await database
       .prepare(
         `SELECT attribution.id,attribution.deal_id,
            attribution.buyer_organization_id,
@@ -173,7 +178,7 @@ export function transactionAttributionsForDeals(
          WHERE attribution.deal_id IN (${placeholders})
          ORDER BY attribution.introduction_date,attribution.created_at,attribution.id`,
       )
-      .all(...dealIds) as Array<
+      .all(...dealIds)) as Array<
       Omit<TransactionAttribution, "introduced_by_acquire"> & {
         introduced_by_acquire: number;
       }

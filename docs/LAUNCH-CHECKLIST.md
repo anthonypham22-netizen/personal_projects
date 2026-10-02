@@ -1,55 +1,107 @@
-# Live-launch requirements
+# Succera live-launch checklist
 
-This list records concrete gaps in the implemented MVP. It is not a claim of comprehensive security or legal compliance.
+This is an operational checklist, not a claim of legal or security compliance.
 
-## Environment separation
+## Database and environment separation
 
-- Run local development with `APP_ENV=development`, `ALLOW_DEMO=true`, and `DATA_DIR=./data/dev`.
-- Deploy staging at `staging.succera.io` with `APP_ENV=staging`, `ALLOW_DEMO=true`, and the dedicated `succera_staging_data` volume. Confirm the persistent staging banner, `noindex`, role preview, and fictional-only data before each QA cycle.
-- Deploy production at `succera.io` with `APP_ENV=production`, `ALLOW_DEMO=false`, and the dedicated `succera_production_data` volume. Confirm `/dev/preview` returns 404, demo authentication is rejected, and the fresh production database has no demo users, deals, documents, tasks, messages, or offers.
-- Keep environment `.env` files, provider secrets, deployment credentials, backup destinations, SQLite databases, upload directories, and sessions physically separate. Never restore or copy staging data into production.
-- Back up and restore staging and production independently. Record the target environment and volume name in the operational runbook before every restore.
-- Restrict casual public access to staging with infrastructure controls where practical. The banner and `noindex` are safety layers, not access control.
+- [ ] Production project is **Succera Production**, ref
+      `vtfzevaizyvgmynnyxsb`, region `ca-central-1`.
+- [ ] No Succera secret, migration, test, or deployment references the older
+      US-East project.
+- [ ] Staging has its own database credentials; if no staging database exists,
+      staging remains blocked rather than sharing production.
+- [ ] Production sets `APP_ENV=production`, `ALLOW_DEMO=false`,
+      `COOKIE_SECURE=true`, and a server-only `DATABASE_URL`.
+- [ ] Local and CI tests use isolated PGlite or an explicitly isolated test DB,
+      never production.
+- [ ] Reviewed SQL in `supabase/migrations/` has been applied in order and
+      `npm run db:verify` confirms tables, foreign keys, indexes, and migration
+      history.
+- [ ] Supabase database backups and restore procedures have been tested in a
+      separate environment.
+- [ ] The historical SQLite source is retained read-only until row counts and
+      critical workflows are reconciled after import.
+- [ ] Production has no SQLite dependency, fallback, or dual-write path.
 
-## Build and verification
+## Supabase security review
 
-- Resolve the dependency-install credit block, generate the lockfile, run the TypeScript, service, browser, and production-build checks, and fix failures.
-- Review desktop/mobile rendering, keyboard navigation, focus, form errors, and all role journeys in a running browser.
-- Audit authorization against a written role/organization/deal/document matrix. Include two independent owners, unrelated advisors, competing buyers, revoked users, and direct HTTP calls.
-- Load-test the selected deployment and confirm database backup and restore.
+- [ ] Security Advisor has been run after migrations and material findings are
+      resolved.
+- [ ] Performance Advisor has been reviewed for missing foreign-key indexes and
+      obvious query issues.
+- [ ] RLS is enabled on every application table.
+- [ ] `anon` and `authenticated` cannot read sensitive application tables,
+      including users, password hashes, session digests, confidential deals,
+      documents, buyer reviews, messages, tasks, and offers.
+- [ ] Database credentials and `ADMIN_EMAILS` exist only in server secret stores.
+- [ ] No policy assumes Supabase `auth.uid()` because Succera still uses custom
+      authentication.
 
-## Identity and organizations
+## Buyer profile review
 
-- Add verified email, password recovery, MFA or managed authentication, session/device management, and administrator invitation controls.
-- Add administrator invitations, role changes, membership removal, and recovery rules around the implemented organization membership model.
-- Define owner representation authority, advisor assignment/acceptance, member removal, and conflict-of-interest handling.
-- The app now includes an internal buyer-firm evidence review and audit trail. Add independent identity, authority, and buyer-capital verification before describing participants as legally accredited, independently verified, or guaranteed to have funds.
+- [ ] `ADMIN_EMAILS` contains only current internal Succera reviewers and has
+      been tested case-insensitively.
+- [ ] Owner and advisor accounts cannot submit buyer profiles.
+- [ ] Buyers cannot approve or otherwise set their own review status.
+- [ ] Non-admins receive no admin navigation and cannot load admin routes or
+      review APIs directly.
+- [ ] Pending, more-information, approved, and rejected states display the
+      approved customer wording.
+- [ ] Capital source and equity range are visibly labelled self-reported.
+- [ ] More-information and rejection actions require a useful buyer-visible note.
+- [ ] An unapproved buyer cannot request an introduction leading to confidential
+      access, receive seller-approved data-room access, or submit an LOI.
+- [ ] Approved buyers still require seller/advisor approval and a completed NDA
+      for each deal.
+- [ ] Sellers see “Buyer profile reviewed” without equity range or internal
+      review notes.
+- [ ] Demo reviewers cannot enumerate or modify real applications, and real
+      reviewers cannot enumerate demo applications.
+- [ ] Production contains no fictional buyer-review applications.
 
-## Public network and discovery
+## Existing marketplace regression checks
 
-- Review migration `022_public_network` against a production-like copy and confirm every organization has a private public-profile row without changing active mandates or confidential records.
-- Keep `PUBLIC_NETWORK_INDEXING_ENABLED=false` for local, staging, preview, and review hostnames. Enable indexing only on the approved production domain after reviewing public copy, canonical metadata, privacy notices, removal handling, and `robots.txt`/sitemap output.
-- Verify that advisor and eligible buyer profiles are explicitly opt-in, operating-business seller firms remain absent, and public transaction pages require both firm-level and independently verified transaction-level opt-in.
-- Confirm public routes never expose active deal identifiers, legal company names, confidential summaries, buyer projects, documents, messages, seller/advisor identities, or internal verification evidence. Test anonymous requests and direct alternate slugs.
-- Treat demo public profiles and transactions as fictional examples only. Never copy staging demo data, public-network taxonomy, or generated sitemap entries into production.
+- [ ] Registration, login, logout, session expiry, profile settings, and login
+      rate limits work.
+- [ ] Owner/advisor authorization, buyer isolation, and demo/real isolation work.
+- [ ] Mandate creation, publication, matching, private outreach, Qualified
+      Discovery, and introduction approval work.
+- [ ] NDA, external/electronic signature, document permissions, revocation,
+      messages, diligence tasks, LOIs, offers, and closing records work.
+- [ ] Direct HTTP requests and copied document URLs cannot bypass authorization.
+- [ ] The complete verification suite passes:
 
-## Documents and transactions
+  ```sh
+  npm run typecheck
+  npm test
+  npm run build
+  npm run test:e2e
+  ```
 
-- Integrate an e-signature provider with verified webhooks, idempotency, signer authority, and evidence retention if signing is to occur inside the app.
-- Review NDA and LOI templates with Canadian counsel for the intended jurisdictions. No legal templates or advice are generated in this release.
-- Add malware scanning/quarantine and a supported file-preview pipeline before accepting customer uploads.
-- Define document retention, deletion, export, watermarking, and download policies; revocation cannot recover downloaded files.
-- Treat the implemented personalized PDF watermark as an attribution deterrent, not DRM. Validate the legal notice, recipient data, cache-retention period, secure cache deletion, and incident-handling policy before live use.
-- Keep the teaser assistant disabled until privacy counsel and the operator approve the provider, model, data residency, retention, subprocessor terms, user disclosure, evaluation set, incident handling, and human-review policy. Test false negatives with realistic Canadian M&A teasers; never market the assistant as guaranteeing anonymity.
-- Exercise the implemented schema migration runner against production-like database copies and add storage migration tooling before changing uploaded-file layouts.
-- Decide whether to keep a pilot document room or integrate a specialist virtual data room for complex transactions.
+## Private file storage
 
-## Operations and commercial launch
+- [ ] Everyone understands that structured data is in Supabase Postgres while
+      uploaded document bytes use private Blob on Vercel or the private local
+      volume for a filesystem deployment.
+- [ ] Private Blob retention/export (or filesystem upload backups) is encrypted,
+      monitored, and paired with a compatible Supabase restore point.
+- [ ] Uploaded files are not served directly by Caddy or a public object path;
+      the Vercel store is private and downloads pass through authorization.
+- [ ] Malware scanning/quarantine and retention/deletion policies are completed
+      before accepting customer documents.
+- [ ] Watermarks are treated as attribution deterrence, not DRM; downloaded
+      copies cannot be recalled.
 
-- Connect a production email provider and digest scheduler, then validate delivery failures and consent controls. The app currently records development/test deliveries without sending external email.
-- Add subscription billing, entitlements, tax/invoicing treatment, and customer support. No payments are implemented.
-- Define the platform's contractual role and review applicable privacy, commercial, and transaction-facilitation requirements with counsel.
-- Publish real operator identity, terms, privacy notices, and a contact/support process; the About this release page is not a substitute.
-- Verify data locations across infrastructure, backups, monitoring, and all subprocessors.
-- Define incident response, abuse handling, audited administrator access, uptime monitoring, and restore ownership.
-- Validate the Succera name/domain before adopting it commercially, and decide the English/French launch scope.
+## Product, legal, and operations
+
+- [ ] Canadian counsel has reviewed NDA/LOI workflows, marketplace terms,
+      privacy notices, data retention, and Succera's platform role.
+- [ ] Buyer profile review is not marketed as KYC, financial verification,
+      accreditation, proof of funds, or a guarantee of capital.
+- [ ] Email and e-signature providers have approved production adapters,
+      authenticated webhooks, retention/residency review, and incident handling.
+- [ ] Public profile indexing remains disabled until public copy, consent,
+      removal, privacy, and canonical metadata are approved.
+- [ ] Production administrator access, logs, monitoring, restore ownership,
+      support, abuse handling, and incident response are documented.
+- [ ] Succera name/domain clearance and English/French launch scope are decided.

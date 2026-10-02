@@ -2565,6 +2565,21 @@
   .account-roles > div {
     @apply rounded-lg bg-slate-50 p-3;
   }
+  .buyer-review-state {
+    @apply mb-6 flex flex-col gap-3 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 sm:flex-row sm:items-center;
+  }
+  .buyer-review-state > div {
+    @apply min-w-40;
+  }
+  .buyer-review-state span {
+    @apply block text-xs font-medium uppercase tracking-wide text-emerald-800;
+  }
+  .buyer-review-state strong {
+    @apply mt-1 block text-sm font-semibold text-slate-900;
+  }
+  .buyer-review-state p {
+    @apply flex-1 text-sm text-slate-600;
+  }
   .verification-buyer-stack,
   .verification-admin-stack {
     @apply space-y-6;
@@ -2665,9 +2680,11 @@
   }
   .verification-evidence-sheet strong,
   .verification-review-grid strong,
+  .verification-evidence-sheet a,
   .verification-review-grid a {
     @apply mt-1 block break-words text-sm font-semibold text-slate-800;
   }
+  .verification-evidence-sheet a,
   .verification-review-grid a {
     @apply text-emerald-800 underline;
   }
@@ -2716,6 +2733,51 @@
   }
   .verification-history small {
     @apply text-xs text-slate-400;
+  }
+  .admin-review-shell {
+    @apply min-h-screen bg-slate-50;
+  }
+  .admin-review-header {
+    @apply flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4 sm:px-8;
+  }
+  .admin-review-header .brand {
+    --brand-width: 132px;
+  }
+  .admin-review-header > a:last-child {
+    @apply text-sm font-medium text-emerald-800 underline;
+  }
+  .admin-review-main {
+    @apply mx-auto flex max-w-5xl flex-col gap-5 px-5 py-8 sm:px-8 sm:py-12;
+  }
+  .admin-review-title h1 {
+    @apply mt-2 text-3xl font-semibold text-slate-950 sm:text-4xl;
+  }
+  .admin-review-title > p:last-child {
+    @apply mt-3 max-w-2xl leading-relaxed text-slate-600;
+  }
+  .admin-review-main > .verification-review-list {
+    @apply overflow-hidden rounded-xl border border-slate-200 bg-white;
+  }
+  .admin-review-filters {
+    @apply grid overflow-hidden rounded-xl border border-slate-200 bg-white sm:grid-cols-5;
+  }
+  .admin-review-filters a {
+    @apply flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 text-sm text-slate-600 last:border-0 sm:border-r sm:border-b-0;
+  }
+  .admin-review-filters a.active {
+    @apply bg-emerald-50 font-semibold text-emerald-900;
+  }
+  .admin-review-filters strong {
+    @apply rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-slate-600;
+  }
+  .admin-review-filters a.active strong {
+    @apply bg-emerald-700 text-white;
+  }
+  .admin-review-card-meta {
+    @apply flex flex-wrap gap-x-5 gap-y-2 text-xs capitalize text-slate-500;
+  }
+  .admin-review-main a.verification-review-card {
+    @apply block transition-colors hover:bg-emerald-50/40 focus-visible:bg-emerald-50/40;
   }
 }
 @media (max-width: 480px) {

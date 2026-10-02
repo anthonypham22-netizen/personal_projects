@@ -1,6 +1,6 @@
 import { randomUUID, randomBytes } from "node:crypto";
 import { z } from "zod";
-import { all, one, run, db } from "./db";
+import { all, one, run, db, type DatabaseClient } from "./db";
 import { hashPassword, verifyPassword, tokenHash } from "./passwords";
 import {
   PROVINCES,
@@ -20,6 +20,9 @@ import {
   introducedByAcquireForSource,
   NOTIFICATION_TYPES,
   NOTIFICATION_FREQUENCIES,
+  BUYER_IDENTITY_TYPES,
+  BUYER_CAPITAL_SOURCES,
+  BUYER_EQUITY_RANGES,
   type User,
   type Deal,
   type Access,
@@ -58,7 +61,7 @@ import { electronicSignatureCapability } from "./electronic-signature-provider";
 import { teaserSafetyCapability } from "./teaser-safety-provider";
 import { teaserSafetyReviewInputDigest } from "./teaser-safety";
 import { slugify } from "./utils";
-import { inImmediateTransaction } from "./sqlite-transaction";
+import { inTransaction } from "./transaction";
 import {
   recalculateDealMatch,
   recalculateBuyerOrganizationMatches,
@@ -102,6 +105,12 @@ import {
   saveNotificationPreferences,
 } from "./notifications";
 import { isDemoAllowed } from "./app-environment";
+import {
+  buyerIdentityIsApproved,
+  buyerIdentityVerificationForUser,
+  isAdmin,
+  submitBuyerIdentityVerification,
+} from "./buyer-identity-verification";
 
 export class AppError extends Error {
   constructor(
@@ -126,6 +135,29 @@ const optionalSignedAmount = z.preprocess(
   (value) =>
     value === "" || value === undefined || value === null ? null : value,
   z.coerce.number().int().min(-10_000_000_000).max(10_000_000_000).nullable(),
+);
+const normalizeOptionalHttpUrl = (value: unknown) => {
+  if (value === "" || value === undefined || value === null) return null;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return /^[a-z][a-z\d+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
+};
+const optionalHttpUrl = z.preprocess(
+  normalizeOptionalHttpUrl,
+  z
+    .url()
+    .max(500)
+    .refine((value) => {
+      if (!/^https?:\/\//i.test(value)) return false;
+      try {
+        const protocol = new URL(value).protocol;
+        return protocol === "http:" || protocol === "https:";
+      } catch {
+        return false;
+      }
+    }, "URL must use http:// or https://.")
+    .nullable(),
 );
 const closedDate = z.iso
   .date()
@@ -154,8 +186,8 @@ const statusTextForAudit = (status: DealMatch["status"]) =>
 const organizationTypeFor = (role: User["role"]): OrganizationType =>
   role === "advisor" ? "advisor" : role === "owner" ? "business" : "buyer";
 const slugPart = (value: string) => slugify(value, "firm");
-export const organizationFor = (userId: string) => {
-  const organization = one<
+export const organizationFor = async (userId: string) => {
+  const organization = await one<
     Omit<Organization, "can_manage"> & { can_manage: number }
   >(
     `SELECT o.*,om.role membership_role,
@@ -169,20 +201,20 @@ export const organizationFor = (userId: string) => {
     ? { ...organization, can_manage: Boolean(organization.can_manage) }
     : undefined;
 };
-const organizationMembers = (organizationId: string) =>
-  all<OrganizationMember>(
+const organizationMembers = async (organizationId: string) =>
+  await all<OrganizationMember>(
     `SELECT om.*,u.name,u.email,u.role persona
   FROM organization_members om JOIN users u ON u.id=om.user_id
   WHERE om.organization_id=? ORDER BY CASE om.role WHEN 'owner' THEN 1 WHEN 'admin' THEN 2 WHEN 'member' THEN 3 ELSE 4 END,u.name`,
     organizationId,
   );
 const isPlatformAdmin = (user: User) => {
-  return Boolean(user.is_platform_admin);
+  return Boolean(user.is_platform_admin) || isAdmin(user);
 };
-const buyerVerificationProfileFor = (
+const buyerVerificationProfileFor = async (
   organization: Organization,
-): BuyerVerificationProfile | undefined => {
-  const profile = one<Omit<BuyerVerificationProfile, "can_manage">>(
+): Promise<BuyerVerificationProfile | undefined> => {
+  const profile = await one<Omit<BuyerVerificationProfile, "can_manage">>(
     `SELECT profile.*,organization.website,
        organization.organization_type buyer_type
      FROM buyer_verification_profiles profile
@@ -194,10 +226,10 @@ const buyerVerificationProfileFor = (
     ? { ...profile, can_manage: organization.can_manage }
     : undefined;
 };
-const buyerFirmProfileFor = (
+const buyerFirmProfileFor = async (
   organization: Organization,
-): BuyerFirmProfile | undefined => {
-  const profile = one<Omit<BuyerFirmProfile, "can_manage">>(
+): Promise<BuyerFirmProfile | undefined> => {
+  const profile = await one<Omit<BuyerFirmProfile, "can_manage">>(
     `SELECT organization_id,fund_structure,financing_profile,
        self_reported_acquisition_count,revision,updated_at
      FROM buyer_firm_profiles WHERE organization_id=?`,
@@ -207,10 +239,10 @@ const buyerFirmProfileFor = (
     ? { ...profile, can_manage: organization.can_manage }
     : undefined;
 };
-const publicOrganizationProfileFor = (
+const publicOrganizationProfileFor = async (
   organization: Organization,
-): PublicOrganizationProfile | undefined => {
-  const profile = one<
+): Promise<PublicOrganizationProfile | undefined> => {
+  const profile = await one<
     Omit<
       PublicOrganizationProfile,
       | "can_manage"
@@ -239,14 +271,18 @@ const publicOrganizationProfileFor = (
     show_website: Boolean(profile.show_website),
     show_province: Boolean(profile.show_province),
     show_verified_transactions: Boolean(profile.show_verified_transactions),
-    industries: all<{ industry: string }>(
+    industries: await all<{
+      industry: string;
+    }>(
       `SELECT industry FROM organization_public_industries
-       WHERE organization_id=? ORDER BY rowid`,
+       WHERE organization_id=? ORDER BY industry`,
       organization.id,
     ).map(({ industry }) => industry),
-    locations: all<{ province: string }>(
+    locations: await all<{
+      province: string;
+    }>(
       `SELECT province FROM organization_public_locations
-       WHERE organization_id=? ORDER BY rowid`,
+       WHERE organization_id=? ORDER BY province`,
       organization.id,
     ).map(({ province }) => province),
     can_manage: organization.can_manage,
@@ -254,10 +290,10 @@ const publicOrganizationProfileFor = (
 };
 const transactionVerificationLabel = (verified: number) =>
   verified ? ("Succera verified" as const) : ("Self-reported" as const);
-const closedTransactionsForOrganization = (
+const closedTransactionsForOrganization = async (
   organization: Organization,
-): ClosedTransaction[] =>
-  all<Omit<ClosedTransaction, "can_manage" | "verification_label">>(
+): Promise<ClosedTransaction[]> =>
+  await all<Omit<ClosedTransaction, "can_manage" | "verification_label">>(
     `SELECT * FROM closed_transactions
      WHERE buyer_organization_id=?
      ORDER BY closed_date DESC,created_at DESC,id DESC`,
@@ -267,10 +303,12 @@ const closedTransactionsForOrganization = (
     verification_label: transactionVerificationLabel(transaction.verified),
     can_manage: organization.can_manage,
   }));
-const closedTransactionReviewQueue = (
+const closedTransactionReviewQueue = async (
   reviewer: User,
-): ClosedTransactionReviewEntry[] =>
-  all<Omit<ClosedTransactionReviewEntry, "can_manage" | "verification_label">>(
+): Promise<ClosedTransactionReviewEntry[]> =>
+  await all<
+    Omit<ClosedTransactionReviewEntry, "can_manage" | "verification_label">
+  >(
     `SELECT ct.*,organization.name buyer_organization_name,
        submitter.name submitted_by_name
      FROM closed_transactions ct
@@ -312,8 +350,10 @@ const closedTransactionReviewQueue = (
     verification_label: transactionVerificationLabel(transaction.verified),
     can_manage: false,
   }));
-const verificationAdminQueue = (reviewer: User): VerificationAdminEntry[] =>
-  all<VerificationAdminEntry>(
+const verificationAdminQueue = async (
+  reviewer: User,
+): Promise<VerificationAdminEntry[]> =>
+  await all<VerificationAdminEntry>(
     `SELECT profile.*,organization.name organization_name,
        organization.website,organization.organization_type buyer_type,
        organization.province,organization.verification_status,
@@ -328,7 +368,7 @@ const verificationAdminQueue = (reviewer: User): VerificationAdminEntry[] =>
      LEFT JOIN verification_reviews review ON review.id=(
        SELECT latest.id FROM verification_reviews latest
      WHERE latest.organization_id=profile.organization_id
-       ORDER BY latest.created_at DESC,latest.rowid DESC LIMIT 1
+       ORDER BY latest.created_at DESC,latest.id DESC LIMIT 1
      )
      WHERE profile.submitted_at IS NOT NULL
        AND EXISTS (
@@ -356,8 +396,10 @@ const verificationAdminQueue = (reviewer: User): VerificationAdminEntry[] =>
     // without limit as buyer organizations accumulate.
     100,
   ).map((entry) => ({ ...entry, can_manage: false }));
-const verificationReviews = (reviewer: User): VerificationReview[] =>
-  all<VerificationReview>(
+const verificationReviews = async (
+  reviewer: User,
+): Promise<VerificationReview[]> =>
+  await all<VerificationReview>(
     `SELECT review.*,reviewer.name reviewer_name,
        organization.name organization_name
      FROM verification_reviews review
@@ -380,12 +422,12 @@ const verificationReviews = (reviewer: User): VerificationReview[] =>
            AND cross_realm_members.status='active'
            AND cross_realm_user.is_demo<>?
        )
-     ORDER BY review.created_at DESC,review.rowid DESC LIMIT 20`,
+     ORDER BY review.created_at DESC,review.id DESC LIMIT 20`,
     reviewer.is_demo,
     reviewer.is_demo,
   );
-const dealOrganizationMembership = (userId: string, deal: Deal) =>
-  one<{ role: "owner" | "admin" | "member" | "viewer" }>(
+const dealOrganizationMembership = async (userId: string, deal: Deal) =>
+  await one<{ role: "owner" | "admin" | "member" | "viewer" }>(
     `SELECT role FROM organization_members
   WHERE user_id=? AND status='active' AND organization_id IN (?,?)
   ORDER BY CASE role WHEN 'owner' THEN 1 WHEN 'admin' THEN 2 WHEN 'member' THEN 3 ELSE 4 END LIMIT 1`,
@@ -396,37 +438,43 @@ const dealOrganizationMembership = (userId: string, deal: Deal) =>
 const legacyDirectAccess = (user: User, deal: Deal) =>
   (!deal.owner_organization_id && deal.owner_id === user.id) ||
   (!deal.advisor_organization_id && deal.advisor_id === user.id);
-const isDealTeamMember = (user: User, deal: Deal) =>
+const isDealTeamMember = async (user: User, deal: Deal) =>
   user.role !== "buyer" &&
-  (!!dealOrganizationMembership(user.id, deal) ||
+  (!!(await dealOrganizationMembership(user.id, deal)) ||
     legacyDirectAccess(user, deal));
-export const isManager = (user: User, deal: Deal) => {
-  const role = dealOrganizationMembership(user.id, deal)?.role;
+export const isManager = async (user: User, deal: Deal) => {
+  const membership = await dealOrganizationMembership(user.id, deal);
+  const role = membership?.role;
   return (
     user.role !== "buyer" &&
     (["owner", "admin", "member"].includes(role || "") ||
       legacyDirectAccess(user, deal))
   );
 };
-const canManageOwnerSide = (user: User, deal: Deal) =>
+const canManageOwnerSide = async (user: User, deal: Deal) =>
   user.role !== "buyer" &&
   ((!deal.owner_organization_id && deal.owner_id === user.id) ||
     ["owner", "admin", "member"].includes(
-      one<{ role: string }>(
-        "SELECT role FROM organization_members WHERE user_id=? AND organization_id=? AND status='active'",
-        user.id,
-        deal.owner_organization_id || "",
+      (
+        await one<{ role: string }>(
+          "SELECT role FROM organization_members WHERE user_id=? AND organization_id=? AND status='active'",
+          user.id,
+          deal.owner_organization_id || "",
+        )
       )?.role || "",
     ));
-export const getDeal = (id: string) => {
-  const deal = one<Deal>("SELECT * FROM deals WHERE id=?", id);
+export const getDeal = async (id: string) => {
+  const deal = await one<Deal>("SELECT * FROM deals WHERE id=?", id);
   if (!deal) throw new AppError("This deal is not available.", 404);
   return deal;
 };
-export function dealMatchesForUser(user: User, dealId: string): DealMatch[] {
-  const deal = getDeal(dealId);
-  requireManager(user, deal);
-  return dealMatchesForDeals([dealId]);
+export async function dealMatchesForUser(
+  user: User,
+  dealId: string,
+): Promise<DealMatch[]> {
+  const deal = await getDeal(dealId);
+  await requireManager(user, deal);
+  return await dealMatchesForDeals([dealId]);
 }
 
 const groupedProjectValues = <
@@ -445,7 +493,7 @@ const groupedProjectValues = <
   return values;
 };
 
-function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
+async function dealMatchesForDeals(dealIds: string[]): Promise<DealMatch[]> {
   if (!dealIds.length) return [];
   const placeholders = dealIds.map(() => "?").join(",");
   type DealMatchRow = Omit<
@@ -468,7 +516,7 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
     buyer_firm_profile_updated_at: string;
     deal_sector: string;
   };
-  const rows = all<DealMatchRow>(
+  const rows = await all<DealMatchRow>(
     `SELECT dm.*,
        bp.name buyer_project_name,
        bp.thesis buyer_project_thesis,
@@ -531,17 +579,17 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
   let provinces = new Map<string, string[]>();
   if (projectIds.length) {
     sectors = groupedProjectValues(
-      all<{ buyer_project_id: string; sector: string }>(
+      await all<{ buyer_project_id: string; sector: string }>(
         `SELECT buyer_project_id,sector FROM buyer_project_sectors
-         WHERE buyer_project_id IN (${projectPlaceholders}) ORDER BY rowid`,
+         WHERE buyer_project_id IN (${projectPlaceholders}) ORDER BY buyer_project_id,sector`,
         ...projectIds,
       ),
       "sector",
     );
     provinces = groupedProjectValues(
-      all<{ buyer_project_id: string; province: string }>(
+      await all<{ buyer_project_id: string; province: string }>(
         `SELECT buyer_project_id,province FROM buyer_project_provinces
-         WHERE buyer_project_id IN (${projectPlaceholders}) ORDER BY rowid`,
+         WHERE buyer_project_id IN (${projectPlaceholders}) ORDER BY buyer_project_id,province`,
         ...projectIds,
       ),
       "province",
@@ -582,7 +630,7 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
     const organizationPlaceholders = buyerOrganizationIds
       .map(() => "?")
       .join(",");
-    const transactions = all<
+    const transactions = await all<
       SellerVisibleClosedTransaction & { buyer_organization_id: string }
     >(
       `SELECT id,buyer_organization_id,industry,province,enterprise_value,
@@ -606,7 +654,7 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
       organizationTransactions.push(transaction);
       closedTransactions.set(buyer_organization_id, organizationTransactions);
     }
-    for (const event of all<
+    for (const event of await all<
       BuyerReputationEvent & { buyer_organization_id: string }
     >(
       `SELECT buyer_organization_id,deal_id,event_type,created_at
@@ -615,7 +663,7 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
          AND event_type IN (
            'teaser_sent','pursued','passed','intro_requested','loi_received'
          )
-       ORDER BY buyer_organization_id,created_at,rowid`,
+       ORDER BY buyer_organization_id,created_at,id`,
       ...buyerOrganizationIds,
     )) {
       const organizationEvents =
@@ -624,7 +672,7 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
       organizationEvents.push(safeEvent);
       reputationEvents.set(buyer_organization_id, organizationEvents);
     }
-    for (const transaction of all<
+    for (const transaction of await all<
       VerifiedTransactionEvidence & { buyer_organization_id: string }
     >(
       `SELECT buyer_organization_id,industry
@@ -699,15 +747,15 @@ function dealMatchesForDeals(dealIds: string[]): DealMatch[] {
   );
 }
 
-function dealOutreachFor(
+async function dealOutreachFor(
   user: User,
   organizationId: string,
   managedDealIds: string[],
-): DealOutreachRecipient[] {
+): Promise<DealOutreachRecipient[]> {
   const managerView = user.role !== "buyer";
   if (managerView && !managedDealIds.length) return [];
   const managerPlaceholders = managedDealIds.map(() => "?").join(",");
-  const rows = all<
+  const rows = await all<
     Omit<DealOutreachRecipient, "match_reasons"> & {
       score_breakdown_json: string;
     }
@@ -730,7 +778,7 @@ function dealOutreachFor(
          ? `o.deal_id IN (${managerPlaceholders})`
          : "dor.buyer_organization_id=?"
      }
-     ORDER BY o.created_at DESC,dor.rowid DESC`,
+     ORDER BY o.created_at DESC,dor.id DESC`,
     ...(managerView ? managedDealIds : [organizationId]),
   );
   return rows.map(({ score_breakdown_json, ...row }) => ({
@@ -751,7 +799,7 @@ type QualifiedDiscoveryMatch = {
   match_reasons: string[];
 };
 
-function qualifiedDiscoveryMatchesFor(
+async function qualifiedDiscoveryMatchesFor(
   organizationId: string,
   minimumScore: number,
   minimumVerificationStatus: BuyerVerificationStatus,
@@ -763,7 +811,7 @@ function qualifiedDiscoveryMatchesFor(
   const verificationPlaceholders = eligibleVerificationStatuses
     .map(() => "?")
     .join(",");
-  const rows = all<{
+  const rows = await all<{
     deal_id: string;
     buyer_project_id: string;
     buyer_project_name: string;
@@ -808,15 +856,15 @@ function qualifiedDiscoveryMatchesFor(
   return bestByDeal;
 }
 
-function introductionRequestsFor(
+async function introductionRequestsFor(
   user: User,
   organizationId: string,
   managedDealIds: string[],
-): IntroductionRequest[] {
+): Promise<IntroductionRequest[]> {
   const managerView = user.role !== "buyer";
   if (managerView && !managedDealIds.length) return [];
   const placeholders = managedDealIds.map(() => "?").join(",");
-  const rows = all<
+  const rows = await all<
     Omit<IntroductionRequest, "match_reasons"> & {
       score_breakdown_json: string;
     }
@@ -824,6 +872,11 @@ function introductionRequestsFor(
     `SELECT ir.*,d.title deal_title,organization.name buyer_organization_name,
        organization.verification_status buyer_organization_verification_status,
        project.name buyer_project_name,requester.name requested_by_user_name,
+       EXISTS(
+         SELECT 1 FROM buyer_verifications identity_review
+         WHERE identity_review.user_id=requester.id
+           AND identity_review.status='approved'
+       ) buyer_profile_reviewed,
        dm.score match_score,dm.score_breakdown_json,
        (
          SELECT COUNT(DISTINCT previous.id)
@@ -864,35 +917,46 @@ function introductionRequestsFor(
       .map((reason) => reason.dimension),
   }));
 }
-export const membership = (dealId: string, userId: string) =>
-  one<Access>(
+export const membership = async (dealId: string, userId: string) =>
+  await one<Access>(
     "SELECT * FROM access WHERE deal_id=? AND buyer_id=?",
     dealId,
     userId,
   );
-const hasApprovedAccess = (
+const hasApprovedAccess = async (
   user: User,
   deal: Deal,
   member?: Pick<Access, "status">,
-) => isDealTeamMember(user, deal) || member?.status === "approved";
-export const canAccess = (user: User, deal: Deal) =>
-  hasApprovedAccess(user, deal, membership(deal.id, user.id));
-export function requireManager(user: User, deal: Deal) {
-  if (!isManager(user, deal))
+) =>
+  (await isDealTeamMember(user, deal)) ||
+  (member?.status === "approved" &&
+    user.role === "buyer" &&
+    (await buyerIdentityIsApproved(user.id)));
+export const canAccess = async (user: User, deal: Deal) =>
+  await hasApprovedAccess(user, deal, await membership(deal.id, user.id));
+export async function requireManager(user: User, deal: Deal) {
+  if (!(await isManager(user, deal)))
     throw new AppError("Only an authorized deal-team member can do that.", 403);
 }
-export function requireAccess(user: User, deal: Deal) {
-  if (!canAccess(user, deal))
+export async function requireAccess(user: User, deal: Deal) {
+  if (!(await canAccess(user, deal)))
     throw new AppError("Confidential access has not been approved.", 403);
 }
-function canReadDocumentWithMembership(
+async function requireApprovedBuyerIdentity(
+  userId: string,
+  message = "Buyer verification must be approved before confidential deal access or LOI submission.",
+) {
+  if (!(await buyerIdentityIsApproved(userId)))
+    throw new AppError(message, 403);
+}
+async function canReadDocumentWithMembership(
   user: User,
   deal: Deal,
   doc: Pick<Document, "audience" | "buyer_id" | "category">,
   member?: Pick<Access, "status">,
-  teamMember = isDealTeamMember(user, deal),
+  teamMember?: boolean,
 ) {
-  if (teamMember) return true;
+  if (teamMember ?? (await isDealTeamMember(user, deal))) return true;
   if (!member || ["denied", "revoked"].includes(member.status)) return false;
   if (
     doc.category === "NDA" &&
@@ -900,52 +964,54 @@ function canReadDocumentWithMembership(
     doc.buyer_id === user.id
   )
     return true;
+  if (user.role !== "buyer" || !(await buyerIdentityIsApproved(user.id)))
+    return false;
   return (
     member.status === "approved" &&
     (doc.audience === "approved" ||
       (doc.audience === "buyer" && doc.buyer_id === user.id))
   );
 }
-export function canReadDocument(
+export async function canReadDocument(
   user: User,
   deal: Deal,
   doc: Pick<Document, "audience" | "buyer_id" | "category">,
 ) {
-  return canReadDocumentWithMembership(
+  return await canReadDocumentWithMembership(
     user,
     deal,
     doc,
-    membership(deal.id, user.id),
+    await membership(deal.id, user.id),
   );
 }
-export function audit(user: User, dealId: string, action: string) {
-  run(
-    "INSERT INTO activity(id,deal_id,actor_id,action) VALUES(?,?,?,?)",
-    randomUUID(),
-    dealId,
-    user.id,
-    action,
-  );
+export async function audit(
+  user: User,
+  dealId: string,
+  action: string,
+  database: DatabaseClient = db(),
+) {
+  await database
+    .prepare("INSERT INTO activity(id,deal_id,actor_id,action) VALUES(?,?,?,?)")
+    .run(randomUUID(), dealId, user.id, action);
 }
-export function limit(key: string, maximum: number, seconds = 900) {
+export async function limit(key: string, maximum: number, seconds = 900) {
   const now = Date.now();
-  run("DELETE FROM rate_limits WHERE resets_at < ?", now);
-  run(
-    "INSERT INTO rate_limits(key,attempts,resets_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET attempts=attempts+1",
+  await run("DELETE FROM rate_limits WHERE resets_at < ?", now);
+  await run(
+    "INSERT INTO rate_limits(key,attempts,resets_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET attempts=rate_limits.attempts+1",
     key,
     now + seconds * 1000,
   );
-  if (
-    (one<{ attempts: number }>(
-      "SELECT attempts FROM rate_limits WHERE key=?",
-      key,
-    )?.attempts || 0) > maximum
-  )
+  const record = await one<{ attempts: number }>(
+    "SELECT attempts FROM rate_limits WHERE key=?",
+    key,
+  );
+  if ((record?.attempts || 0) > maximum)
     throw new AppError("Too many attempts. Please try again later.", 429);
 }
-export function sessionUser(token?: string): User | undefined {
+export async function sessionUser(token?: string): Promise<User | undefined> {
   if (!token) return undefined;
-  return one<User>(
+  return await one<User>(
     `SELECT ${userColumns
       .split(",")
       .map((c) => `u.${c}`)
@@ -957,10 +1023,10 @@ export function sessionUser(token?: string): User | undefined {
     isDemoAllowed() ? 1 : 0,
   );
 }
-export function createSession(userId: string) {
-  run("DELETE FROM sessions WHERE expires_at<?", Date.now());
+export async function createSession(userId: string) {
+  await run("DELETE FROM sessions WHERE expires_at<?", Date.now());
   const token = randomBytes(32).toString("hex");
-  run(
+  await run(
     "INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)",
     tokenHash(token),
     userId,
@@ -968,7 +1034,7 @@ export function createSession(userId: string) {
   );
   return token;
 }
-export function login(input: unknown) {
+export async function login(input: unknown) {
   const data = parse(
     z.object({
       email: z.email().max(254),
@@ -977,16 +1043,16 @@ export function login(input: unknown) {
     input,
   );
   const email = data.email.toLowerCase();
-  limit(`login:${tokenHash(email)}`, 10);
-  const user = one<User & { password_hash: string }>(
+  await limit(`login:${tokenHash(email)}`, 10);
+  const user = await one<User & { password_hash: string }>(
     "SELECT * FROM users WHERE email=? AND is_demo=0",
     email,
   );
   if (!user || !verifyPassword(data.password, user.password_hash))
     throw new AppError("Email or password is incorrect.", 401);
-  return createSession(user.id);
+  return await createSession(user.id);
 }
-export function register(input: unknown) {
+export async function register(input: unknown) {
   if (process.env.ALLOW_REGISTRATION === "false")
     throw new AppError(
       "Registration is currently closed. Contact your pilot administrator.",
@@ -1002,9 +1068,9 @@ export function register(input: unknown) {
     }),
     input,
   );
-  limit("registration", 30, 3600);
+  await limit("registration", 30, 3600);
   const email = data.email.toLowerCase();
-  if (one("SELECT id FROM users WHERE email=?", email))
+  if (await one("SELECT id FROM users WHERE email=?", email))
     throw new AppError(
       "An account with this email already exists. Please sign in.",
     );
@@ -1012,13 +1078,13 @@ export function register(input: unknown) {
     organizationId = randomUUID(),
     database = db(),
     passwordHash = hashPassword(data.password);
-  inImmediateTransaction(database, () => {
-    database
+  await inTransaction(database, async (transaction) => {
+    await transaction
       .prepare(
         "INSERT INTO users(id,email,password_hash,name,company,role) VALUES(?,?,?,?,?,?)",
       )
       .run(id, email, passwordHash, data.name, data.company, data.role);
-    database
+    await transaction
       .prepare(
         "INSERT INTO organizations(id,name,slug,organization_type) VALUES(?,?,?,?)",
       )
@@ -1028,25 +1094,25 @@ export function register(input: unknown) {
         `${slugPart(data.company)}-${organizationId.slice(0, 12)}`,
         organizationTypeFor(data.role),
       );
-    database
+    await transaction
       .prepare(
         "INSERT OR IGNORE INTO organization_public_profiles(organization_id) VALUES(?)",
       )
       .run(organizationId);
-    database
+    await transaction
       .prepare(
         "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'owner','active')",
       )
       .run(randomUUID(), organizationId, id);
     if (data.role === "buyer") {
-      database
+      await transaction
         .prepare(
           `INSERT INTO buyer_verification_profiles(
              organization_id,legal_name,updated_by_user_id
            ) VALUES(?,?,?)`,
         )
         .run(organizationId, data.company, id);
-      database
+      await transaction
         .prepare(
           `INSERT INTO buyer_firm_profiles(
              organization_id,updated_by_user_id
@@ -1055,7 +1121,7 @@ export function register(input: unknown) {
         .run(organizationId, id);
     }
   });
-  return createSession(id);
+  return await createSession(id);
 }
 export function match(user: User, deal: Deal) {
   const reasons: string[] = [];
@@ -1302,8 +1368,8 @@ const isEligibleBuyerOrganizationType = (organizationType: OrganizationType) =>
   buyerOrganizationTypes.has(organizationType);
 const isEligibleBuyerOrganization = (organization: Organization) =>
   isEligibleBuyerOrganizationType(organization.organization_type);
-const requireBuyerProjectManager = (user: User) => {
-  const organization = organizationFor(user.id);
+const requireBuyerProjectManager = async (user: User) => {
+  const organization = await organizationFor(user.id);
   if (!organization)
     throw new AppError(
       "Your account is not connected to an organization.",
@@ -1321,63 +1387,66 @@ const requireBuyerProjectManager = (user: User) => {
     );
   return organization;
 };
-const projectRow = (id: string, organizationId: string) =>
-  one<BuyerProject>(
+const projectRow = async (id: string, organizationId: string) =>
+  await one<BuyerProject>(
     "SELECT * FROM buyer_projects WHERE id=? AND organization_id=?",
     id,
     organizationId,
   );
-const projectWithFilters = (id: string, organizationId: string) => {
-  const project = projectRow(id, organizationId);
+const projectWithFilters = async (id: string, organizationId: string) => {
+  const project = await projectRow(id, organizationId);
   if (!project) throw new AppError("This buyer project is not available.", 404);
   return {
     ...project,
-    sectors: all<{ sector: string }>(
-      "SELECT sector FROM buyer_project_sectors WHERE buyer_project_id=? ORDER BY rowid",
+    sectors: await all<{
+      sector: string;
+    }>(
+      "SELECT sector FROM buyer_project_sectors WHERE buyer_project_id=? ORDER BY sector",
       id,
     ).map(({ sector }) => sector),
-    provinces: all<{ province: string }>(
-      "SELECT province FROM buyer_project_provinces WHERE buyer_project_id=? ORDER BY rowid",
+    provinces: await all<{
+      province: string;
+    }>(
+      "SELECT province FROM buyer_project_provinces WHERE buyer_project_id=? ORDER BY province",
       id,
     ).map(({ province }) => province),
-    keywords: all<{ keyword: string }>(
-      "SELECT keyword FROM buyer_project_keywords WHERE buyer_project_id=? ORDER BY rowid",
+    keywords: await all<{
+      keyword: string;
+    }>(
+      "SELECT keyword FROM buyer_project_keywords WHERE buyer_project_id=? ORDER BY keyword",
       id,
     ).map(({ keyword }) => keyword),
   };
 };
-const replaceBuyerProjectFilters = (
+const replaceBuyerProjectFilters = async (
   database: ReturnType<typeof db>,
   projectId: string,
   project: Pick<BuyerProjectInput, "sectors" | "provinces" | "keywords">,
 ) => {
-  database
+  await database
     .prepare("DELETE FROM buyer_project_sectors WHERE buyer_project_id=?")
     .run(projectId);
-  database
+  await database
     .prepare("DELETE FROM buyer_project_provinces WHERE buyer_project_id=?")
     .run(projectId);
-  database
+  await database
     .prepare("DELETE FROM buyer_project_keywords WHERE buyer_project_id=?")
     .run(projectId);
-  const sector = database.prepare(
+  const sector = await database.prepare(
     "INSERT INTO buyer_project_sectors(id,buyer_project_id,sector) VALUES(?,?,?)",
   );
-  const province = database.prepare(
+  const province = await database.prepare(
     "INSERT INTO buyer_project_provinces(id,buyer_project_id,province) VALUES(?,?,?)",
   );
-  const keyword = database.prepare(
+  const keyword = await database.prepare(
     "INSERT INTO buyer_project_keywords(id,buyer_project_id,keyword) VALUES(?,?,?)",
   );
-  project.sectors.forEach((value) =>
-    sector.run(randomUUID(), projectId, value),
-  );
-  project.provinces.forEach((value) =>
-    province.run(randomUUID(), projectId, value),
-  );
-  project.keywords.forEach((value) =>
-    keyword.run(randomUUID(), projectId, value),
-  );
+  for (const value of project.sectors)
+    await sector.run(randomUUID(), projectId, value);
+  for (const value of project.provinces)
+    await province.run(randomUUID(), projectId, value);
+  for (const value of project.keywords)
+    await keyword.run(randomUUID(), projectId, value);
 };
 const projectValues = (project: BuyerProjectInput) => [
   project.name,
@@ -1396,13 +1465,13 @@ const projectValues = (project: BuyerProjectInput) => [
   project.ownership_preference,
   project.transaction_type,
 ];
-export function createBuyerProject(user: User, input: unknown) {
-  const organization = requireBuyerProjectManager(user);
+export async function createBuyerProject(user: User, input: unknown) {
+  const organization = await requireBuyerProjectManager(user);
   const project = normalizedBuyerProject(parse(buyerProjectSchema, input));
   const id = randomUUID();
   const database = db();
-  inImmediateTransaction(database, () => {
-    database
+  await inTransaction(database, async (transaction) => {
+    await transaction
       .prepare(
         `INSERT INTO buyer_projects(
           id,organization_id,created_by_user_id,name,status,thesis,
@@ -1412,15 +1481,18 @@ export function createBuyerProject(user: User, input: unknown) {
         ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(id, organization.id, user.id, ...projectValues(project));
-    replaceBuyerProjectFilters(database, id, project);
-    recalculateBuyerProjectMatches(database, id);
+    await replaceBuyerProjectFilters(transaction, id, project);
+    await recalculateBuyerProjectMatches(transaction, id);
   });
   return { id, message: "Acquisition project created." };
 }
-export function updateBuyerProject(user: User, input: unknown) {
-  const organization = requireBuyerProjectManager(user);
+export async function updateBuyerProject(user: User, input: unknown) {
+  const organization = await requireBuyerProjectManager(user);
   const update = parse(buyerProjectUpdateSchema, input);
-  const existing = projectWithFilters(update.buyer_project_id, organization.id);
+  const existing = await projectWithFilters(
+    update.buyer_project_id,
+    organization.id,
+  );
   const merged = normalizedBuyerProject(
     parse(buyerProjectSchema, {
       ...existing,
@@ -1435,8 +1507,8 @@ export function updateBuyerProject(user: User, input: unknown) {
     }),
   );
   const database = db();
-  inImmediateTransaction(database, () => {
-    database
+  await inTransaction(database, async (transaction) => {
+    await transaction
       .prepare(
         `UPDATE buyer_projects SET
           name=?,status=?,thesis=?,min_revenue=?,max_revenue=?,min_ebitda=?,max_ebitda=?,
@@ -1445,16 +1517,20 @@ export function updateBuyerProject(user: User, input: unknown) {
           updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND organization_id=?`,
       )
       .run(...projectValues(merged), update.buyer_project_id, organization.id);
-    replaceBuyerProjectFilters(database, update.buyer_project_id, merged);
-    recalculateBuyerProjectMatches(database, update.buyer_project_id);
+    await replaceBuyerProjectFilters(
+      transaction,
+      update.buyer_project_id,
+      merged,
+    );
+    await recalculateBuyerProjectMatches(transaction, update.buyer_project_id);
   });
   return {
     id: update.buyer_project_id,
     message: "Acquisition project updated.",
   };
 }
-export function setBuyerProjectStatus(user: User, input: unknown) {
-  const organization = requireBuyerProjectManager(user);
+export async function setBuyerProjectStatus(user: User, input: unknown) {
+  const organization = await requireBuyerProjectManager(user);
   const project = parse(
     z.object({
       buyer_project_id: idSchema,
@@ -1462,50 +1538,50 @@ export function setBuyerProjectStatus(user: User, input: unknown) {
     }),
     input,
   );
-  if (!projectRow(project.buyer_project_id, organization.id))
+  if (!(await projectRow(project.buyer_project_id, organization.id)))
     throw new AppError("This buyer project is not available.", 404);
   const database = db();
-  inImmediateTransaction(database, () => {
-    database
+  await inTransaction(database, async (transaction) => {
+    await transaction
       .prepare(
         "UPDATE buyer_projects SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=? AND organization_id=?",
       )
       .run(project.status, project.buyer_project_id, organization.id);
-    recalculateBuyerProjectMatches(database, project.buyer_project_id);
+    await recalculateBuyerProjectMatches(transaction, project.buyer_project_id);
   });
   return {
     id: project.buyer_project_id,
     message: "Acquisition project status updated.",
   };
 }
-const buyerProjectsFor = (organizationId: string, canManage: boolean) => {
-  const projects = all<BuyerProject>(
+const buyerProjectsFor = async (organizationId: string, canManage: boolean) => {
+  const projects = await all<BuyerProject>(
     "SELECT * FROM buyer_projects WHERE organization_id=? ORDER BY created_at DESC,name",
     organizationId,
   );
   const sectors = groupedProjectValues(
-    all<{ buyer_project_id: string; sector: string }>(
+    await all<{ buyer_project_id: string; sector: string }>(
       `SELECT bps.buyer_project_id,bps.sector FROM buyer_project_sectors bps
        JOIN buyer_projects bp ON bp.id=bps.buyer_project_id
-       WHERE bp.organization_id=? ORDER BY bps.rowid`,
+       WHERE bp.organization_id=? ORDER BY bps.buyer_project_id,bps.sector`,
       organizationId,
     ),
     "sector",
   );
   const provinces = groupedProjectValues(
-    all<{ buyer_project_id: string; province: string }>(
+    await all<{ buyer_project_id: string; province: string }>(
       `SELECT bpp.buyer_project_id,bpp.province FROM buyer_project_provinces bpp
        JOIN buyer_projects bp ON bp.id=bpp.buyer_project_id
-       WHERE bp.organization_id=? ORDER BY bpp.rowid`,
+       WHERE bp.organization_id=? ORDER BY bpp.buyer_project_id,bpp.province`,
       organizationId,
     ),
     "province",
   );
   const keywords = groupedProjectValues(
-    all<{ buyer_project_id: string; keyword: string }>(
+    await all<{ buyer_project_id: string; keyword: string }>(
       `SELECT bpk.buyer_project_id,bpk.keyword FROM buyer_project_keywords bpk
        JOIN buyer_projects bp ON bp.id=bpk.buyer_project_id
-       WHERE bp.organization_id=? ORDER BY bpk.rowid`,
+       WHERE bp.organization_id=? ORDER BY bpk.buyer_project_id,bpk.keyword`,
       organizationId,
     ),
     "keyword",
@@ -1519,8 +1595,8 @@ const buyerProjectsFor = (organizationId: string, canManage: boolean) => {
   }));
 };
 
-export function workspace(user: User): WorkspaceData {
-  const organization = organizationFor(user.id);
+export async function workspace(user: User): Promise<WorkspaceData> {
+  const organization = await organizationFor(user.id);
   if (!organization)
     throw new AppError(
       "Your account is not connected to an organization. Contact your administrator.",
@@ -1528,13 +1604,18 @@ export function workspace(user: User): WorkspaceData {
     );
   const memberships =
     user.role === "buyer"
-      ? all<Access>("SELECT * FROM access WHERE buyer_id=?", user.id)
+      ? await all<Access>("SELECT * FROM access WHERE buyer_id=?", user.id)
       : [];
   const membershipByDeal = new Map(
     memberships.map((member) => [member.deal_id, member]),
   );
+  const buyerIdentityApproved =
+    user.role === "buyer" && (await buyerIdentityIsApproved(user.id));
   const organizationRoles = new Map(
-    all<{ organization_id: string; role: OrganizationMemberRole }>(
+    await all<{
+      organization_id: string;
+      role: OrganizationMemberRole;
+    }>(
       "SELECT organization_id,role FROM organization_members WHERE user_id=? AND status='active'",
       user.id,
     ).map((member) => [member.organization_id, member.role]),
@@ -1580,13 +1661,13 @@ export function workspace(user: User): WorkspaceData {
     );
   const qualifiedDiscoveryMatches =
     user.role === "buyer" && qualifiedDiscoveryVerificationEligible
-      ? qualifiedDiscoveryMatchesFor(
+      ? await qualifiedDiscoveryMatchesFor(
           organization.id,
           qualifiedDiscoveryMinScore,
           qualifiedDiscoveryMinVerificationStatus,
         )
       : new Map<string, QualifiedDiscoveryMatch>();
-  const rawDeals = all<Deal & { owner_is_demo: number }>(
+  const rawDeals = await all<Deal & { owner_is_demo: number }>(
     `SELECT d.*,owner.is_demo owner_is_demo FROM deals d JOIN users owner ON owner.id=d.owner_id
     WHERE owner.is_demo=?
     AND ((d.owner_id=? AND d.owner_organization_id IS NULL) OR (d.advisor_id=? AND d.advisor_organization_id IS NULL)
@@ -1630,7 +1711,9 @@ export function workspace(user: User): WorkspaceData {
     const member = membershipByDeal.get(d.id),
       managing = canManageDeal(d),
       teamMember = teamMemberForDeal(d),
-      allowed = teamMember || member?.status === "approved",
+      allowed =
+        teamMember ||
+        (member?.status === "approved" && buyerIdentityApproved),
       discoveryMatch = qualifiedDiscoveryMatches.get(d.id);
     return {
       ...deal,
@@ -1669,7 +1752,7 @@ export function workspace(user: User): WorkspaceData {
   const accessibleIds = new Set(
     deals.filter((d) => d.has_access).map((d) => d.id),
   );
-  const dealFinancials = all<DealFinancial>(
+  const dealFinancials = await all<DealFinancial>(
     `SELECT * FROM deal_financials
      ORDER BY fiscal_year DESC,
        CASE period_type WHEN 'annual' THEN 1 WHEN 'trailing_twelve_months' THEN 2 ELSE 3 END`,
@@ -1689,91 +1772,106 @@ export function workspace(user: User): WorkspaceData {
         !["denied", "revoked"].includes(
           membershipByDeal.get(id)?.status || "denied",
         )));
-  const access = all<Access>(
-    "SELECT a.*,u.name,u.company,u.email FROM access a JOIN users u ON u.id=a.buyer_id ORDER BY a.created_at DESC",
-  ).filter(
-    (a) =>
-      ids.has(a.deal_id) &&
-      !previewIds.has(a.deal_id) &&
-      (teamMember(a.deal_id) || a.buyer_id === user.id),
-  );
+  const access = await all<Access>(
+    `SELECT a.*,u.name,u.company,u.email,
+       CASE WHEN verification.status='approved' THEN TRUE ELSE FALSE END buyer_identity_verified
+     FROM access a JOIN users u ON u.id=a.buyer_id
+     LEFT JOIN buyer_verifications verification ON verification.user_id=a.buyer_id
+     ORDER BY a.created_at DESC`,
+  )
+    .map((entry) => ({
+      ...entry,
+      buyer_identity_verified: Boolean(entry.buyer_identity_verified),
+    }))
+    .filter(
+      (a) =>
+        ids.has(a.deal_id) &&
+        !previewIds.has(a.deal_id) &&
+        (teamMember(a.deal_id) || a.buyer_id === user.id),
+    );
   const visibleAccessIds = new Set(access.map((entry) => entry.id));
   const electronicSignatureEnvelopes = visibleAccessIds.size
-    ? all<ElectronicSignatureEnvelope>(
+    ? await all<ElectronicSignatureEnvelope>(
         `SELECT id,access_id,deal_id,buyer_id,provider_name,status,buyer_signed_at,
            completed_at,failure_reason,created_at,updated_at
          FROM electronic_signature_envelopes
          WHERE access_id IN (${[...visibleAccessIds].map(() => "?").join(",")})
-         ORDER BY created_at DESC,rowid DESC`,
+         ORDER BY created_at DESC,id DESC`,
         ...visibleAccessIds,
       )
     : [];
-  const documents = all<
+  const documents = await all<
     Omit<Document, "watermark_enabled"> & { watermark_enabled: number }
   >(
     "SELECT d.id,d.deal_id,d.name,d.category,d.size,d.version,d.audience,d.buyer_id,d.watermark_enabled,d.uploaded_by,d.created_at,u.name uploader_name,p.title deal_title FROM documents d JOIN users u ON u.id=d.uploaded_by JOIN deals p ON p.id=d.deal_id ORDER BY d.created_at DESC",
   )
-    .filter((doc) => {
+    .filter(async (doc) => {
       const deal = rawDealById.get(doc.deal_id);
       return (
         !!deal &&
         !previewIds.has(doc.deal_id) &&
-        canReadDocumentWithMembership(
+        (await canReadDocumentWithMembership(
           user,
           deal,
           doc,
           membershipByDeal.get(doc.deal_id),
           teamMemberForDeal(deal),
-        )
+        ))
       );
     })
     .map((document) => ({
       ...document,
       watermark_enabled: Boolean(document.watermark_enabled),
     }));
-  const messages = all<Message>(
-    "SELECT m.*,u.name sender_name,u.role sender_role,d.title deal_title,b.name buyer_name FROM messages m JOIN users u ON u.id=m.sender_id JOIN users b ON b.id=m.buyer_id JOIN deals d ON d.id=m.deal_id ORDER BY m.created_at,m.rowid",
+  const messages = await all<Message>(
+    "SELECT m.*,u.name sender_name,u.role sender_role,d.title deal_title,b.name buyer_name FROM messages m JOIN users u ON u.id=m.sender_id JOIN users b ON b.id=m.buyer_id JOIN deals d ON d.id=m.deal_id ORDER BY m.created_at,m.id",
   ).filter((m) => ids.has(m.deal_id) && activeThread(m.deal_id, m.buyer_id));
   const teamDealIds = rawDeals
     .filter((deal) => teamMemberForDeal(deal))
     .map((deal) => deal.id);
   const dealInternalNotes =
     user.role !== "buyer" && teamDealIds.length
-      ? all<DealInternalNote>(
+      ? await all<DealInternalNote>(
           `SELECT n.*,COALESCE(u.name,'Former team member') author_name,u.role author_role
            FROM deal_internal_notes n
            LEFT JOIN users u ON u.id=n.author_user_id
            WHERE n.deal_id IN (${teamDealIds.map(() => "?").join(",")})
-           ORDER BY n.created_at DESC,n.rowid DESC`,
+           ORDER BY n.created_at DESC,n.id DESC`,
           ...teamDealIds,
         )
       : undefined;
-  const tasks = all<Task>(
+  const tasks = await all<Task>(
     "SELECT t.*,d.title deal_title FROM tasks t JOIN deals d ON d.id=t.deal_id ORDER BY t.due_date",
   ).filter(
     (t) =>
       ids.has(t.deal_id) &&
       (teamMember(t.deal_id) || (has(t.deal_id) && t.buyer_id === user.id)),
   );
-  const offers = all<Offer>(
+  const offers = await all<Offer>(
     "SELECT o.*,u.company buyer_name FROM offers o JOIN users u ON u.id=o.buyer_id ORDER BY o.created_at DESC",
   ).filter(
     (o) =>
       ids.has(o.deal_id) &&
       (teamMember(o.deal_id) || (has(o.deal_id) && o.buyer_id === user.id)),
   );
-  const activity = all<Activity>(
-    "SELECT a.*,u.name actor_name,d.title deal_title FROM activity a JOIN users u ON u.id=a.actor_id JOIN deals d ON d.id=a.deal_id ORDER BY a.created_at DESC,a.rowid DESC LIMIT 200",
+  const activity = await all<Activity>(
+    "SELECT a.*,u.name actor_name,d.title deal_title FROM activity a JOIN users u ON u.id=a.actor_id JOIN deals d ON d.id=a.deal_id ORDER BY a.created_at DESC,a.id DESC LIMIT 200",
   ).filter(
     (a) => teamMember(a.deal_id) || (has(a.deal_id) && a.actor_id === user.id),
   );
-  const advisors = all<WorkspaceData["advisors"][number]>(
+  const advisors = await all<WorkspaceData["advisors"][number]>(
     "SELECT id,name,company,province,bio FROM users WHERE role='advisor' AND (is_demo=0 OR ?=1)",
     user.is_demo && isDemoAllowed() ? 1 : 0,
   );
-  const notifications = notificationsForUser(db(), user.id);
-  const notificationUnreadCount = notificationUnreadCountForUser(db(), user.id);
-  const notificationPreferences = notificationPreferencesForUser(db(), user.id);
+  const notifications = await notificationsForUser(db(), user.id);
+  const notificationUnreadCount = await notificationUnreadCountForUser(
+    db(),
+    user.id,
+  );
+  const notificationPreferences = await notificationPreferencesForUser(
+    db(),
+    user.id,
+  );
   const buyerProjectsEnabled = isEligibleBuyerOrganization(organization);
   const canManageBuyerProjects =
     buyerProjectsEnabled && organization.membership_role !== "viewer";
@@ -1781,7 +1879,7 @@ export function workspace(user: User): WorkspaceData {
     .filter((deal) => canManageDeal(deal))
     .map((deal) => deal.id);
   const teaserSafetyReviews = managedDealIds.length
-    ? all<
+    ? await all<
         Omit<
           TeaserSafetyReview,
           | "findings"
@@ -1802,7 +1900,7 @@ export function workspace(user: User): WorkspaceData {
              COUNT(*) OVER (PARTITION BY r.deal_id) review_count,
              ROW_NUMBER() OVER (
                PARTITION BY r.deal_id
-               ORDER BY r.created_at DESC,r.rowid DESC
+               ORDER BY r.created_at DESC,r.id DESC
              ) review_rank
            FROM teaser_safety_reviews r
            JOIN users u ON u.id=r.requested_by_user_id
@@ -1829,20 +1927,26 @@ export function workspace(user: User): WorkspaceData {
       )
     : undefined;
   const dealMatches =
-    user.role === "buyer" ? undefined : dealMatchesForDeals(managedDealIds);
-  const dealOutreach = dealOutreachFor(user, organization.id, managedDealIds);
-  const introductionRequests = introductionRequestsFor(
+    user.role === "buyer"
+      ? undefined
+      : await dealMatchesForDeals(managedDealIds);
+  const dealOutreach = await dealOutreachFor(
+    user,
+    organization.id,
+    managedDealIds,
+  );
+  const introductionRequests = await introductionRequestsFor(
     user,
     organization.id,
     managedDealIds,
   );
   const buyerFunnels =
     user.role !== "buyer" && managedDealIds.length
-      ? buyerFunnelsForDeals(db(), managedDealIds)
+      ? await buyerFunnelsForDeals(db(), managedDealIds)
       : undefined;
   const transactionAttributions =
     user.role !== "buyer" && managedDealIds.length
-      ? transactionAttributionsForDeals(db(), managedDealIds)
+      ? await transactionAttributionsForDeals(db(), managedDealIds)
       : undefined;
   const dealManagerMarketplaceAnalytics = buyerFunnels?.map((funnel) =>
     deriveDealManagerMarketplaceAnalytics(
@@ -1852,25 +1956,30 @@ export function workspace(user: User): WorkspaceData {
   );
   const buyerMarketplaceAnalytics =
     user.role === "buyer" && buyerProjectsEnabled
-      ? buyerMarketplaceAnalyticsFor(db(), organization.id)
+      ? await buyerMarketplaceAnalyticsFor(db(), organization.id)
       : undefined;
   const platformAdmin = isPlatformAdmin(user);
+  const administrator = isAdmin(user);
+  const buyerIdentityVerification =
+    user.role === "buyer"
+      ? await buyerIdentityVerificationForUser(user.id)
+      : undefined;
   const buyerVerificationProfile = isEligibleBuyerOrganization(organization)
-    ? buyerVerificationProfileFor(organization)
+    ? await buyerVerificationProfileFor(organization)
     : undefined;
   const buyerFirmProfile = isEligibleBuyerOrganization(organization)
-    ? buyerFirmProfileFor(organization)
+    ? await buyerFirmProfileFor(organization)
     : undefined;
-  const publicNetworkProfile = publicOrganizationProfileFor(organization);
+  const publicNetworkProfile = await publicOrganizationProfileFor(organization);
   const closedTransactions = isEligibleBuyerOrganization(organization)
-    ? closedTransactionsForOrganization(organization)
+    ? await closedTransactionsForOrganization(organization)
     : [];
   return {
     user,
     organization,
-    organization_members: organizationMembers(organization.id),
+    organization_members: await organizationMembers(organization.id),
     buyer_projects: buyerProjectsEnabled
-      ? buyerProjectsFor(organization.id, canManageBuyerProjects)
+      ? await buyerProjectsFor(organization.id, canManageBuyerProjects)
       : [],
     can_manage_buyer_projects: canManageBuyerProjects,
     deals,
@@ -1910,17 +2019,22 @@ export function workspace(user: User): WorkspaceData {
     ...(buyerVerificationProfile
       ? { buyer_verification_profile: buyerVerificationProfile }
       : {}),
+    ...(buyerIdentityVerification
+      ? { buyer_identity_verification: buyerIdentityVerification }
+      : {}),
     ...(buyerFirmProfile ? { buyer_firm_profile: buyerFirmProfile } : {}),
     ...(publicNetworkProfile
       ? { public_network_profile: publicNetworkProfile }
       : {}),
     closed_transactions: closedTransactions,
     is_platform_admin: platformAdmin,
+    is_admin: administrator,
     ...(platformAdmin
       ? {
-          verification_admin_queue: verificationAdminQueue(user),
-          verification_reviews: verificationReviews(user),
-          closed_transaction_review_queue: closedTransactionReviewQueue(user),
+          verification_admin_queue: await verificationAdminQueue(user),
+          verification_reviews: await verificationReviews(user),
+          closed_transaction_review_queue:
+            await closedTransactionReviewQueue(user),
         }
       : {}),
     advisors,
@@ -1928,10 +2042,10 @@ export function workspace(user: User): WorkspaceData {
   };
 }
 
-export function mutate(
+export async function mutate(
   user: User,
   input: unknown,
-): { id?: string; message: string } {
+): Promise<{ id?: string; message: string }> {
   const envelope = parse(
     z.object({
       action: text(),
@@ -1940,13 +2054,13 @@ export function mutate(
     input,
   );
   const { action, data } = envelope;
-  limit(`mutation:${user.id}`, 180, 60);
+  await limit(`mutation:${user.id}`, 180, 60);
   if (action === "setNotificationRead") {
     const p = parse(
       z.object({ notification_id: idSchema, read: z.boolean() }),
       data,
     );
-    const result = run(
+    const result = await run(
       `UPDATE notifications
        SET read_at=CASE WHEN ?=1 THEN COALESCE(read_at,CURRENT_TIMESTAMP) ELSE NULL END
        WHERE id=? AND user_id=?
@@ -1959,11 +2073,11 @@ export function mutate(
     );
     if (
       !result.changes &&
-      !one(
+      !(await one(
         "SELECT id FROM notifications WHERE id=? AND user_id=?",
         p.notification_id,
         user.id,
-      )
+      ))
     )
       throw new AppError("Notification not found.", 404);
     return {
@@ -1973,7 +2087,7 @@ export function mutate(
     };
   }
   if (action === "markAllNotificationsRead") {
-    run(
+    await run(
       "UPDATE notifications SET read_at=CURRENT_TIMESTAMP WHERE user_id=? AND read_at IS NULL",
       user.id,
     );
@@ -1985,15 +2099,40 @@ export function mutate(
       z.enum(NOTIFICATION_FREQUENCIES),
     );
     const p = parse(z.object({ preferences: preferenceSchema }), data);
-    saveNotificationPreferences(
+    await saveNotificationPreferences(
       db(),
       user.id,
       p.preferences as Partial<NotificationPreferences>,
     );
     return { message: "Notification preferences saved." };
   }
+  if (action === "submitBuyerIdentityVerification") {
+    if (user.role !== "buyer")
+      throw new AppError("Only buyer accounts can submit verification.", 403);
+    const p = parse(
+      z.object({
+        buyer_type: z.enum(BUYER_IDENTITY_TYPES),
+        linkedin_url: optionalHttpUrl,
+        website_url: optionalHttpUrl,
+        source_of_capital: z.enum(BUYER_CAPITAL_SOURCES),
+        equity_range: z.enum(BUYER_EQUITY_RANGES),
+        completed_acquisitions: z.coerce.number().int().min(0).max(10_000),
+        experience_summary: text(20, 4000),
+        acquisition_strategy: text(20, 4000),
+        authorized_to_represent: z.literal(true),
+      }),
+      data,
+    );
+    const saved = await submitBuyerIdentityVerification(user, p);
+    if (!saved)
+      throw new AppError(
+        "Approved verification records cannot be changed without administrator review.",
+        409,
+      );
+    return { message: "Verification submitted for review." };
+  }
   if (action === "createClosedTransaction") {
-    const organization = organizationFor(user.id);
+    const organization = await organizationFor(user.id);
     if (
       !organization ||
       !isEligibleBuyerOrganization(organization) ||
@@ -2014,7 +2153,7 @@ export function mutate(
       data,
     );
     const id = randomUUID();
-    run(
+    await run(
       `INSERT INTO closed_transactions(
          id,buyer_organization_id,industry,province,enterprise_value,
          closed_date,description,created_by_user_id
@@ -2042,8 +2181,8 @@ export function mutate(
       );
     const p = parse(z.object({ transaction_id: idSchema }), data);
     const database = db();
-    inImmediateTransaction(database, () => {
-      const target = database
+    await inTransaction(database, async (transaction) => {
+      const target = await transaction
         .prepare(
           `SELECT ct.id
            FROM closed_transactions ct
@@ -2079,7 +2218,7 @@ export function mutate(
           "Transaction record is unavailable or has already been reviewed.",
           404,
         );
-      const updated = database
+      const updated = await transaction
         .prepare(
           `UPDATE closed_transactions
            SET verified=1,verified_by_user_id=?,verified_at=CURRENT_TIMESTAMP,
@@ -2096,7 +2235,7 @@ export function mutate(
     return { message: "Transaction history verified by Succera." };
   }
   if (action === "updateBuyerFirmProfile") {
-    const organization = organizationFor(user.id);
+    const organization = await organizationFor(user.id);
     if (
       !organization ||
       !isEligibleBuyerOrganization(organization) ||
@@ -2122,8 +2261,8 @@ export function mutate(
       data,
     );
     const database = db();
-    inImmediateTransaction(database, () => {
-      const updated = database
+    await inTransaction(database, async (transaction) => {
+      const updated = await transaction
         .prepare(
           `UPDATE buyer_firm_profiles SET
              fund_structure=?,financing_profile=?,
@@ -2148,7 +2287,7 @@ export function mutate(
     return { message: "Seller-facing firm profile saved." };
   }
   if (action === "updatePublicNetworkProfile") {
-    const organization = organizationFor(user.id);
+    const organization = await organizationFor(user.id);
     if (!organization || !organization.can_manage)
       throw new AppError(
         "Only organization owners and administrators can update the public network profile.",
@@ -2189,8 +2328,8 @@ export function mutate(
         "Add a public headline and description before publishing the profile.",
       );
     const database = db();
-    inImmediateTransaction(database, () => {
-      const updated = database
+    await inTransaction(database, async (transaction) => {
+      const updated = await transaction
         .prepare(
           `UPDATE organization_public_profiles SET
              is_public=?,headline=?,public_description=?,show_website=?,
@@ -2214,31 +2353,31 @@ export function mutate(
           "This public network profile changed in another session. Refresh and try again.",
           409,
         );
-      database
+      await transaction
         .prepare(
           "DELETE FROM organization_public_industries WHERE organization_id=?",
         )
         .run(organization.id);
-      const insertIndustry = database.prepare(
+      const insertIndustry = await transaction.prepare(
         "INSERT INTO organization_public_industries(organization_id,industry) VALUES(?,?)",
       );
       for (const industry of profile.industries)
-        insertIndustry.run(organization.id, industry);
-      database
+        await insertIndustry.run(organization.id, industry);
+      await transaction
         .prepare(
           "DELETE FROM organization_public_locations WHERE organization_id=?",
         )
         .run(organization.id);
-      const insertLocation = database.prepare(
+      const insertLocation = await transaction.prepare(
         "INSERT INTO organization_public_locations(organization_id,province) VALUES(?,?)",
       );
       for (const province of profile.locations)
-        insertLocation.run(organization.id, province);
+        await insertLocation.run(organization.id, province);
     });
     return { message: "Public network profile saved." };
   }
   if (action === "setClosedTransactionPublic") {
-    const organization = organizationFor(user.id);
+    const organization = await organizationFor(user.id);
     if (!organization || !organization.can_manage)
       throw new AppError(
         "Only organization owners and administrators can publish transaction history.",
@@ -2249,8 +2388,8 @@ export function mutate(
       data,
     );
     const database = db();
-    inImmediateTransaction(database, () => {
-      const target = database
+    await inTransaction(database, async (transaction) => {
+      const target = (await transaction
         .prepare(
           `SELECT ct.id,ct.public_slug,ct.verified,ct.industry,ct.province,
              profile.is_public,profile.show_verified_transactions
@@ -2259,7 +2398,7 @@ export function mutate(
              ON profile.organization_id=ct.buyer_organization_id
            WHERE ct.id=? AND ct.buyer_organization_id=?`,
         )
-        .get(p.transaction_id, organization.id) as
+        .get(p.transaction_id, organization.id)) as
         | {
             id: string;
             public_slug: string | null;
@@ -2276,7 +2415,7 @@ export function mutate(
           404,
         );
       if (!p.public_opt_in) {
-        database
+        await transaction
           .prepare(
             `UPDATE closed_transactions
              SET public_opt_in=0,updated_at=CURRENT_TIMESTAMP WHERE id=?`,
@@ -2304,7 +2443,7 @@ export function mutate(
         `${slugPart(target.industry)}-${slugPart(target.province)}-${slugPart(
           target.id,
         ).slice(0, 32)}`;
-      database
+      await transaction
         .prepare(
           `UPDATE closed_transactions
            SET public_slug=?,public_opt_in=1,updated_at=CURRENT_TIMESTAMP
@@ -2319,7 +2458,7 @@ export function mutate(
     };
   }
   if (action === "updateBuyerVerificationProfile") {
-    const organization = organizationFor(user.id);
+    const organization = await organizationFor(user.id);
     if (
       !organization ||
       !isEligibleBuyerOrganization(organization) ||
@@ -2333,8 +2472,8 @@ export function mutate(
       parse(buyerVerificationProfileSchema, data),
     );
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           `INSERT INTO buyer_verification_profiles(
              organization_id,legal_name,principals,acquisition_history,
@@ -2365,7 +2504,7 @@ export function mutate(
           profile.financing_approach,
           user.id,
         );
-      database
+      await transaction
         .prepare(
           `UPDATE organizations SET website=?,organization_type=?,
              verification_status=CASE
@@ -2387,7 +2526,7 @@ export function mutate(
     };
   }
   if (action === "submitBuyerVerification") {
-    const organization = organizationFor(user.id);
+    const organization = await organizationFor(user.id);
     if (
       !organization ||
       !isEligibleBuyerOrganization(organization) ||
@@ -2397,13 +2536,13 @@ export function mutate(
         "Only buyer organization owners and administrators can submit verification information.",
         403,
       );
-    const profile = buyerVerificationProfileFor(organization);
+    const profile = await buyerVerificationProfileFor(organization);
     if (!profile)
       throw new AppError("Complete the verification profile first.", 409);
     validateBuyerVerificationProfile(
       parse(buyerVerificationProfileSchema, profile),
     );
-    const result = run(
+    const result = await run(
       `UPDATE buyer_verification_profiles
        SET submitted_at=CURRENT_TIMESTAMP,submitted_by_user_id=?,
            submission_revision=submission_revision+1,
@@ -2440,7 +2579,7 @@ export function mutate(
       }),
       data,
     );
-    const target = one<{
+    const target = await one<{
       organization_id: string;
       organization_type: OrganizationType;
       verification_status: BuyerVerificationStatus;
@@ -2478,8 +2617,8 @@ export function mutate(
         409,
       );
     const database = db();
-    inImmediateTransaction(database, () => {
-      const claimed = database
+    await inTransaction(database, async (transaction) => {
+      const claimed = await transaction
         .prepare(
           `UPDATE buyer_verification_profiles
            SET submitted_at=NULL,submitted_by_user_id=NULL,
@@ -2489,12 +2628,12 @@ export function mutate(
         )
         .run(target.organization_id, p.submission_revision);
       if (!claimed.changes) {
-        const current = database
+        const current = (await transaction
           .prepare(
             `SELECT submitted_at,submission_revision
              FROM buyer_verification_profiles WHERE organization_id=?`,
           )
-          .get(target.organization_id) as
+          .get(target.organization_id)) as
           | { submitted_at: string | null; submission_revision: number }
           | undefined;
         throw new AppError(
@@ -2505,7 +2644,7 @@ export function mutate(
           409,
         );
       }
-      database
+      await transaction
         .prepare(
           `INSERT INTO verification_reviews(
              id,organization_id,reviewer_user_id,submission_revision,
@@ -2521,7 +2660,7 @@ export function mutate(
           p.decision,
           p.notes,
         );
-      database
+      await transaction
         .prepare(
           "UPDATE organizations SET verification_status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
         )
@@ -2551,15 +2690,15 @@ export function mutate(
         .some((s) => !SECTORS.includes(s))
     )
       throw new AppError("Select a supported industry.");
-    const organization = organizationFor(user.id);
+    const organization = await organizationFor(user.id);
     if (p.company !== undefined && !organization?.can_manage)
       throw new AppError(
         "Only organization owners and administrators can update the firm name.",
         403,
       );
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           "UPDATE users SET name=?,province=?,bio=?,sectors=?,min_revenue=?,max_revenue=? WHERE id=?",
         )
@@ -2573,12 +2712,12 @@ export function mutate(
           user.id,
         );
       if (p.company !== undefined && organization) {
-        database
+        await transaction
           .prepare(
             "UPDATE organizations SET name=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
           )
           .run(p.company, organization.id);
-        database
+        await transaction
           .prepare(
             "UPDATE users SET company=? WHERE id IN (SELECT user_id FROM organization_members WHERE organization_id=? AND status='active')",
           )
@@ -2598,7 +2737,7 @@ export function mutate(
       }),
       data,
     );
-    const organization = organizationFor(user.id);
+    const organization = await organizationFor(user.id);
     if (!organization || !organization.can_manage)
       throw new AppError(
         "Only organization owners and administrators can update firm settings.",
@@ -2613,8 +2752,8 @@ export function mutate(
       p.organization_type,
     );
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           "UPDATE organizations SET name=?,organization_type=?,website=?,province=?,description=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
         )
@@ -2626,20 +2765,20 @@ export function mutate(
           p.description,
           organization.id,
         );
-      database
+      await transaction
         .prepare(
           "UPDATE users SET company=? WHERE id IN (SELECT user_id FROM organization_members WHERE organization_id=? AND status='active')",
         )
         .run(p.name, organization.id);
       if (remainsBuyerOrganization) {
-        database
+        await transaction
           .prepare(
             `INSERT OR IGNORE INTO buyer_verification_profiles(
                organization_id,legal_name,updated_by_user_id
              ) VALUES(?,?,?)`,
           )
           .run(organization.id, p.name, user.id);
-        database
+        await transaction
           .prepare(
             `INSERT OR IGNORE INTO buyer_firm_profiles(
                organization_id,updated_by_user_id
@@ -2651,7 +2790,7 @@ export function mutate(
         verificationRelevantChange &&
         (wasBuyerOrganization || remainsBuyerOrganization)
       ) {
-        database
+        await transaction
           .prepare(
             `UPDATE organizations SET
                verification_status=CASE
@@ -2661,7 +2800,7 @@ export function mutate(
              WHERE id=?`,
           )
           .run(organization.id);
-        database
+        await transaction
           .prepare(
             `UPDATE buyer_verification_profiles
              SET submitted_at=NULL,submitted_by_user_id=NULL,
@@ -2671,14 +2810,14 @@ export function mutate(
           .run(user.id, organization.id);
       }
       if (wasBuyerOrganization && !remainsBuyerOrganization) {
-        database
+        await transaction
           .prepare(
             `UPDATE buyer_projects
              SET status='paused',updated_at=strftime('%Y-%m-%d %H:%M:%f','now')
              WHERE organization_id=? AND status='active'`,
           )
           .run(organization.id);
-        recalculateBuyerOrganizationMatches(database, organization.id);
+        await recalculateBuyerOrganizationMatches(transaction, organization.id);
       }
     });
     return { message: "Firm settings saved." };
@@ -2693,24 +2832,26 @@ export function mutate(
     );
     if (user.is_demo)
       throw new AppError("Demo account passwords cannot be changed.");
-    const stored = one<{ password_hash: string }>(
-      "SELECT password_hash FROM users WHERE id=?",
-      user.id,
-    )!;
+    const stored = await one<{
+      password_hash: string;
+    }>("SELECT password_hash FROM users WHERE id=?", user.id);
+    if (!stored) throw new AppError("Account password is unavailable.", 404);
     if (!verifyPassword(p.current, stored.password_hash))
       throw new AppError("Current password is incorrect.");
-    run(
+    await run(
       "UPDATE users SET password_hash=? WHERE id=?",
       hashPassword(p.password),
       user.id,
     );
-    run("DELETE FROM sessions WHERE user_id=?", user.id);
+    await run("DELETE FROM sessions WHERE user_id=?", user.id);
     return { message: "Password changed. Please sign in again." };
   }
-  if (action === "createBuyerProject") return createBuyerProject(user, data);
-  if (action === "updateBuyerProject") return updateBuyerProject(user, data);
+  if (action === "createBuyerProject")
+    return await createBuyerProject(user, data);
+  if (action === "updateBuyerProject")
+    return await updateBuyerProject(user, data);
   if (action === "setBuyerProjectStatus")
-    return setBuyerProjectStatus(user, data);
+    return await setBuyerProjectStatus(user, data);
   if (action === "updateDealMatchStatus") {
     const p = parse(
       z.object({
@@ -2720,13 +2861,13 @@ export function mutate(
       }),
       data,
     );
-    const deal = getDeal(p.deal_id);
-    requireManager(user, deal);
+    const deal = await getDeal(p.deal_id);
+    await requireManager(user, deal);
     const matchIds = [...new Set(p.match_ids)];
     const placeholders = matchIds.map(() => "?").join(",");
     const database = db();
-    inImmediateTransaction(database, () => {
-      const available = database
+    await inTransaction(database, async (transaction) => {
+      const available = (await transaction
         .prepare(
           `SELECT dm.id,dm.buyer_project_id,dm.buyer_organization_id,dm.eligible
            FROM deal_matches dm
@@ -2738,7 +2879,7 @@ export function mutate(
              AND buyer_organization.organization_type IN (${BUYER_ORGANIZATION_TYPES.map(() => "?").join(",")})
              AND bp.status='active'`,
         )
-        .all(p.deal_id, ...matchIds, ...BUYER_ORGANIZATION_TYPES) as {
+        .all(p.deal_id, ...matchIds, ...BUYER_ORGANIZATION_TYPES)) as {
         id: string;
         buyer_project_id: string;
         buyer_organization_id: string;
@@ -2754,7 +2895,7 @@ export function mutate(
           "Only eligible buyer recommendations can be selected.",
           409,
         );
-      database
+      await transaction
         .prepare(
           `UPDATE deal_matches SET status=?,updated_at=strftime('%Y-%m-%d %H:%M:%f','now')
            WHERE deal_id=? AND id IN (${placeholders})`,
@@ -2762,7 +2903,7 @@ export function mutate(
         .run(p.status, p.deal_id, ...matchIds);
       for (const match of available) {
         if (p.status === "selected" || p.status === "excluded")
-          recordDealBuyerEvent(database, {
+          await recordDealBuyerEvent(transaction, {
             dealId: p.deal_id,
             buyerOrganizationId: match.buyer_organization_id,
             buyerProjectId: match.buyer_project_id,
@@ -2773,12 +2914,17 @@ export function mutate(
                 : `match-exclusion:${match.id}`,
             createdByUserId: user.id,
           });
-        recalculateDealMatch(database, p.deal_id, match.buyer_project_id);
+        await recalculateDealMatch(
+          transaction,
+          p.deal_id,
+          match.buyer_project_id,
+        );
       }
-      audit(
+      await audit(
         user,
         p.deal_id,
         `${statusTextForAudit(p.status)} ${matchIds.length} buyer recommendation${matchIds.length === 1 ? "" : "s"}`,
+        transaction,
       );
     });
     return {
@@ -2792,7 +2938,7 @@ export function mutate(
     validateExpectedValueRange(p);
     const id = randomUUID(),
       financialId = randomUUID(),
-      organization = organizationFor(user.id);
+      organization = await organizationFor(user.id);
     if (!organization)
       throw new AppError(
         "Your account is not connected to an organization.",
@@ -2804,8 +2950,8 @@ export function mutate(
         403,
       );
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           `INSERT INTO deals(
             id,title,company_name,sector,province,city,revenue,ebitda,asking_price,
@@ -2845,7 +2991,7 @@ export function mutate(
           p.max_expected_value,
           p.distribution_mode,
         );
-      database
+      await transaction
         .prepare(
           `INSERT INTO deal_financials(
             id,deal_id,fiscal_year,period_type,revenue,ebitda,gross_profit,is_projected
@@ -2860,42 +3006,42 @@ export function mutate(
           p.gross_profit,
           p.financial_is_projected ? 1 : 0,
         );
-      recalculateDealMatches(database, id);
+      await recalculateDealMatches(transaction, id);
     });
-    audit(user, id, "Created a private mandate");
+    await audit(user, id, "Created a private mandate");
     return {
       id,
       message:
         "Mandate created privately. Publish its anonymous teaser when ready.",
     };
   }
-  const deal = getDeal(parse(idSchema, data.deal_id));
-  const dealOwner = one<{ is_demo: number }>(
+  const deal = await getDeal(parse(idSchema, data.deal_id));
+  const dealOwner = await one<{ is_demo: number }>(
     "SELECT is_demo FROM users WHERE id=?",
     deal.owner_id,
   );
   if (!dealOwner || !!dealOwner.is_demo !== !!user.is_demo)
     throw new AppError("This deal is not available.", 404);
   if (action === "applyTeaserSafetySuggestion") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const reviewId = parse(idSchema, data.review_id);
     const database = db();
-    inImmediateTransaction(database, () => {
-      const currentDeal = database
+    await inTransaction(database, async (transaction) => {
+      const currentDeal = (await transaction
         .prepare("SELECT * FROM deals WHERE id=?")
-        .get(deal.id) as Deal | undefined;
+        .get(deal.id)) as Deal | undefined;
       if (!currentDeal) throw new AppError("Deal not found.", 404);
       if (currentDeal.published)
         throw new AppError(
           "Make the teaser private before applying an assistant suggestion.",
           409,
         );
-      const review = database
+      const review = (await transaction
         .prepare(
           `SELECT id,input_sha256,suggested_teaser,applied_at
            FROM teaser_safety_reviews WHERE id=? AND deal_id=?`,
         )
-        .get(reviewId, deal.id) as
+        .get(reviewId, deal.id)) as
         | {
             id: string;
             input_sha256: string;
@@ -2910,12 +3056,12 @@ export function mutate(
           409,
         );
       const historicalFinancialPeriods = (
-        database
+        (await transaction
           .prepare(
             `SELECT COUNT(*) count FROM deal_financials
              WHERE deal_id=? AND is_projected=0`,
           )
-          .get(deal.id) as { count: number }
+          .get(deal.id)) as { count: number }
       ).count;
       const currentInputSha256 = teaserSafetyReviewInputDigest({
         companyName: currentDeal.company_name,
@@ -2939,7 +3085,7 @@ export function mutate(
           "The mandate changed after this review. Run a new safety review before applying its suggestion.",
           409,
         );
-      const applied = database
+      const applied = await transaction
         .prepare(
           `UPDATE teaser_safety_reviews
            SET applied_at=CURRENT_TIMESTAMP,applied_by_user_id=?
@@ -2951,19 +3097,19 @@ export function mutate(
           "This teaser suggestion has already been applied.",
           409,
         );
-      database
+      await transaction
         .prepare("UPDATE deals SET description=? WHERE id=?")
         .run(review.suggested_teaser, deal.id);
-      recalculateDealMatches(database, deal.id);
+      await recalculateDealMatches(transaction, deal.id);
     });
-    audit(user, deal.id, "Applied a reviewed teaser safety suggestion");
+    await audit(user, deal.id, "Applied a reviewed teaser safety suggestion");
     return {
       message:
         "Suggestion applied to the private teaser draft. Review and publish it separately when ready.",
     };
   }
   if (action === "upsertTransactionAttribution") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const optionalAttributionDate = z.preprocess(
       (value) =>
         value === "" || value === undefined || value === null ? null : value,
@@ -2989,7 +3135,7 @@ export function mutate(
         "Closing date cannot be earlier than the introduction date.",
       );
     const database = db();
-    const relationship = database
+    const relationship = await database
       .prepare(
         `SELECT 1 FROM deal_buyer_events
          WHERE deal_id=? AND buyer_organization_id=? LIMIT 1`,
@@ -2999,28 +3145,28 @@ export function mutate(
       throw new AppError("This buyer is not part of the deal funnel.", 404);
     if (
       p.closed_date &&
-      !database
+      !(await database
         .prepare(
           `SELECT 1 FROM deal_buyer_events
            WHERE deal_id=? AND buyer_organization_id=? AND event_type='closed'
            LIMIT 1`,
         )
-        .get(deal.id, p.buyer_organization_id)
+        .get(deal.id, p.buyer_organization_id))
     )
       throw new AppError(
         "Record the Closed buyer-funnel milestone before adding closing details.",
         409,
       );
-    const existing = database
+    const existing = (await database
       .prepare(
         `SELECT id,revision FROM transaction_attribution
          WHERE deal_id=? AND buyer_organization_id=?`,
       )
-      .get(deal.id, p.buyer_organization_id) as
+      .get(deal.id, p.buyer_organization_id)) as
       { id: string; revision: number } | undefined;
-    inImmediateTransaction(database, () => {
+    await inTransaction(database, async (transaction) => {
       if (existing) {
-        const updated = database
+        const updated = await transaction
           .prepare(
             `UPDATE transaction_attribution SET
                source=?,introduced_by_acquire=?,introduction_date=?,
@@ -3051,7 +3197,7 @@ export function mutate(
             "This attribution record changed in another session. Refresh and try again.",
             409,
           );
-        const inserted = database
+        const inserted = await transaction
           .prepare(
             `INSERT INTO transaction_attribution(
                id,deal_id,buyer_organization_id,source,introduced_by_acquire,
@@ -3078,16 +3224,17 @@ export function mutate(
             409,
           );
       }
-      audit(
+      await audit(
         user,
         deal.id,
         `Updated transaction attribution: ${p.source.replaceAll("_", " ")}`,
+        transaction,
       );
     });
     return { message: "Transaction attribution saved." };
   }
   if (action === "recordBuyerFunnelEvent") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const p = parse(
       z.object({
         buyer_organization_id: idSchema,
@@ -3107,7 +3254,7 @@ export function mutate(
         "This milestone is recorded by its existing workflow.",
       );
     const database = db();
-    const relationship = database
+    const relationship = await database
       .prepare(
         `SELECT 1 FROM deal_buyer_events
          WHERE deal_id=? AND buyer_organization_id=? LIMIT 1`,
@@ -3117,39 +3264,44 @@ export function mutate(
       throw new AppError("This buyer is not part of the deal funnel.", 404);
     if (
       p.buyer_project_id &&
-      !database
+      !(await database
         .prepare(
           `SELECT 1 FROM buyer_projects
            WHERE id=? AND organization_id=?`,
         )
-        .get(p.buyer_project_id, p.buyer_organization_id)
+        .get(p.buyer_project_id, p.buyer_organization_id))
     )
       throw new AppError(
         "The acquisition project does not belong to this buyer.",
       );
     let inserted = false;
-    inImmediateTransaction(database, () => {
-      inserted = recordDealBuyerEvent(database, {
+    await inTransaction(database, async (transaction) => {
+      const fallbackProject = p.buyer_project_id
+        ? undefined
+        : await bestBuyerProjectForDeal(
+            transaction,
+            deal.id,
+            p.buyer_organization_id,
+          );
+      inserted = await recordDealBuyerEvent(transaction, {
         dealId: deal.id,
         buyerOrganizationId: p.buyer_organization_id,
         buyerProjectId:
-          p.buyer_project_id ??
-          bestBuyerProjectForDeal(database, deal.id, p.buyer_organization_id)
-            ?.buyer_project_id ??
-          null,
+          p.buyer_project_id ?? fallbackProject?.buyer_project_id ?? null,
         eventType: p.event_type,
         sourceKey: `manual:${p.event_type}`,
         createdByUserId: user.id,
       });
       if (inserted)
-        audit(
+        await audit(
           user,
           deal.id,
           `Recorded buyer milestone: ${p.event_type.replaceAll("_", " ")}`,
+          transaction,
         );
       if (inserted && p.event_type === "ioi_received")
-        notifyUsers(database, {
-          userIds: dealManagerUserIds(database, deal.id),
+        await notifyUsers(transaction, {
+          userIds: await dealManagerUserIds(transaction, deal.id),
           type: "ioi_received",
           title: "IOI received",
           body: `${deal.title} has advanced to the IOI stage.`,
@@ -3166,7 +3318,7 @@ export function mutate(
     };
   }
   if (action === "shareTeaser") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const p = parse(
       z.object({
         match_ids: z.array(idSchema).min(1).max(100),
@@ -3179,8 +3331,8 @@ export function mutate(
     const placeholders = matchIds.map(() => "?").join(",");
     const database = db();
     const outreachId = randomUUID();
-    inImmediateTransaction(database, () => {
-      const recipients = database
+    await inTransaction(database, async (transaction) => {
+      const recipients = (await transaction
         .prepare(
           `SELECT dm.id,dm.buyer_project_id,dm.buyer_organization_id,
              bp.name buyer_project_name
@@ -3195,7 +3347,7 @@ export function mutate(
              AND buyer_organization.organization_type IN (${BUYER_ORGANIZATION_TYPES.map(() => "?").join(",")})
              AND bp.status='active'`,
         )
-        .all(deal.id, ...matchIds, ...BUYER_ORGANIZATION_TYPES) as {
+        .all(deal.id, ...matchIds, ...BUYER_ORGANIZATION_TYPES)) as {
         id: string;
         buyer_project_id: string;
         buyer_organization_id: string;
@@ -3206,7 +3358,7 @@ export function mutate(
           "Every recipient must be an eligible selected recommendation.",
           409,
         );
-      const duplicate = database
+      const duplicate = await transaction
         .prepare(
           `SELECT 1 FROM deal_outreach existing_outreach
            JOIN deal_outreach_recipients existing_recipient
@@ -3224,25 +3376,25 @@ export function mutate(
           "One or more selected projects already received this opportunity.",
           409,
         );
-      database
+      await transaction
         .prepare(
           "INSERT INTO deal_outreach(id,deal_id,sender_user_id,subject,message) VALUES(?,?,?,?,?)",
         )
         .run(outreachId, deal.id, user.id, p.subject, p.message);
-      const insertRecipient = database.prepare(
+      const insertRecipient = await transaction.prepare(
         `INSERT INTO deal_outreach_recipients(
           id,outreach_id,buyer_organization_id,buyer_project_id,status,sent_at
         ) VALUES(?,?,?,?,'sent',CURRENT_TIMESTAMP)`,
       );
       for (const recipient of recipients) {
         const recipientId = randomUUID();
-        insertRecipient.run(
+        await insertRecipient.run(
           recipientId,
           outreachId,
           recipient.buyer_organization_id,
           recipient.buyer_project_id,
         );
-        recordDealBuyerEvent(database, {
+        await recordDealBuyerEvent(transaction, {
           dealId: deal.id,
           buyerOrganizationId: recipient.buyer_organization_id,
           buyerProjectId: recipient.buyer_project_id,
@@ -3250,15 +3402,15 @@ export function mutate(
           sourceKey: `outreach:${recipientId}:sent`,
           createdByUserId: user.id,
         });
-        recordInitialTransactionAttribution(database, {
+        await recordInitialTransactionAttribution(transaction, {
           dealId: deal.id,
           buyerOrganizationId: recipient.buyer_organization_id,
           source: "acquire_match",
           createdByUserId: user.id,
         });
-        notifyUsers(database, {
-          userIds: activeOrganizationUserIds(
-            database,
+        await notifyUsers(transaction, {
+          userIds: await activeOrganizationUserIds(
+            transaction,
             recipient.buyer_organization_id,
           ),
           type: "opportunity_shared",
@@ -3270,17 +3422,18 @@ export function mutate(
           sourceKey: `outreach:${recipientId}:shared`,
         });
       }
-      database
+      await transaction
         .prepare(
           `UPDATE deal_matches
            SET status='contacted',updated_at=strftime('%Y-%m-%d %H:%M:%f','now')
            WHERE deal_id=? AND id IN (${placeholders})`,
         )
         .run(deal.id, ...matchIds);
-      audit(
+      await audit(
         user,
         deal.id,
         `Shared private teaser with ${recipients.length} buyer project${recipients.length === 1 ? "" : "s"}`,
+        transaction,
       );
     });
     return {
@@ -3291,7 +3444,7 @@ export function mutate(
   if (action === "viewOutreach" || action === "respondToOutreach") {
     if (user.role !== "buyer")
       throw new AppError("Only recipient buyers can access outreach.", 403);
-    const organization = organizationFor(user.id);
+    const organization = await organizationFor(user.id);
     if (!organization)
       throw new AppError(
         "Your account is not connected to an organization.",
@@ -3307,7 +3460,7 @@ export function mutate(
         ),
       ];
       const placeholders = recipientIds.map(() => "?").join(",");
-      const recipients = all<{
+      const recipients = await all<{
         id: string;
         status: string;
         buyer_organization_id: string;
@@ -3333,8 +3486,8 @@ export function mutate(
       if (sentRecipients.length) {
         const sentPlaceholders = sentRecipients.map(() => "?").join(",");
         const database = db();
-        inImmediateTransaction(database, () => {
-          database
+        await inTransaction(database, async (transaction) => {
+          await transaction
             .prepare(
               `UPDATE deal_outreach_recipients
                SET status='viewed',viewed_at=CURRENT_TIMESTAMP
@@ -3342,7 +3495,7 @@ export function mutate(
             )
             .run(...sentRecipients.map((recipient) => recipient.id));
           for (const recipient of sentRecipients)
-            recordDealBuyerEvent(database, {
+            await recordDealBuyerEvent(transaction, {
               dealId: deal.id,
               buyerOrganizationId: recipient.buyer_organization_id,
               buyerProjectId: recipient.buyer_project_id,
@@ -3350,17 +3503,18 @@ export function mutate(
               sourceKey: `outreach:${recipient.id}:teaser_viewed`,
               createdByUserId: user.id,
             });
-          audit(
+          await audit(
             user,
             deal.id,
             `Viewed ${sentRecipients.length} private teaser recipient${sentRecipients.length === 1 ? "" : "s"}`,
+            transaction,
           );
         });
       }
       return { message: "Opportunity marked as viewed." };
     }
     const recipientId = parse(idSchema, data.recipient_id);
-    const recipient = one<{
+    const recipient = await one<{
       id: string;
       status: string;
       buyer_organization_id: string;
@@ -3391,7 +3545,7 @@ export function mutate(
       };
     if (!["sent", "viewed"].includes(recipient.status))
       throw new AppError("This outreach already has a final response.", 409);
-    const existingAccess = membership(deal.id, user.id);
+    const existingAccess = await membership(deal.id, user.id);
     if (
       response === "interested" &&
       existingAccess &&
@@ -3402,8 +3556,8 @@ export function mutate(
         403,
       );
     const database = db();
-    inImmediateTransaction(database, () => {
-      const updated = database
+    await inTransaction(database, async (transaction) => {
+      const updated = await transaction
         .prepare(
           `UPDATE deal_outreach_recipients SET status=?,
              viewed_at=COALESCE(viewed_at,CURRENT_TIMESTAMP),
@@ -3415,7 +3569,7 @@ export function mutate(
       if (!updated.changes)
         throw new AppError("This outreach already has a final response.", 409);
       if (recipient.status === "sent")
-        recordDealBuyerEvent(database, {
+        await recordDealBuyerEvent(transaction, {
           dealId: deal.id,
           buyerOrganizationId: recipient.buyer_organization_id,
           buyerProjectId: recipient.buyer_project_id,
@@ -3424,12 +3578,12 @@ export function mutate(
           createdByUserId: user.id,
         });
       if (response === "interested" && !existingAccess)
-        database
+        await transaction
           .prepare(
             "INSERT INTO access(id,deal_id,buyer_id,status,nda_status,notes) VALUES(?,?,?,'requested','not_requested','Interest submitted from private teaser outreach')",
           )
           .run(randomUUID(), deal.id, user.id);
-      recordDealBuyerEvent(database, {
+      await recordDealBuyerEvent(transaction, {
         dealId: deal.id,
         buyerOrganizationId: recipient.buyer_organization_id,
         buyerProjectId: recipient.buyer_project_id,
@@ -3438,8 +3592,8 @@ export function mutate(
         createdByUserId: user.id,
       });
       if (response === "interested")
-        notifyUsers(database, {
-          userIds: dealManagerUserIds(database, deal.id),
+        await notifyUsers(transaction, {
+          userIds: await dealManagerUserIds(transaction, deal.id),
           type: "buyer_pursued",
           title: "Buyer expressed interest",
           body: `${organization.name} is interested in ${deal.title}.`,
@@ -3448,12 +3602,13 @@ export function mutate(
           actorUserId: user.id,
           sourceKey: `outreach:${recipient.id}:buyer-pursued`,
         });
-      audit(
+      await audit(
         user,
         deal.id,
         response === "interested"
           ? "Expressed interest in private outreach"
           : "Passed on private outreach",
+        transaction,
       );
     });
     return {
@@ -3473,7 +3628,11 @@ export function mutate(
         "This opportunity is not available for Qualified Discovery.",
         403,
       );
-    const organization = organizationFor(user.id);
+    await requireApprovedBuyerIdentity(
+      user.id,
+      "Complete buyer verification before requesting confidential access.",
+    );
+    const organization = await organizationFor(user.id);
     if (!organization || !isEligibleBuyerOrganization(organization))
       throw new AppError("A buyer organization is required.", 403);
     const minimumVerificationStatus =
@@ -3500,7 +3659,7 @@ export function mutate(
       }),
       data,
     );
-    const projectMatch = one<{
+    const projectMatch = await one<{
       buyer_project_id: string;
       organization_id: string;
       project_status: string;
@@ -3538,7 +3697,7 @@ export function mutate(
         "This acquisition project is not eligible for the opportunity.",
         403,
       );
-    const prior = one<{ status: string }>(
+    const prior = await one<{ status: string }>(
       `SELECT status FROM introduction_requests
        WHERE deal_id=? AND buyer_organization_id=? AND status<>'withdrawn'
        ORDER BY created_at DESC,id DESC LIMIT 1`,
@@ -3554,8 +3713,8 @@ export function mutate(
       );
     const id = randomUUID();
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           `INSERT INTO introduction_requests(
             id,deal_id,buyer_organization_id,buyer_project_id,requested_by_user_id,message
@@ -3569,7 +3728,7 @@ export function mutate(
           user.id,
           p.message,
         );
-      recordDealBuyerEvent(database, {
+      await recordDealBuyerEvent(transaction, {
         dealId: deal.id,
         buyerOrganizationId: organization.id,
         buyerProjectId: p.buyer_project_id,
@@ -3577,8 +3736,8 @@ export function mutate(
         sourceKey: `introduction:${id}:requested`,
         createdByUserId: user.id,
       });
-      notifyUsers(database, {
-        userIds: dealManagerUserIds(database, deal.id),
+      await notifyUsers(transaction, {
+        userIds: await dealManagerUserIds(transaction, deal.id),
         type: "introduction_requested",
         title: "Introduction requested",
         body: `${organization.name} requested an introduction to ${deal.title}.`,
@@ -3587,7 +3746,12 @@ export function mutate(
         actorUserId: user.id,
         sourceKey: `introduction:${id}:requested`,
       });
-      audit(user, deal.id, "Requested a Qualified Discovery introduction");
+      await audit(
+        user,
+        deal.id,
+        "Requested a Qualified Discovery introduction",
+        transaction,
+      );
     });
     return { id, message: "Introduction request sent to the deal team." };
   }
@@ -3597,11 +3761,11 @@ export function mutate(
         "Only buyer organizations can withdraw requests.",
         403,
       );
-    const organization = organizationFor(user.id);
+    const organization = await organizationFor(user.id);
     if (!organization || organization.membership_role === "viewer")
       throw new AppError("You cannot withdraw this request.", 403);
     const requestId = parse(idSchema, data.introduction_request_id);
-    const request = one<{ id: string; status: string }>(
+    const request = await one<{ id: string; status: string }>(
       `SELECT id,status FROM introduction_requests
        WHERE id=? AND deal_id=? AND buyer_organization_id=?`,
       requestId,
@@ -3611,15 +3775,15 @@ export function mutate(
     if (!request) throw new AppError("Introduction request not found.", 404);
     if (request.status !== "pending")
       throw new AppError("Only pending requests can be withdrawn.", 409);
-    run(
+    await run(
       "UPDATE introduction_requests SET status='withdrawn' WHERE id=? AND status='pending'",
       request.id,
     );
-    audit(user, deal.id, "Withdrew a Qualified Discovery introduction");
+    await audit(user, deal.id, "Withdrew a Qualified Discovery introduction");
     return { message: "Introduction request withdrawn." };
   }
   if (action === "reviewIntroduction") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const p = parse(
       z.object({
         introduction_request_id: idSchema,
@@ -3627,7 +3791,7 @@ export function mutate(
       }),
       data,
     );
-    const request = one<{
+    const request = await one<{
       id: string;
       status: string;
       requested_by_user_id: string;
@@ -3644,21 +3808,29 @@ export function mutate(
         "This introduction request was already reviewed.",
         409,
       );
-    const buyerOrganization = one<{
+    if (p.status === "approved")
+      await requireApprovedBuyerIdentity(
+        request.requested_by_user_id,
+        "This buyer must complete Succera's buyer profile review before confidential access can be approved.",
+      );
+    const buyerOrganization = await one<{
       verification_status: BuyerVerificationStatus;
       organization_type: OrganizationType;
     }>(
       "SELECT verification_status,organization_type FROM organizations WHERE id=?",
       request.buyer_organization_id,
     );
-    const requestProjectStatus = one<{ status: BuyerProject["status"] }>(
+    const requestProject = await one<{
+      status: BuyerProject["status"];
+    }>(
       `SELECT bp.status
        FROM introduction_requests ir
        JOIN buyer_projects bp ON bp.id=ir.buyer_project_id
        WHERE ir.id=? AND bp.organization_id=?`,
       request.id,
       request.buyer_organization_id,
-    )?.status;
+    );
+    const requestProjectStatus = requestProject?.status;
     if (
       p.status === "approved" &&
       !verificationStatusMeets(
@@ -3680,7 +3852,10 @@ export function mutate(
         "The buyer organization or acquisition project is no longer eligible for Qualified Discovery.",
         409,
       );
-    const existingAccess = membership(deal.id, request.requested_by_user_id);
+    const existingAccess = await membership(
+      deal.id,
+      request.requested_by_user_id,
+    );
     if (
       p.status === "approved" &&
       existingAccess &&
@@ -3691,8 +3866,8 @@ export function mutate(
         409,
       );
     const database = db();
-    inImmediateTransaction(database, () => {
-      const updated = database
+    await inTransaction(database, async (transaction) => {
+      const updated = await transaction
         .prepare(
           `UPDATE introduction_requests SET status=?,reviewed_at=CURRENT_TIMESTAMP,
              reviewed_by_user_id=? WHERE id=? AND status='pending'`,
@@ -3704,18 +3879,18 @@ export function mutate(
           409,
         );
       if (p.status === "approved" && !existingAccess)
-        database
+        await transaction
           .prepare(
             `INSERT INTO access(id,deal_id,buyer_id,status,nda_status,notes)
              VALUES(?,?,?,'requested','not_requested','Approved Qualified Discovery introduction')`,
           )
           .run(randomUUID(), deal.id, request.requested_by_user_id);
-      const requestProject = database
+      const requestProject = (await transaction
         .prepare(
           "SELECT buyer_project_id FROM introduction_requests WHERE id=?",
         )
-        .get(request.id) as { buyer_project_id: string };
-      recordDealBuyerEvent(database, {
+        .get(request.id)) as { buyer_project_id: string };
+      await recordDealBuyerEvent(transaction, {
         dealId: deal.id,
         buyerOrganizationId: request.buyer_organization_id,
         buyerProjectId: requestProject.buyer_project_id,
@@ -3725,16 +3900,16 @@ export function mutate(
         createdByUserId: user.id,
       });
       if (p.status === "approved")
-        recordInitialTransactionAttribution(database, {
+        await recordInitialTransactionAttribution(transaction, {
           dealId: deal.id,
           buyerOrganizationId: request.buyer_organization_id,
           source: "buyer_discovery",
           createdByUserId: user.id,
         });
       if (p.status === "approved")
-        notifyUsers(database, {
-          userIds: activeOrganizationUserIds(
-            database,
+        await notifyUsers(transaction, {
+          userIds: await activeOrganizationUserIds(
+            transaction,
             request.buyer_organization_id,
           ),
           type: "introduction_approved",
@@ -3745,15 +3920,16 @@ export function mutate(
           actorUserId: user.id,
           sourceKey: `introduction:${request.id}:approved-notification`,
         });
-      recalculateBuyerOrganizationDealMatches(
-        database,
+      await recalculateBuyerOrganizationDealMatches(
+        transaction,
         request.buyer_organization_id,
         deal.id,
       );
-      audit(
+      await audit(
         user,
         deal.id,
         `${p.status === "approved" ? "Approved" : "Declined"} a Qualified Discovery introduction`,
+        transaction,
       );
     });
     return {
@@ -3764,13 +3940,18 @@ export function mutate(
     };
   }
   if (action === "requestAccess") {
+    if (user.role === "buyer")
+      await requireApprovedBuyerIdentity(
+        user.id,
+        "Complete buyer verification before requesting confidential access.",
+      );
     throw new AppError(
       "Qualified Discovery access starts with a matched introduction request.",
       403,
     );
   }
   if (action === "updateDeal") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const p = parse(
       z.object({
         stage: z.enum(STAGES),
@@ -3780,8 +3961,8 @@ export function mutate(
       data,
     );
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           "UPDATE deals SET stage=?,published=?,distribution_mode=? WHERE id=?",
         )
@@ -3791,9 +3972,9 @@ export function mutate(
           p.distribution_mode ?? deal.distribution_mode,
           deal.id,
         );
-      recalculateDealMatches(database, deal.id);
+      await recalculateDealMatches(transaction, deal.id);
     });
-    audit(
+    await audit(
       user,
       deal.id,
       `Updated stage to ${p.stage}; teaser ${p.published ? "published" : "private"}`,
@@ -3801,7 +3982,7 @@ export function mutate(
     return { message: "Deal settings saved." };
   }
   if (action === "updateDealDetails") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const update = parse(dealDetailsUpdateSchema, data);
     const p = parse(dealDetailsSchema, {
       ...deal,
@@ -3815,8 +3996,8 @@ export function mutate(
     });
     validateExpectedValueRange(p);
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           `UPDATE deals SET
         title=?,company_name=?,sector=?,province=?,city=?,revenue=?,ebitda=?,asking_price=?,
@@ -3849,15 +4030,15 @@ export function mutate(
           p.distribution_mode,
           deal.id,
         );
-      recalculateDealMatches(database, deal.id);
+      await recalculateDealMatches(transaction, deal.id);
     });
-    audit(user, deal.id, "Updated the confidential sell-side mandate");
+    await audit(user, deal.id, "Updated the confidential sell-side mandate");
     return { message: "Mandate details saved." };
   }
   if (action === "upsertDealFinancial") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const p = parse(dealFinancialSchema, data);
-    const existing = one<{ id: string }>(
+    const existing = await one<{ id: string }>(
       "SELECT id FROM deal_financials WHERE deal_id=? AND fiscal_year=? AND period_type=?",
       deal.id,
       p.fiscal_year,
@@ -3865,8 +4046,8 @@ export function mutate(
     );
     const id = existing?.id ?? randomUUID();
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           `INSERT INTO deal_financials(
         id,deal_id,fiscal_year,period_type,revenue,ebitda,gross_profit,is_projected
@@ -3885,52 +4066,52 @@ export function mutate(
           p.gross_profit,
           p.is_projected ? 1 : 0,
         );
-      recalculateDealMatches(database, deal.id);
+      await recalculateDealMatches(transaction, deal.id);
     });
-    audit(user, deal.id, `Updated ${p.fiscal_year} financial history`);
+    await audit(user, deal.id, `Updated ${p.fiscal_year} financial history`);
     return { id, message: "Financial period saved." };
   }
   if (action === "deleteDealFinancial") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const financialId = parse(idSchema, data.financial_id);
     const database = db();
-    inImmediateTransaction(database, () => {
-      const result = database
+    await inTransaction(database, async (transaction) => {
+      const result = await transaction
         .prepare("DELETE FROM deal_financials WHERE id=? AND deal_id=?")
         .run(financialId, deal.id);
       if (!result.changes)
         throw new AppError("Financial period not found.", 404);
-      recalculateDealMatches(database, deal.id);
+      await recalculateDealMatches(transaction, deal.id);
     });
-    audit(user, deal.id, "Removed a financial history period");
+    await audit(user, deal.id, "Removed a financial history period");
     return { message: "Financial period removed." };
   }
   if (action === "appointAdvisor") {
-    if (!canManageOwnerSide(user, deal))
+    if (!(await canManageOwnerSide(user, deal)))
       throw new AppError(
         "Only the owner organization can appoint its advisor.",
         403,
       );
     const advisorId = parse(idSchema, data.advisor_id);
-    const advisor = one<User>(
+    const advisor = await one<User>(
       `SELECT ${userColumns} FROM users WHERE id=? AND role='advisor'`,
       advisorId,
     );
     if (!advisor || !!advisor.is_demo !== !!user.is_demo)
       throw new AppError("Advisor is not available.");
-    const advisorOrganization = organizationFor(advisor.id);
+    const advisorOrganization = await organizationFor(advisor.id);
     if (!advisorOrganization)
       throw new AppError("The advisor is not connected to an organization.");
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           "UPDATE deals SET advisor_id=?,advisor_organization_id=? WHERE id=?",
         )
         .run(advisor.id, advisorOrganization.id, deal.id);
-      recalculateDealMatches(database, deal.id);
+      await recalculateDealMatches(transaction, deal.id);
     });
-    audit(user, deal.id, `Appointed ${advisor.company} as advisor`);
+    await audit(user, deal.id, `Appointed ${advisor.company} as advisor`);
     return { message: "Advisor appointed and granted firm access." };
   }
   if (action === "connectOwner") {
@@ -3938,7 +4119,7 @@ export function mutate(
       user.role !== "advisor" ||
       deal.owner_id !== user.id ||
       deal.advisor_id !== user.id ||
-      !isManager(user, deal)
+      !(await isManager(user, deal))
     )
       throw new AppError(
         "Only the creating advisor can connect an owner to an unassigned mandate.",
@@ -3949,7 +4130,7 @@ export function mutate(
       throw new AppError(
         "Confirm that you are authorized to connect this owner.",
       );
-    const owner = one<User>(
+    const owner = await one<User>(
       `SELECT ${userColumns} FROM users WHERE email=? AND role='owner'`,
       email,
     );
@@ -3957,28 +4138,28 @@ export function mutate(
       throw new AppError(
         "An eligible owner account was not found. Ask the owner to register first.",
       );
-    const ownerOrganization = organizationFor(owner.id);
+    const ownerOrganization = await organizationFor(owner.id);
     if (!ownerOrganization)
       throw new AppError("The owner is not connected to an organization.");
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           "UPDATE deals SET owner_id=?,owner_organization_id=? WHERE id=?",
         )
         .run(owner.id, ownerOrganization.id, deal.id);
-      recalculateDealMatches(database, deal.id);
+      await recalculateDealMatches(transaction, deal.id);
     });
-    audit(user, deal.id, "Connected the business owner to the mandate");
+    await audit(user, deal.id, "Connected the business owner to the mandate");
     return {
       message:
         "Owner connected. Their firm now controls the mandate and can change the appointed advisor.",
     };
   }
   if (action === "inviteBuyer") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const email = parse(z.email(), data.email).toLowerCase();
-    const buyer = one<User>(
+    const buyer = await one<User>(
       `SELECT ${userColumns} FROM users WHERE email=? AND role='buyer'`,
       email,
     );
@@ -3986,36 +4167,39 @@ export function mutate(
       throw new AppError(
         "No eligible buyer account was found. Ask the buyer to register first.",
       );
-    if (membership(deal.id, buyer.id))
+    if (await membership(deal.id, buyer.id))
       throw new AppError("This buyer already has a request or invitation.");
-    const buyerOrganization = organizationFor(buyer.id);
+    const buyerOrganization = await organizationFor(buyer.id);
     if (!buyerOrganization)
       throw new AppError("The buyer is not connected to an organization.");
     const database = db();
     const accessId = randomUUID();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           "INSERT INTO access(id,deal_id,buyer_id,status,nda_status,notes) VALUES(?,?,?,'nda_pending','requested','Invited by the deal team')",
         )
         .run(accessId, deal.id, buyer.id);
-      recordDealBuyerEvent(database, {
+      const project = await bestBuyerProjectForDeal(
+        transaction,
+        deal.id,
+        buyerOrganization.id,
+      );
+      await recordDealBuyerEvent(transaction, {
         dealId: deal.id,
         buyerOrganizationId: buyerOrganization.id,
-        buyerProjectId:
-          bestBuyerProjectForDeal(database, deal.id, buyerOrganization.id)
-            ?.buyer_project_id ?? null,
+        buyerProjectId: project?.buyer_project_id ?? null,
         eventType: "nda_requested",
         sourceKey: `access:${accessId}:nda-requested`,
         createdByUserId: user.id,
       });
-      recordInitialTransactionAttribution(database, {
+      await recordInitialTransactionAttribution(transaction, {
         dealId: deal.id,
         buyerOrganizationId: buyerOrganization.id,
         source: "seller_invitation",
         createdByUserId: user.id,
       });
-      notifyUsers(database, {
+      await notifyUsers(transaction, {
         userIds: [buyer.id],
         type: "nda_requested",
         title: "NDA requested",
@@ -4025,7 +4209,7 @@ export function mutate(
         actorUserId: user.id,
         sourceKey: `access:${accessId}:nda-requested-notification`,
       });
-      audit(user, deal.id, `Invited ${buyer.company}`);
+      await audit(user, deal.id, `Invited ${buyer.company}`, transaction);
     });
     return {
       message:
@@ -4033,7 +4217,7 @@ export function mutate(
     };
   }
   if (action === "reviewAccess") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const p = parse(
       z.object({
         buyer_id: idSchema,
@@ -4042,47 +4226,71 @@ export function mutate(
       }),
       data,
     );
-    const member = membership(deal.id, p.buyer_id);
+    const member = await membership(deal.id, p.buyer_id);
     if (!member) throw new AppError("Request not found.", 404);
-    const buyerOrganization = organizationFor(p.buyer_id);
+    const buyerOrganization = await organizationFor(p.buyer_id);
     const database = db();
-    const buyerProjectId = buyerOrganization
-      ? (bestBuyerProjectForDeal(database, deal.id, buyerOrganization.id)
-          ?.buyer_project_id ?? null)
-      : null;
+    const buyerProject = buyerOrganization
+      ? await bestBuyerProjectForDeal(database, deal.id, buyerOrganization.id)
+      : undefined;
+    const buyerProjectId = buyerProject?.buyer_project_id ?? null;
     if (p.status === "approved") {
-      if (member.nda_method === "electronic_signature")
-        throw new AppError(
-          "Electronic NDA access is granted only after verified provider completion. Use external upload first if you need to review the agreement manually.",
-        );
-      const doc = one<Document>(
-        "SELECT * FROM documents WHERE id=? AND deal_id=? AND category='NDA' AND audience='buyer' AND buyer_id=?",
-        p.nda_document_id || "",
-        deal.id,
+      await requireApprovedBuyerIdentity(
         p.buyer_id,
+        "This buyer must complete Succera's buyer profile review before confidential access can be approved.",
       );
+      const doc =
+        member.nda_method === "electronic_signature"
+          ? await one<Document>(
+              `SELECT document.* FROM documents document
+               JOIN electronic_signature_envelopes envelope
+                 ON envelope.executed_document_id=document.id
+               WHERE envelope.id=? AND envelope.status='completed'
+                 AND document.deal_id=? AND document.buyer_id=?`,
+              member.electronic_signature_envelope_id || "",
+              deal.id,
+              p.buyer_id,
+            )
+          : await one<Document>(
+              "SELECT * FROM documents WHERE id=? AND deal_id=? AND category='NDA' AND audience='buyer' AND buyer_id=?",
+              p.nda_document_id || "",
+              deal.id,
+              p.buyer_id,
+            );
       if (!doc)
         throw new AppError(
-          "Upload and select this buyer’s executed NDA before approving access.",
+          member.nda_method === "electronic_signature"
+            ? "The electronic NDA must be completed before access can be approved."
+            : "Upload and select this buyer’s executed NDA before approving access.",
         );
-      if (data.confirm_reviewed !== true)
+      if (
+        member.nda_method !== "electronic_signature" &&
+        data.confirm_reviewed !== true
+      )
         throw new AppError("Confirm you reviewed the externally executed NDA.");
-      inImmediateTransaction(database, () => {
-        database
+      await inTransaction(database, async (transaction) => {
+        await transaction
           .prepare(
             `UPDATE access SET status='approved',nda_status='verified',
-               nda_document_id=?,nda_method='external_upload',
-               electronic_signature_envelope_id=NULL WHERE id=?`,
+               nda_document_id=?,nda_method=?,
+               electronic_signature_envelope_id=? WHERE id=?`,
           )
-          .run(doc.id, member.id);
+          .run(
+            doc.id,
+            member.nda_method,
+            member.nda_method === "electronic_signature"
+              ? member.electronic_signature_envelope_id
+              : null,
+            member.id,
+          );
         if (buyerOrganization)
-          recalculateBuyerOrganizationDealMatches(
-            database,
+          await recalculateBuyerOrganizationDealMatches(
+            transaction,
             buyerOrganization.id,
             deal.id,
           );
         if (buyerOrganization) {
-          recordDealBuyerEvent(database, {
+          await recordDealBuyerEvent(transaction, {
             dealId: deal.id,
             buyerOrganizationId: buyerOrganization.id,
             buyerProjectId,
@@ -4090,15 +4298,15 @@ export function mutate(
             sourceKey: `access:${member.id}:nda-approved`,
             createdByUserId: user.id,
           });
-          const sharedCims = database
+          const sharedCims = (await transaction
             .prepare(
               `SELECT id,uploaded_by FROM documents
                WHERE deal_id=? AND category='Company overview'
                  AND audience='approved'`,
             )
-            .all(deal.id) as { id: string; uploaded_by: string }[];
+            .all(deal.id)) as { id: string; uploaded_by: string }[];
           for (const document of sharedCims)
-            recordDealBuyerEvent(database, {
+            await recordDealBuyerEvent(transaction, {
               dealId: deal.id,
               buyerOrganizationId: buyerOrganization.id,
               buyerProjectId,
@@ -4107,7 +4315,7 @@ export function mutate(
               createdByUserId: document.uploaded_by,
             });
         }
-        notifyUsers(database, {
+        await notifyUsers(transaction, {
           userIds: [p.buyer_id],
           type: "nda_approved",
           title: "NDA approved",
@@ -4119,8 +4327,8 @@ export function mutate(
         });
       });
     } else {
-      inImmediateTransaction(database, () => {
-        database
+      await inTransaction(database, async (transaction) => {
+        await transaction
           .prepare(
             `UPDATE access SET status=?,nda_status=?,nda_method='external_upload',
                electronic_signature_envelope_id=NULL WHERE id=?`,
@@ -4131,13 +4339,13 @@ export function mutate(
             member.id,
           );
         if (buyerOrganization)
-          recalculateBuyerOrganizationDealMatches(
-            database,
+          await recalculateBuyerOrganizationDealMatches(
+            transaction,
             buyerOrganization.id,
             deal.id,
           );
         if (buyerOrganization && p.status === "nda_pending") {
-          recordDealBuyerEvent(database, {
+          await recordDealBuyerEvent(transaction, {
             dealId: deal.id,
             buyerOrganizationId: buyerOrganization.id,
             buyerProjectId,
@@ -4145,7 +4353,7 @@ export function mutate(
             sourceKey: `access:${member.id}:nda-requested`,
             createdByUserId: user.id,
           });
-          recordInitialTransactionAttribution(database, {
+          await recordInitialTransactionAttribution(transaction, {
             dealId: deal.id,
             buyerOrganizationId: buyerOrganization.id,
             source: "seller_invitation",
@@ -4153,7 +4361,7 @@ export function mutate(
           });
         }
         if (p.status === "nda_pending")
-          notifyUsers(database, {
+          await notifyUsers(transaction, {
             userIds: [p.buyer_id],
             type: "nda_requested",
             title: "NDA requested",
@@ -4164,7 +4372,7 @@ export function mutate(
             sourceKey: `access:${member.id}:nda-requested-notification`,
           });
         if (buyerOrganization && p.status === "revoked")
-          recordDealBuyerEvent(database, {
+          await recordDealBuyerEvent(transaction, {
             dealId: deal.id,
             buyerOrganizationId: buyerOrganization.id,
             buyerProjectId,
@@ -4173,12 +4381,12 @@ export function mutate(
             createdByUserId: user.id,
           });
         if (p.status === "revoked" || p.status === "denied") {
-          database
+          await transaction
             .prepare("DELETE FROM notifications WHERE user_id=? AND deal_id=?")
             .run(p.buyer_id, deal.id);
         }
         if (p.status === "revoked") {
-          notifyUsers(database, {
+          await notifyUsers(transaction, {
             userIds: [p.buyer_id],
             type: "access_revoked",
             title: "Deal-room access revoked",
@@ -4190,7 +4398,7 @@ export function mutate(
           });
         }
         if (buyerOrganization && p.status === "denied")
-          recordDealBuyerEvent(database, {
+          await recordDealBuyerEvent(transaction, {
             dealId: deal.id,
             buyerOrganizationId: buyerOrganization.id,
             buyerProjectId,
@@ -4200,7 +4408,7 @@ export function mutate(
           });
       });
     }
-    audit(
+    await audit(
       user,
       deal.id,
       `${p.status === "approved" ? "Verified external NDA and approved" : p.status.replaceAll("_", " ")} access for ${p.buyer_id}`,
@@ -4212,25 +4420,25 @@ export function mutate(
       z.object({ buyer_id: idSchema, body: text(1, 5000) }),
       data,
     );
-    const member = membership(deal.id, p.buyer_id);
+    const member = await membership(deal.id, p.buyer_id);
     if (
       !member ||
       ["denied", "revoked"].includes(member.status) ||
-      (!isManager(user, deal) && user.id !== p.buyer_id)
+      (!(await isManager(user, deal)) && user.id !== p.buyer_id)
     )
       throw new AppError("You cannot access this conversation.", 403);
     const messageId = randomUUID();
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           "INSERT INTO messages(id,deal_id,buyer_id,sender_id,body) VALUES(?,?,?,?,?)",
         )
         .run(messageId, deal.id, p.buyer_id, user.id, p.body);
-      notifyUsers(database, {
+      await notifyUsers(transaction, {
         userIds:
           user.id === p.buyer_id
-            ? dealTeamUserIds(database, deal.id)
+            ? await dealTeamUserIds(transaction, deal.id)
             : [p.buyer_id],
         type: "new_message",
         title: `New message · ${deal.title}`,
@@ -4244,21 +4452,21 @@ export function mutate(
     return { message: "Message sent." };
   }
   if (action === "createInternalNote") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const p = parse(z.object({ body: text(1, 5000) }), data);
     const id = randomUUID();
-    run(
+    await run(
       "INSERT INTO deal_internal_notes(id,deal_id,author_user_id,body) VALUES(?,?,?,?)",
       id,
       deal.id,
       user.id,
       p.body,
     );
-    audit(user, deal.id, "Added an internal deal-team note");
+    await audit(user, deal.id, "Added an internal deal-team note");
     return { id, message: "Internal note added." };
   }
   if (action === "createTask") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const p = parse(
       z.object({
         title: text(3, 200),
@@ -4267,18 +4475,23 @@ export function mutate(
       }),
       data,
     );
-    if (p.buyer_id && membership(deal.id, p.buyer_id)?.status !== "approved")
+    if (
+      p.buyer_id &&
+      (await membership(deal.id, p.buyer_id))?.status !== "approved"
+    )
       throw new AppError("Select an approved buyer or an internal task.");
     const taskId = randomUUID();
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           "INSERT INTO tasks(id,deal_id,title,due_date,buyer_id,created_by) VALUES(?,?,?,?,?,?)",
         )
         .run(taskId, deal.id, p.title, p.due_date, p.buyer_id || null, user.id);
-      notifyUsers(database, {
-        userIds: p.buyer_id ? [p.buyer_id] : dealTeamUserIds(database, deal.id),
+      await notifyUsers(transaction, {
+        userIds: p.buyer_id
+          ? [p.buyer_id]
+          : await dealTeamUserIds(transaction, deal.id),
         type: "new_task",
         title: "New diligence task",
         body: `${p.title} is due ${p.due_date} for ${deal.title}.`,
@@ -4288,24 +4501,24 @@ export function mutate(
         sourceKey: `task:${taskId}`,
       });
     });
-    audit(user, deal.id, "Added a diligence task");
+    await audit(user, deal.id, "Added a diligence task");
     return { message: "Task added." };
   }
   if (action === "toggleTask") {
-    const task = one<Task>(
+    const task = await one<Task>(
       "SELECT * FROM tasks WHERE id=? AND deal_id=?",
       parse(idSchema, data.task_id),
       deal.id,
     );
     if (
       !task ||
-      (!isManager(user, deal) &&
-        !(canAccess(user, deal) && task.buyer_id === user.id))
+      (!(await isManager(user, deal)) &&
+        !((await canAccess(user, deal)) && task.buyer_id === user.id))
     )
       throw new AppError("Task is not available.", 403);
     const next = task.status === "done" ? "open" : "done";
-    run("UPDATE tasks SET status=? WHERE id=?", next, task.id);
-    audit(
+    await run("UPDATE tasks SET status=? WHERE id=?", next, task.id);
+    await audit(
       user,
       deal.id,
       `${next === "done" ? "Completed" : "Reopened"} task: ${task.title}`,
@@ -4313,9 +4526,10 @@ export function mutate(
     return { message: "Task updated." };
   }
   if (action === "submitOffer") {
-    requireAccess(user, deal);
+    await requireAccess(user, deal);
     if (user.role !== "buyer")
       throw new AppError("Only buyers can submit offers.", 403);
+    await requireApprovedBuyerIdentity(user.id);
     const p = parse(
       z.object({
         amount: amount.refine((n) => n > 0),
@@ -4329,7 +4543,7 @@ export function mutate(
       }),
       data,
     );
-    const doc = one<Document>(
+    const doc = await one<Document>(
       "SELECT * FROM documents WHERE id=? AND deal_id=? AND uploaded_by=? AND category='LOI' AND audience='buyer' AND buyer_id=?",
       p.document_id,
       deal.id,
@@ -4340,13 +4554,13 @@ export function mutate(
       throw new AppError(
         "Upload your LOI document before submitting the offer.",
       );
-    const organization = organizationFor(user.id);
+    const organization = await organizationFor(user.id);
     if (!organization)
       throw new AppError("Your account is not connected to an organization.");
     const database = db();
     const offerId = randomUUID();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare(
           "INSERT INTO offers(id,deal_id,buyer_id,amount,structure,notes,document_id) VALUES(?,?,?,?,?,?,?)",
         )
@@ -4359,19 +4573,22 @@ export function mutate(
           p.notes,
           p.document_id,
         );
-      recordDealBuyerEvent(database, {
+      const project = await bestBuyerProjectForDeal(
+        transaction,
+        deal.id,
+        organization.id,
+      );
+      await recordDealBuyerEvent(transaction, {
         dealId: deal.id,
         buyerOrganizationId: organization.id,
-        buyerProjectId:
-          bestBuyerProjectForDeal(database, deal.id, organization.id)
-            ?.buyer_project_id ?? null,
+        buyerProjectId: project?.buyer_project_id ?? null,
         eventType: "loi_received",
         sourceKey: `offer:${offerId}:received`,
         metadata: { offer_id: offerId, amount: p.amount },
         createdByUserId: user.id,
       });
-      notifyUsers(database, {
-        userIds: dealManagerUserIds(database, deal.id),
+      await notifyUsers(transaction, {
+        userIds: await dealManagerUserIds(transaction, deal.id),
         type: "loi_received",
         title: "LOI received",
         body: `${organization.name} submitted an indicative LOI for ${deal.title}.`,
@@ -4380,12 +4597,12 @@ export function mutate(
         actorUserId: user.id,
         sourceKey: `offer:${offerId}:loi-received`,
       });
-      audit(user, deal.id, "Submitted an indicative LOI");
+      await audit(user, deal.id, "Submitted an indicative LOI", transaction);
     });
     return { message: "LOI submitted to the deal team." };
   }
   if (action === "reviewOffer") {
-    requireManager(user, deal);
+    await requireManager(user, deal);
     const p = parse(
       z.object({
         offer_id: idSchema,
@@ -4393,35 +4610,39 @@ export function mutate(
       }),
       data,
     );
-    const offer = one<{ id: string; buyer_id: string; amount: number }>(
+    const offer = await one<{ id: string; buyer_id: string; amount: number }>(
       "SELECT id,buyer_id,amount FROM offers WHERE id=? AND deal_id=?",
       p.offer_id,
       deal.id,
     );
     if (!offer) throw new AppError("Offer not found.", 404);
-    const buyerOrganizationId = buyerOrganizationIdForUser(
+    const buyerOrganizationId = await buyerOrganizationIdForUser(
       db(),
       offer.buyer_id,
     );
     const database = db();
-    inImmediateTransaction(database, () => {
-      database
+    await inTransaction(database, async (transaction) => {
+      await transaction
         .prepare("UPDATE offers SET status=? WHERE id=?")
         .run(p.status, p.offer_id);
-      if (buyerOrganizationId && p.status !== "Under review")
-        recordDealBuyerEvent(database, {
+      if (buyerOrganizationId && p.status !== "Under review") {
+        const project = await bestBuyerProjectForDeal(
+          transaction,
+          deal.id,
+          buyerOrganizationId,
+        );
+        await recordDealBuyerEvent(transaction, {
           dealId: deal.id,
           buyerOrganizationId,
-          buyerProjectId:
-            bestBuyerProjectForDeal(database, deal.id, buyerOrganizationId)
-              ?.buyer_project_id ?? null,
+          buyerProjectId: project?.buyer_project_id ?? null,
           eventType:
             p.status === "Shortlisted" ? "shortlisted" : "not_proceeding",
           sourceKey: `offer:${offer.id}:${p.status === "Shortlisted" ? "shortlisted" : "not-proceeding"}`,
           metadata: { offer_id: offer.id, amount: offer.amount },
           createdByUserId: user.id,
         });
-      audit(user, deal.id, `Marked LOI as ${p.status}`);
+      }
+      await audit(user, deal.id, `Marked LOI as ${p.status}`, transaction);
     });
     return {
       message:

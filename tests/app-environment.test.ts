@@ -103,33 +103,33 @@ const runDatabaseProbe = (
     env: { ...process.env, ...environment },
   });
 
-test("production starts empty while normal registration and login still work", () => {
-  const directory = mkdtempSync(path.join(tmpdir(), "succera-production-"));
+test("isolated local Postgres starts empty while registration and login work", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "succera-local-postgres-"));
   try {
     const result = runDatabaseProbe(
       {
-        APP_ENV: "production",
-        APP_URL: "https://succera.io",
+        APP_ENV: "development",
+        APP_URL: "http://127.0.0.1:3000",
         ALLOW_DEMO: "false",
         ALLOW_REGISTRATION: "true",
-        COOKIE_SECURE: "true",
+        COOKIE_SECURE: "false",
         DATA_DIR: directory,
-        NODE_ENV: "production",
+        DATABASE_URL: "pglite::memory:",
+        NODE_ENV: "test",
       },
       `
-        const { db } = await import("./src/lib/db.ts");
+        const { closeDatabase, one } = await import("./src/lib/db.ts");
         const { login, register, sessionUser } = await import("./src/lib/service.ts");
-        const database = db();
         const initial = {
-          users: database.prepare("SELECT COUNT(*) count FROM users").get().count,
-          demoUsers: database.prepare("SELECT COUNT(*) count FROM users WHERE is_demo=1").get().count,
-          deals: database.prepare("SELECT COUNT(*) count FROM deals").get().count,
-          documents: database.prepare("SELECT COUNT(*) count FROM documents").get().count,
+          users: (await one("SELECT COUNT(*) count FROM users")).count,
+          demoUsers: (await one("SELECT COUNT(*) count FROM users WHERE is_demo=1")).count,
+          deals: (await one("SELECT COUNT(*) count FROM deals")).count,
+          documents: (await one("SELECT COUNT(*) count FROM documents")).count,
         };
-        register({ name: "Production Owner", company: "Real Company", email: "owner@example.test", password: "production-password-2026", role: "owner" });
-        const token = login({ email: "owner@example.test", password: "production-password-2026" });
-        console.log(JSON.stringify({ initial, authenticated: Boolean(sessionUser(token)) }));
-        database.close();
+        await register({ name: "Local Owner", company: "Test Company", email: "owner@example.test", password: "production-password-2026", role: "owner" });
+        const token = await login({ email: "owner@example.test", password: "production-password-2026" });
+        console.log(JSON.stringify({ initial, authenticated: Boolean(await sessionUser(token)) }));
+        await closeDatabase();
       `,
     );
     assert.equal(result.status, 0, result.stderr);
@@ -153,17 +153,17 @@ test("staging initializes the isolated synthetic marketplace", () => {
         ALLOW_REGISTRATION: "true",
         COOKIE_SECURE: "true",
         DATA_DIR: directory,
+        DATABASE_URL: "pglite::memory:",
         NODE_ENV: "production",
       },
       `
-        const { db } = await import("./src/lib/db.ts");
-        const database = db();
+        const { closeDatabase, one } = await import("./src/lib/db.ts");
         console.log(JSON.stringify({
-          demoUsers: database.prepare("SELECT COUNT(*) count FROM users WHERE is_demo=1").get().count,
-          deals: database.prepare("SELECT COUNT(*) count FROM deals").get().count,
-          documents: database.prepare("SELECT COUNT(*) count FROM documents").get().count,
+          demoUsers: (await one("SELECT COUNT(*) count FROM users WHERE is_demo=1")).count,
+          deals: (await one("SELECT COUNT(*) count FROM deals")).count,
+          documents: (await one("SELECT COUNT(*) count FROM documents")).count,
         }));
-        database.close();
+        await closeDatabase();
       `,
     );
     assert.equal(result.status, 0, result.stderr);
@@ -177,41 +177,55 @@ test("staging initializes the isolated synthetic marketplace", () => {
   }
 });
 
-test("production refuses a data directory that contains staging demo users", () => {
-  const directory = mkdtempSync(path.join(tmpdir(), "succera-mixed-data-"));
-  try {
-    const staging = runDatabaseProbe(
-      {
-        APP_ENV: "staging",
-        APP_URL: "https://staging.succera.io",
-        ALLOW_DEMO: "true",
-        COOKIE_SECURE: "true",
-        DATA_DIR: directory,
-        NODE_ENV: "production",
-      },
-      `const { db } = await import("./src/lib/db.ts"); db().close();`,
-    );
-    assert.equal(staging.status, 0, staging.stderr);
+test("production requires the Canada Central Supabase database", () => {
+  const base = {
+    APP_ENV: "production",
+    APP_URL: "https://succera.io",
+    ALLOW_DEMO: "false",
+    COOKIE_SECURE: "true",
+    NODE_ENV: "production",
+  };
+  const missing = runDatabaseProbe(
+    { ...base, DATABASE_URL: "" },
+    `const { db } = await import("./src/lib/db.ts"); db();`,
+  );
+  assert.notEqual(missing.status, 0);
+  assert.match(
+    `${missing.stdout}\n${missing.stderr}`,
+    /DATABASE_URL is required/,
+  );
 
-    const production = runDatabaseProbe(
-      {
-        APP_ENV: "production",
-        APP_URL: "https://succera.io",
-        ALLOW_DEMO: "false",
-        COOKIE_SECURE: "true",
-        DATA_DIR: directory,
-        NODE_ENV: "production",
-      },
-      `const { db } = await import("./src/lib/db.ts"); db().close();`,
-    );
-    assert.notEqual(production.status, 0);
-    assert.match(
-      `${production.stdout}\n${production.stderr}`,
-      /Production DATA_DIR contains demo users/,
-    );
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
+  const wrongProject = runDatabaseProbe(
+    {
+      ...base,
+      DATABASE_URL:
+        "postgresql://postgres:secret@db.oldproject.supabase.co:5432/postgres",
+    },
+    `const { db } = await import("./src/lib/db.ts"); db();`,
+  );
+  assert.notEqual(wrongProject.status, 0);
+  assert.match(
+    `${wrongProject.stdout}\n${wrongProject.stderr}`,
+    /must target Succera Production \(Canada Central\)/,
+  );
+
+  const unsafeDevelopmentTarget = runDatabaseProbe(
+    {
+      APP_ENV: "development",
+      APP_URL: "http://localhost:3000",
+      ALLOW_DEMO: "false",
+      COOKIE_SECURE: "false",
+      NODE_ENV: "test",
+      DATABASE_URL:
+        "postgresql://postgres:secret@db.vtfzevaizyvgmynnyxsb.supabase.co:5432/postgres",
+    },
+    `const { db } = await import("./src/lib/db.ts"); db();`,
+  );
+  assert.notEqual(unsafeDevelopmentTarget.status, 0);
+  assert.match(
+    `${unsafeDevelopmentTarget.stdout}\n${unsafeDevelopmentTarget.stderr}`,
+    /cannot be used by development, staging, or tests/,
+  );
 });
 
 test("production demo authentication requests are rejected", async () => {

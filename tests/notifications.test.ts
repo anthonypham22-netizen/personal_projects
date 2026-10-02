@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,7 +10,6 @@ import {
   type EmailMessage,
   type EmailProvider,
 } from "../src/lib/email";
-import { runMigrations } from "../src/lib/migrations";
 import {
   dealManagerUserIds,
   dealTeamUserIds,
@@ -19,17 +17,14 @@ import {
   notifyUsers,
   saveNotificationPreferences,
 } from "../src/lib/notifications";
-import { seed } from "../src/lib/seed";
+import { freshPostgresDatabase } from "./postgres-test-db";
 
 const environment = process.env as Record<string, string | undefined>;
 
-function freshDatabase() {
+async function freshDatabase() {
   const directory = mkdtempSync(path.join(tmpdir(), "succera-notifications-"));
-  const database = new DatabaseSync(":memory:");
-  database.exec("PRAGMA foreign_keys=ON");
-  runMigrations(database);
-  seed(database, directory);
-  database.exec("DELETE FROM email_outbox; DELETE FROM notifications;");
+  const database = await freshPostgresDatabase(directory);
+  await database.exec("DELETE FROM email_outbox; DELETE FROM notifications;");
   return { database, directory };
 }
 
@@ -69,26 +64,23 @@ test("the development provider records a successful mock result without credenti
 
 test("the outbox processor claims each queued email once and records delivery", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "succera-notifications-"));
-  const database = new DatabaseSync(":memory:");
+  const database = await freshPostgresDatabase(directory);
   try {
-    database.exec("PRAGMA foreign_keys=ON");
-    runMigrations(database);
-    seed(database, directory);
-    database
+    await database
       .prepare(
         "UPDATE organization_members SET status='suspended' WHERE organization_id='org-demo-owner' AND user_id='demo-owner'",
       )
       .run();
     assert.deepEqual(
-      dealTeamUserIds(database, "cedar").includes("demo-owner"),
+      (await dealTeamUserIds(database, "cedar")).includes("demo-owner"),
       false,
     );
-    database
+    await database
       .prepare(
         "UPDATE organization_members SET status='active' WHERE organization_id='org-demo-owner' AND user_id='demo-owner'",
       )
       .run();
-    notifyUsers(database, {
+    await notifyUsers(database, {
       userIds: ["demo-buyer"],
       type: "new_message",
       title: "New message",
@@ -96,7 +88,7 @@ test("the outbox processor claims each queued email once and records delivery", 
       href: "/app/messages",
       sourceKey: "test:email-delivery",
     });
-    database
+    await database
       .prepare(
         "UPDATE email_outbox SET status='queued',available_at='2000-01-01 00:00:00' WHERE notification_id=(SELECT id FROM notifications WHERE source_key='test:email-delivery')",
       )
@@ -124,11 +116,11 @@ test("the outbox processor claims each queued email once and records delivery", 
     });
     assert.deepEqual(
       {
-        ...database
+        ...(await database
           .prepare(
             "SELECT status,provider,provider_message_id,attempts FROM email_outbox WHERE notification_id=(SELECT id FROM notifications WHERE source_key='test:email-delivery')",
           )
-          .get(),
+          .get()),
       },
       {
         status: "sent",
@@ -138,7 +130,7 @@ test("the outbox processor claims each queued email once and records delivery", 
       },
     );
 
-    notifyUsers(database, {
+    await notifyUsers(database, {
       userIds: ["demo-buyer"],
       type: "new_task",
       title: "New task",
@@ -146,7 +138,7 @@ test("the outbox processor claims each queued email once and records delivery", 
       href: "/app/tasks",
       sourceKey: "test:email-failure",
     });
-    database
+    await database
       .prepare(
         "UPDATE email_outbox SET status='queued',available_at='2000-01-01 00:00:00' WHERE notification_id=(SELECT id FROM notifications WHERE source_key='test:email-failure')",
       )
@@ -163,11 +155,11 @@ test("the outbox processor claims each queued email once and records delivery", 
     });
     assert.deepEqual(
       {
-        ...database
+        ...(await database
           .prepare(
             "SELECT status,attempts,last_error FROM email_outbox WHERE notification_id=(SELECT id FROM notifications WHERE source_key='test:email-failure')",
           )
-          .get(),
+          .get()),
       },
       {
         status: "failed",
@@ -176,7 +168,7 @@ test("the outbox processor claims each queued email once and records delivery", 
       },
     );
 
-    notifyUsers(database, {
+    await notifyUsers(database, {
       userIds: ["demo-buyer"],
       type: "document_shared",
       title: "Document shared",
@@ -184,7 +176,7 @@ test("the outbox processor claims each queued email once and records delivery", 
       href: "/app/documents",
       sourceKey: "test:email-stale-lease",
     });
-    database
+    await database
       .prepare(
         `UPDATE email_outbox
          SET status='processing',processing_at='2000-01-01 00:00:00',available_at='2000-01-01 00:00:00'
@@ -198,18 +190,18 @@ test("the outbox processor claims each queued email once and records delivery", 
     });
     assert.ok(sent.at(-1)?.idempotencyKey);
   } finally {
-    database.close();
+    await database.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
 test("a stale email worker cannot finalize a lease it no longer owns", async () => {
-  const { database, directory } = freshDatabase();
+  const { database, directory } = await freshDatabase();
   try {
     const previousNodeEnv = environment.NODE_ENV;
     environment.NODE_ENV = "production";
     try {
-      notifyUsers(database, {
+      await notifyUsers(database, {
         userIds: ["demo-buyer"],
         type: "new_message",
         title: "New message",
@@ -219,7 +211,7 @@ test("a stale email worker cannot finalize a lease it no longer owns", async () 
       });
       const provider: EmailProvider = {
         async send() {
-          database
+          await database
             .prepare(
               "UPDATE email_outbox SET processing_token='newer-worker-token' WHERE notification_id=(SELECT id FROM notifications WHERE source_key='test:stale-finalize')",
             )
@@ -234,11 +226,11 @@ test("a stale email worker cannot finalize a lease it no longer owns", async () 
       });
       assert.deepEqual(
         {
-          ...database
+          ...(await database
             .prepare(
               "SELECT status,provider,processing_token FROM email_outbox WHERE notification_id=(SELECT id FROM notifications WHERE source_key='test:stale-finalize')",
             )
-            .get(),
+            .get()),
         },
         {
           status: "processing",
@@ -251,18 +243,18 @@ test("a stale email worker cannot finalize a lease it no longer owns", async () 
       else environment.NODE_ENV = previousNodeEnv;
     }
   } finally {
-    database.close();
+    await database.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
 test("disabling a preference retires queued email without removing the in-app notification", async () => {
-  const { database, directory } = freshDatabase();
+  const { database, directory } = await freshDatabase();
   try {
     const previousNodeEnv = environment.NODE_ENV;
     environment.NODE_ENV = "production";
     try {
-      notifyUsers(database, {
+      await notifyUsers(database, {
         userIds: ["demo-buyer"],
         type: "new_task",
         title: "New task",
@@ -270,16 +262,16 @@ test("disabling a preference retires queued email without removing the in-app no
         href: "/app/tasks",
         sourceKey: "test:disable-before-delivery",
       });
-      saveNotificationPreferences(database, "demo-buyer", {
+      await saveNotificationPreferences(database, "demo-buyer", {
         new_task: "disabled",
       });
       assert.deepEqual(
         {
-          ...database
+          ...(await database
             .prepare(
               "SELECT status,last_error FROM email_outbox WHERE notification_id=(SELECT id FROM notifications WHERE source_key='test:disable-before-delivery')",
             )
-            .get(),
+            .get()),
         },
         {
           status: "failed",
@@ -299,29 +291,29 @@ test("disabling a preference retires queued email without removing the in-app no
         failed: 0,
       });
       assert.equal(sends, 0);
-      const notificationCount = database
+      const notificationCount = (await database
         .prepare(
           "SELECT COUNT(*) count FROM notifications WHERE source_key='test:disable-before-delivery' AND user_id='demo-buyer'",
         )
-        .get() as { count: number };
+        .get()) as { count: number };
       assert.equal(notificationCount.count, 1);
     } finally {
       if (previousNodeEnv === undefined) delete environment.NODE_ENV;
       else environment.NODE_ENV = previousNodeEnv;
     }
   } finally {
-    database.close();
+    await database.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
 test("an email provider receives cancellation when delivery exceeds its timeout", async () => {
-  const { database, directory } = freshDatabase();
+  const { database, directory } = await freshDatabase();
   try {
     const previousNodeEnv = environment.NODE_ENV;
     environment.NODE_ENV = "production";
     try {
-      notifyUsers(database, {
+      await notifyUsers(database, {
         userIds: ["demo-buyer"],
         type: "document_shared",
         title: "Document shared",
@@ -351,82 +343,72 @@ test("an email provider receives cancellation when delivery exceeds its timeout"
       else environment.NODE_ENV = previousNodeEnv;
     }
   } finally {
-    database.close();
+    await database.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("document notification audiences are independent of funnel categories", () => {
+test("document notification audiences are independent of funnel categories", async () => {
   const directory = mkdtempSync(
     path.join(tmpdir(), "succera-document-audiences-"),
   );
-  const database = new DatabaseSync(":memory:");
+  const database = await freshPostgresDatabase(directory);
   try {
-    database.exec("PRAGMA foreign_keys=ON");
-    runMigrations(database);
-    seed(database, directory);
-
-    assert.deepEqual(documentAudienceUserIds(database, "cedar", "approved"), [
-      "demo-buyer",
-    ]);
     assert.deepEqual(
-      documentAudienceUserIds(database, "cedar", "buyer", "demo-buyer-2"),
+      await documentAudienceUserIds(database, "cedar", "approved"),
+      ["demo-buyer"],
+    );
+    assert.deepEqual(
+      await documentAudienceUserIds(database, "cedar", "buyer", "demo-buyer-2"),
       ["demo-buyer-2"],
     );
   } finally {
-    database.close();
+    await database.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("manager-only deal notifications exclude organization viewers", () => {
+test("manager-only deal notifications exclude organization viewers", async () => {
   const directory = mkdtempSync(
     path.join(tmpdir(), "succera-notification-viewers-"),
   );
-  const database = new DatabaseSync(":memory:");
+  const database = await freshPostgresDatabase(directory);
   try {
-    database.exec("PRAGMA foreign_keys=ON");
-    runMigrations(database);
-    seed(database, directory);
-
-    database
+    await database
       .prepare(
         "UPDATE organization_members SET role='viewer' WHERE organization_id='org-demo-owner' AND user_id='demo-owner'",
       )
       .run();
     assert.equal(
-      dealTeamUserIds(database, "cedar").includes("demo-owner"),
+      (await dealTeamUserIds(database, "cedar")).includes("demo-owner"),
       true,
     );
     assert.equal(
-      dealManagerUserIds(database, "cedar").includes("demo-owner"),
+      (await dealManagerUserIds(database, "cedar")).includes("demo-owner"),
       false,
     );
     assert.equal(
-      dealManagerUserIds(database, "cedar").includes("demo-advisor"),
+      (await dealManagerUserIds(database, "cedar")).includes("demo-advisor"),
       true,
     );
 
-    database
+    await database
       .prepare(
         "UPDATE organization_members SET role='owner' WHERE organization_id='org-demo-owner' AND user_id='demo-owner'",
       )
       .run();
   } finally {
-    database.close();
+    await database.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("notification creation is retryable across a partial outbox gap", () => {
+test("notification creation is retryable across a partial outbox gap", async () => {
   const directory = mkdtempSync(
     path.join(tmpdir(), "succera-notification-gap-"),
   );
-  const database = new DatabaseSync(":memory:");
+  const database = await freshPostgresDatabase(directory);
   try {
-    database.exec("PRAGMA foreign_keys=ON");
-    runMigrations(database);
-    seed(database, directory);
     const input = {
       userIds: ["demo-buyer"],
       type: "new_message" as const,
@@ -435,53 +417,56 @@ test("notification creation is retryable across a partial outbox gap", () => {
       href: "/app/messages",
       sourceKey: "test:notification-gap",
     };
-    assert.equal(notifyUsers(database, input).length, 1);
-    database
+    assert.equal((await notifyUsers(database, input)).length, 1);
+    await database
       .prepare(
         "DELETE FROM email_outbox WHERE notification_id=(SELECT id FROM notifications WHERE user_id=? AND source_key=?)",
       )
       .run("demo-buyer", input.sourceKey);
-    assert.equal(notifyUsers(database, input).length, 0);
+    assert.equal((await notifyUsers(database, input)).length, 0);
     assert.deepEqual(
       {
-        ...database
+        ...(await database
           .prepare(
             "SELECT COUNT(*) count FROM notifications WHERE user_id=? AND source_key=?",
           )
-          .get("demo-buyer", input.sourceKey),
+          .get("demo-buyer", input.sourceKey)),
       },
       { count: 1 },
     );
     assert.deepEqual(
       {
-        ...database
+        ...(await database
           .prepare(
             "SELECT COUNT(*) count FROM email_outbox WHERE notification_id=(SELECT id FROM notifications WHERE user_id=? AND source_key=?)",
           )
-          .get("demo-buyer", input.sourceKey),
+          .get("demo-buyer", input.sourceKey)),
       },
       { count: 1 },
     );
 
-    database.exec("SAVEPOINT outer_notification_test");
-    notifyUsers(database, {
-      ...input,
-      sourceKey: "test:notification-outer-rollback",
-    });
-    database.exec("ROLLBACK TO SAVEPOINT outer_notification_test");
-    database.exec("RELEASE SAVEPOINT outer_notification_test");
+    await assert.rejects(
+      database.transaction(async (transaction) => {
+        await notifyUsers(transaction, {
+          ...input,
+          sourceKey: "test:notification-outer-rollback",
+        });
+        throw new Error("rollback notification fixture");
+      }),
+      /rollback notification fixture/,
+    );
     assert.deepEqual(
       {
-        ...database
+        ...(await database
           .prepare(
             "SELECT COUNT(*) count FROM notifications WHERE source_key=?",
           )
-          .get("test:notification-outer-rollback"),
+          .get("test:notification-outer-rollback")),
       },
       { count: 0 },
     );
   } finally {
-    database.close();
+    await database.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });

@@ -8,7 +8,7 @@ export default async function FirmRoute({
 }: {
   params: Promise<{ slug: string }>;
 }) {
-  const firm = getPublicFirmBySlug((await params).slug);
+  const firm = await getPublicFirmBySlug((await params).slug);
   if (!firm) notFound();
   permanentRedirect(publicFirmPath(firm));
 }

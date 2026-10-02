@@ -75,20 +75,24 @@ const publicOrganizationTypeSql = `o.organization_type IN (${publicOrganizationT
   .map(() => "?")
   .join(",")})`;
 
-const taxonomyFor = (organizationId: string) => ({
-  industries: all<{ industry: string }>(
-    `SELECT industry FROM organization_public_industries
-     WHERE organization_id=? ORDER BY rowid`,
-    organizationId,
+const taxonomyFor = async (organizationId: string) => ({
+  industries: (
+    await all<{ industry: string }>(
+      `SELECT industry FROM organization_public_industries
+     WHERE organization_id=? ORDER BY industry`,
+      organizationId,
+    )
   ).map(({ industry }) => industry),
-  locations: all<{ province: string }>(
-    `SELECT province FROM organization_public_locations
-     WHERE organization_id=? ORDER BY rowid`,
-    organizationId,
+  locations: (
+    await all<{ province: string }>(
+      `SELECT province FROM organization_public_locations
+     WHERE organization_id=? ORDER BY province`,
+      organizationId,
+    )
   ).map(({ province }) => province),
 });
 
-const taxonomiesFor = (organizationIds: string[]) => {
+const taxonomiesFor = async (organizationIds: string[]) => {
   const result = new Map<string, { industries: string[]; locations: string[] }>(
     organizationIds.map((organizationId) => [
       organizationId,
@@ -97,25 +101,26 @@ const taxonomiesFor = (organizationIds: string[]) => {
   );
   if (!organizationIds.length) return result;
   const placeholders = organizationIds.map(() => "?").join(",");
-  for (const row of all<{ organization_id: string; industry: string }>(
+  for (const row of await all<{ organization_id: string; industry: string }>(
     `SELECT organization_id,industry FROM organization_public_industries
-     WHERE organization_id IN (${placeholders}) ORDER BY rowid`,
+     WHERE organization_id IN (${placeholders}) ORDER BY organization_id,industry`,
     ...organizationIds,
   ))
     result.get(row.organization_id)?.industries.push(row.industry);
-  for (const row of all<{ organization_id: string; province: string }>(
+  for (const row of await all<{ organization_id: string; province: string }>(
     `SELECT organization_id,province FROM organization_public_locations
-     WHERE organization_id IN (${placeholders}) ORDER BY rowid`,
+     WHERE organization_id IN (${placeholders}) ORDER BY organization_id,province`,
     ...organizationIds,
   ))
     result.get(row.organization_id)?.locations.push(row.province);
   return result;
 };
 
-const summaryFromRow = (
+const summaryFromRow = async (
   row: PublicFirmRow & { organization_id: string },
-  taxonomy = taxonomyFor(row.organization_id),
-): PublicFirmSummary => {
+  taxonomy?: { industries: string[]; locations: string[] },
+): Promise<PublicFirmSummary> => {
+  const resolvedTaxonomy = taxonomy ?? (await taxonomyFor(row.organization_id));
   return {
     slug: row.slug,
     name: row.name,
@@ -125,8 +130,8 @@ const summaryFromRow = (
     public_description: row.public_description,
     website: row.show_website ? publicWebsite(row.website) : null,
     province: row.show_province && row.province ? row.province : null,
-    industries: taxonomy.industries,
-    locations: row.show_province ? taxonomy.locations : [],
+    industries: resolvedTaxonomy.industries,
+    locations: row.show_province ? resolvedTaxonomy.locations : [],
     verification_label:
       firmKind(row.organization_type) === "buyer" &&
       verificationStatusMeets(row.verification_status, "firm_verified")
@@ -135,7 +140,7 @@ const summaryFromRow = (
   };
 };
 
-const firmRows = (filters: PublicFirmFilters = {}) => {
+const firmRows = async (filters: PublicFirmFilters = {}) => {
   const conditions = [
     "p.is_public=1",
     publicOrganizationTypeSql,
@@ -173,7 +178,7 @@ const firmRows = (filters: PublicFirmFilters = {}) => {
     conditions.push("o.slug=?");
     params.push(filters.slug);
   }
-  return all<PublicFirmRow & { organization_id: string }>(
+  return await all<PublicFirmRow & { organization_id: string }>(
     `SELECT o.id organization_id,o.slug,o.name,o.organization_type,o.website,
        o.province,p.headline,p.public_description,p.show_website,
        p.show_province,p.show_verified_transactions,o.verification_status
@@ -185,27 +190,30 @@ const firmRows = (filters: PublicFirmFilters = {}) => {
   );
 };
 
-export function listPublicFirms(
+export async function listPublicFirms(
   filters: PublicFirmFilters = {},
-): PublicFirmSummary[] {
-  const rows = firmRows(filters);
-  const taxonomies = taxonomiesFor(rows.map((row) => row.organization_id));
-  return rows.map((row) =>
-    summaryFromRow(row, taxonomies.get(row.organization_id)),
+): Promise<PublicFirmSummary[]> {
+  const rows = await firmRows(filters);
+  const taxonomies = await taxonomiesFor(
+    rows.map((row) => row.organization_id),
+  );
+  return await Promise.all(
+    rows.map((row) => summaryFromRow(row, taxonomies.get(row.organization_id))),
   );
 }
 
-const publicTransactionRows = (
+const publicTransactionRows = async (
   extraWhere = "",
   params: (string | number)[] = [],
   limit?: number,
 ) =>
-  all<
-    PublicTransaction & {
-      buyer_organization_id: string;
-    }
-  >(
-    `SELECT ct.public_slug,ct.industry,ct.province,ct.enterprise_value,
+  (
+    await all<
+      PublicTransaction & {
+        buyer_organization_id: string;
+      }
+    >(
+      `SELECT ct.public_slug,ct.industry,ct.province,ct.enterprise_value,
        ct.closed_date,
        o.slug buyer_firm_slug,o.name buyer_firm_name,
        ct.buyer_organization_id
@@ -219,22 +227,23 @@ const publicTransactionRows = (
        ${extraWhere}
      ORDER BY ct.closed_date DESC,ct.public_slug
      ${limit === undefined ? "" : "LIMIT ?"}`,
-    ...publicOrganizationTypes,
-    ...params,
-    ...(limit === undefined ? [] : [limit]),
+      ...publicOrganizationTypes,
+      ...params,
+      ...(limit === undefined ? [] : [limit]),
+    )
   ).map(({ buyer_organization_id: _buyerOrganizationId, ...row }) => ({
     ...row,
     public_slug: row.public_slug!,
     verification_label: "Succera verified" as const,
   }));
 
-export function listPublicTransactions(
+export async function listPublicTransactions(
   filters: {
     industry?: string;
     province?: string;
     limit?: number;
   } = {},
-): PublicTransaction[] {
+): Promise<PublicTransaction[]> {
   const conditions: string[] = [];
   const params: string[] = [];
   if (filters.industry) {
@@ -245,7 +254,7 @@ export function listPublicTransactions(
     conditions.push("ct.province=?");
     params.push(filters.province);
   }
-  return publicTransactionRows(
+  return await publicTransactionRows(
     conditions.length ? `AND ${conditions.join(" AND ")}` : "",
     params,
     filters.limit === undefined
@@ -254,22 +263,22 @@ export function listPublicTransactions(
   );
 }
 
-export function getPublicTransactionBySlug(
+export async function getPublicTransactionBySlug(
   publicSlug: string,
-): PublicTransaction | undefined {
-  return publicTransactionRows("AND ct.public_slug=?", [publicSlug])[0];
+): Promise<PublicTransaction | undefined> {
+  return (await publicTransactionRows("AND ct.public_slug=?", [publicSlug]))[0];
 }
 
-export function getPublicFirmBySlug(
+export async function getPublicFirmBySlug(
   slug: string,
   kind?: PublicFirmKind,
-): PublicFirmDetail | undefined {
-  const row = firmRows({ kind, slug })[0];
+): Promise<PublicFirmDetail | undefined> {
+  const row = (await firmRows({ kind, slug }))[0];
   if (!row) return undefined;
-  const summary = summaryFromRow(row);
+  const summary = await summaryFromRow(row);
   const transactions =
     summary.kind === "buyer" && row.show_verified_transactions
-      ? publicTransactionRows("AND o.slug=?", [row.slug])
+      ? await publicTransactionRows("AND o.slug=?", [row.slug])
       : [];
   const detail: PublicFirmDetail = {
     ...summary,
@@ -279,8 +288,10 @@ export function getPublicFirmBySlug(
   return detail;
 }
 
-export function listPublicIndustries(): PublicDirectoryAggregate[] {
-  return all<PublicDirectoryAggregate>(
+export async function listPublicIndustries(): Promise<
+  PublicDirectoryAggregate[]
+> {
+  return await all<PublicDirectoryAggregate>(
     `SELECT industry value,COUNT(*) count
      FROM organization_public_industries public_industry
      JOIN organizations o ON o.id=public_industry.organization_id
@@ -292,24 +303,26 @@ export function listPublicIndustries(): PublicDirectoryAggregate[] {
   );
 }
 
-export function getPublicIndustry(
+export async function getPublicIndustry(
   industry: string,
-): PublicDirectoryDetail | undefined {
-  const firms = listPublicFirms({ industry });
+): Promise<PublicDirectoryDetail | undefined> {
+  const firms = await listPublicFirms({ industry });
   return firms.length ? { value: industry, firms } : undefined;
 }
 
-export function getPublicIndustryBySlug(
+export async function getPublicIndustryBySlug(
   slug: string,
-): PublicDirectoryDetail | undefined {
-  const aggregate = listPublicIndustries().find(
+): Promise<PublicDirectoryDetail | undefined> {
+  const aggregate = (await listPublicIndustries()).find(
     ({ value }) => publicDirectorySlug(value) === slug,
   );
-  return aggregate ? getPublicIndustry(aggregate.value) : undefined;
+  return aggregate ? await getPublicIndustry(aggregate.value) : undefined;
 }
 
-export function listPublicLocations(): PublicDirectoryAggregate[] {
-  return all<PublicDirectoryAggregate>(
+export async function listPublicLocations(): Promise<
+  PublicDirectoryAggregate[]
+> {
+  return await all<PublicDirectoryAggregate>(
     `SELECT public_location.province value,COUNT(*) count
      FROM organization_public_locations public_location
      JOIN organizations o ON o.id=public_location.organization_id
@@ -322,32 +335,32 @@ export function listPublicLocations(): PublicDirectoryAggregate[] {
   );
 }
 
-export function getPublicLocation(
+export async function getPublicLocation(
   province: string,
-): PublicDirectoryDetail | undefined {
-  const firms = listPublicFirms({ province });
+): Promise<PublicDirectoryDetail | undefined> {
+  const firms = await listPublicFirms({ province });
   return firms.length ? { value: province, firms } : undefined;
 }
 
-export function getPublicLocationBySlug(
+export async function getPublicLocationBySlug(
   slug: string,
-): PublicDirectoryDetail | undefined {
-  const aggregate = listPublicLocations().find(
+): Promise<PublicDirectoryDetail | undefined> {
+  const aggregate = (await listPublicLocations()).find(
     ({ value }) => publicDirectorySlug(value) === slug,
   );
-  return aggregate ? getPublicLocation(aggregate.value) : undefined;
+  return aggregate ? await getPublicLocation(aggregate.value) : undefined;
 }
 
-export function listPublicSitemapPaths(): string[] {
-  const firms = listPublicFirms();
+export async function listPublicSitemapPaths(): Promise<string[]> {
+  const firms = await listPublicFirms();
   const firmPaths = firms.map(publicFirmPath);
-  const transactionPaths = listPublicTransactions().map(
+  const transactionPaths = (await listPublicTransactions()).map(
     (transaction) => `/transactions/${transaction.public_slug}`,
   );
-  const industryPaths = listPublicIndustries().map(
+  const industryPaths = (await listPublicIndustries()).map(
     ({ value }) => `/industries/${publicDirectorySlug(value)}`,
   );
-  const locationPaths = listPublicLocations().map(
+  const locationPaths = (await listPublicLocations()).map(
     ({ value }) => `/locations/${publicDirectorySlug(value)}`,
   );
   return [

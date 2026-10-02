@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { db, one, run } from "../src/lib/db";
+import { closeDatabase, databaseReady, db, one, run } from "../src/lib/db";
 import {
   workspace,
   mutate,
@@ -19,40 +19,40 @@ import {
 } from "../src/lib/service";
 import type { User, Document } from "../src/lib/types";
 import { notifyUsers } from "../src/lib/notifications";
-
+import { reviewBuyerIdentityVerification } from "../src/lib/buyer-identity-verification";
 let directory: string;
 let buyer: User, otherBuyer: User, owner: User, advisor: User;
-before(() => {
+before(async () => {
   directory = mkdtempSync(path.join(tmpdir(), "northlane-permissions-"));
   process.env.DATA_DIR = directory;
   process.env.ALLOW_DEMO = "true";
   process.env.ALLOW_REGISTRATION = "true";
-  db();
-  buyer = one<User>("SELECT * FROM users WHERE id='demo-buyer'")!;
-  otherBuyer = one<User>("SELECT * FROM users WHERE id='demo-buyer-2'")!;
-  owner = one<User>("SELECT * FROM users WHERE id='demo-owner'")!;
-  advisor = one<User>("SELECT * FROM users WHERE id='demo-advisor'")!;
+  await databaseReady();
+  buyer = (await one<User>("SELECT * FROM users WHERE id='demo-buyer'"))!;
+  otherBuyer = (await one<User>(
+    "SELECT * FROM users WHERE id='demo-buyer-2'",
+  ))!;
+  owner = (await one<User>("SELECT * FROM users WHERE id='demo-owner'"))!;
+  advisor = (await one<User>("SELECT * FROM users WHERE id='demo-advisor'"))!;
 });
-after(() => {
-  db().close();
+after(async () => {
+  await closeDatabase();
   rmSync(directory, { recursive: true, force: true });
 });
-
-test("buyer transaction tombstones remain scoped and require platform verification", () => {
-  const created = mutate(buyer, {
+test("buyer transaction tombstones remain scoped and require platform verification", async () => {
+  const created = await mutate(buyer, {
     action: "createClosedTransaction",
     data: {
       industry: "Business services",
       province: "Ontario",
-      enterprise_value: 18_000_000,
+      enterprise_value: 18000000,
       closed_date: "2025-06-30",
       description:
         "Majority acquisition of a Canadian recurring-revenue field-services company.",
     },
   });
   assert.ok(created.id);
-
-  const buyerState = workspace(buyer) as WorkspaceWithTransactions;
+  const buyerState = (await workspace(buyer)) as WorkspaceWithTransactions;
   const transaction = buyerState.closed_transactions.find(
     (entry) => entry.id === created.id,
   );
@@ -61,39 +61,38 @@ test("buyer transaction tombstones remain scoped and require platform verificati
   assert.equal(transaction?.verification_label, "Self-reported");
   assert.equal(
     (
-      workspace(otherBuyer) as WorkspaceWithTransactions
+      (await workspace(otherBuyer)) as WorkspaceWithTransactions
     ).closed_transactions.some((entry) => entry.id === created.id),
     false,
   );
-
-  assert.throws(
-    () =>
-      mutate(owner, {
+  await assert.rejects(
+    async () =>
+      await mutate(owner, {
         action: "createClosedTransaction",
         data: {
           industry: "Technology",
           province: "Ontario",
-          enterprise_value: 5_000_000,
+          enterprise_value: 5000000,
           closed_date: "2024-01-31",
           description: "An unauthorized transaction-history record.",
         },
       }),
     /Only buyer organization owners and administrators/,
   );
-  assert.throws(
-    () =>
-      mutate(otherBuyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(otherBuyer, {
         action: "verifyClosedTransaction",
         data: { transaction_id: created.id },
       }),
     /Only platform verification reviewers/,
   );
-  run("UPDATE users SET is_platform_admin=1 WHERE id=?", buyer.id);
+  await run("UPDATE users SET is_platform_admin=1 WHERE id=?", buyer.id);
   buyer.is_platform_admin = 1;
   try {
-    assert.throws(
-      () =>
-        mutate(buyer, {
+    await assert.rejects(
+      async () =>
+        await mutate(buyer, {
           action: "verifyClosedTransaction",
           data: { transaction_id: created.id },
         }),
@@ -101,35 +100,36 @@ test("buyer transaction tombstones remain scoped and require platform verificati
       "a platform reviewer must not verify a record for their own firm",
     );
   } finally {
-    run("UPDATE users SET is_platform_admin=0 WHERE id=?", buyer.id);
+    await run("UPDATE users SET is_platform_admin=0 WHERE id=?", buyer.id);
     buyer.is_platform_admin = 0;
   }
-
-  const reviewerBefore = workspace(advisor) as WorkspaceWithTransactions;
+  const reviewerBefore = (await workspace(
+    advisor,
+  )) as WorkspaceWithTransactions;
   assert.equal(
     reviewerBefore.closed_transaction_review_queue?.some(
       (entry) => entry.id === created.id,
     ),
     true,
   );
-  mutate(advisor, {
+  await mutate(advisor, {
     action: "verifyClosedTransaction",
     data: { transaction_id: created.id },
   });
-
   const verified = (
-    workspace(buyer) as WorkspaceWithTransactions
+    (await workspace(buyer)) as WorkspaceWithTransactions
   ).closed_transactions.find((entry) => entry.id === created.id);
   assert.equal(verified?.verified, 1);
   assert.equal(verified?.verification_label, "Succera verified");
   assert.equal(
     (
-      workspace(advisor) as WorkspaceWithTransactions
+      (await workspace(advisor)) as WorkspaceWithTransactions
     ).closed_transaction_review_queue?.some((entry) => entry.id === created.id),
     false,
   );
-
-  const sellerMatch = workspace(owner).deal_matches?.find(
+  const sellerMatch = await (
+    await workspace(owner)
+  ).deal_matches?.find(
     (match) =>
       match.deal_id === "cedar" &&
       match.buyer_organization_id === "org-demo-buyer",
@@ -163,19 +163,19 @@ test("buyer transaction tombstones remain scoped and require platform verificati
   assert.equal("seller_organization_id" in (sellerTransaction ?? {}), false);
   assert.equal("advisor_organization_id" in (sellerTransaction ?? {}), false);
 });
-
-type WorkspaceWithTransactions = ReturnType<typeof workspace> & {
+type WorkspaceWithTransactions = Awaited<ReturnType<typeof workspace>> & {
   closed_transactions: Array<{
     id: string;
     buyer_organization_id: string;
     verified: number;
     verification_label: string;
   }>;
-  closed_transaction_review_queue?: Array<{ id: string }>;
+  closed_transaction_review_queue?: Array<{
+    id: string;
+  }>;
 };
-
-test("buyers receive redacted teasers before confidential approval", () => {
-  const state = workspace(buyer);
+test("buyers receive redacted teasers before confidential approval", async () => {
+  const state = await workspace(buyer);
   const harbour = state.deals.find((d) => d.id === "harbour")!;
   assert.equal(harbour.company_name, "Confidential company");
   assert.equal(harbour.confidential_summary, "");
@@ -190,9 +190,8 @@ test("buyers receive redacted teasers before confidential approval", () => {
     "Cedar Industrial Services Ltd.",
   );
 });
-
-test("distribution strategy controls discovery and redacts seller identity", () => {
-  const result = mutate(owner, {
+test("distribution strategy controls discovery and redacts seller identity", async () => {
+  const result = await mutate(owner, {
     action: "createDeal",
     data: {
       title: "Project Distribution",
@@ -200,9 +199,9 @@ test("distribution strategy controls discovery and redacts seller identity", () 
       sector: "Business services",
       province: "Ontario",
       city: "Toronto",
-      revenue: 7_500_000,
-      ebitda: 1_250_000,
-      asking_price: 10_000_000,
+      revenue: 7500000,
+      ebitda: 1250000,
+      asking_price: 10000000,
       employees: 32,
       founded: 2008,
       description:
@@ -214,17 +213,16 @@ test("distribution strategy controls discovery and redacts seller identity", () 
       seller_financing_possible: false,
       management_transition: "Founder available for a twelve-month transition.",
       reason_for_transaction: "Planned founder succession.",
-      min_expected_value: 9_000_000,
-      max_expected_value: 11_000_000,
+      min_expected_value: 9000000,
+      max_expected_value: 11000000,
       distribution_mode: "private_outreach",
       financial_year: 2025,
-      gross_profit: 3_100_000,
+      gross_profit: 3100000,
       financial_is_projected: false,
     },
   });
   const dealId = result.id!;
-
-  mutate(owner, {
+  await mutate(owner, {
     action: "updateDeal",
     data: {
       deal_id: dealId,
@@ -234,12 +232,11 @@ test("distribution strategy controls discovery and redacts seller identity", () 
     },
   });
   assert.equal(
-    workspace(buyer).deals.some((deal) => deal.id === dealId),
+    await (await workspace(buyer)).deals.some((deal) => deal.id === dealId),
     false,
     "private outreach must not enter buyer discovery",
   );
-
-  mutate(owner, {
+  await mutate(owner, {
     action: "updateDeal",
     data: {
       deal_id: dealId,
@@ -248,7 +245,9 @@ test("distribution strategy controls discovery and redacts seller identity", () 
       distribution_mode: "qualified_discovery",
     },
   });
-  const discovery = workspace(buyer).deals.find((deal) => deal.id === dealId)!;
+  const discovery = await (
+    await workspace(buyer)
+  ).deals.find((deal) => deal.id === dealId)!;
   assert.ok(discovery);
   assert.equal(discovery.company_name, "Confidential company");
   assert.equal(discovery.owner_id, "");
@@ -261,7 +260,9 @@ test("distribution strategy controls discovery and redacts seller identity", () 
   assert.equal(discovery.management_transition, "");
   assert.equal(discovery.reason_for_transaction, "");
   assert.equal(
-    workspace(buyer).deal_financials.some(
+    await (
+      await workspace(buyer)
+    ).deal_financials.some(
       (financial) =>
         financial.deal_id === dealId && financial.fiscal_year === 2025,
     ),
@@ -269,9 +270,8 @@ test("distribution strategy controls discovery and redacts seller identity", () 
     "detailed financial history remains gated until NDA approval",
   );
 });
-
-test("deal teams can maintain transaction objectives and historical financials", () => {
-  const result = mutate(owner, {
+test("deal teams can maintain transaction objectives and historical financials", async () => {
+  const result = await mutate(owner, {
     action: "createDeal",
     data: {
       title: "Project Financial History",
@@ -279,9 +279,9 @@ test("deal teams can maintain transaction objectives and historical financials",
       sector: "Business services",
       province: "Alberta",
       city: "Calgary",
-      revenue: 6_000_000,
-      ebitda: 900_000,
-      asking_price: 7_500_000,
+      revenue: 6000000,
+      ebitda: 900000,
+      asking_price: 7500000,
       employees: 24,
       founded: 2012,
       description:
@@ -291,8 +291,7 @@ test("deal teams can maintain transaction objectives and historical financials",
     },
   });
   const dealId = result.id!;
-
-  mutate(owner, {
+  await mutate(owner, {
     action: "updateDealDetails",
     data: {
       deal_id: dealId,
@@ -302,38 +301,37 @@ test("deal teams can maintain transaction objectives and historical financials",
       seller_financing_possible: true,
       management_transition: "Management will remain after closing.",
       reason_for_transaction: "Growth capital and shareholder liquidity.",
-      min_expected_value: 7_000_000,
-      max_expected_value: 9_000_000,
+      min_expected_value: 7000000,
+      max_expected_value: 9000000,
     },
   });
-  const updated = getDeal(dealId);
+  const updated = await getDeal(dealId);
   assert.equal(updated.transaction_type, "recapitalization");
   assert.equal(updated.ownership_percentage_available, 65);
   assert.equal(updated.seller_rollover_possible, 1);
   assert.equal(updated.seller_financing_possible, 1);
-  assert.equal(updated.min_expected_value, 7_000_000);
-  assert.equal(updated.max_expected_value, 9_000_000);
-
-  const financialResult = mutate(owner, {
+  assert.equal(updated.min_expected_value, 7000000);
+  assert.equal(updated.max_expected_value, 9000000);
+  const financialResult = await mutate(owner, {
     action: "upsertDealFinancial",
     data: {
       deal_id: dealId,
       fiscal_year: 2024,
       period_type: "annual",
-      revenue: 5_400_000,
-      ebitda: 760_000,
-      gross_profit: 2_100_000,
+      revenue: 5400000,
+      ebitda: 760000,
+      gross_profit: 2100000,
       is_projected: false,
     },
   });
-  const financial = workspace(owner).deal_financials.find(
-    (row) => row.id === financialResult.id,
-  )!;
-  assert.equal(financial.revenue, 5_400_000);
-  assert.equal(financial.gross_profit, 2_100_000);
-  assert.throws(
-    () =>
-      mutate(buyer, {
+  const financial = await (
+    await workspace(owner)
+  ).deal_financials.find((row) => row.id === financialResult.id)!;
+  assert.equal(financial.revenue, 5400000);
+  assert.equal(financial.gross_profit, 2100000);
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "upsertDealFinancial",
         data: {
           deal_id: dealId,
@@ -347,62 +345,60 @@ test("deal teams can maintain transaction objectives and historical financials",
       }),
     /Only an authorized deal-team member/,
   );
-
-  mutate(owner, {
+  await mutate(owner, {
     action: "deleteDealFinancial",
     data: { deal_id: dealId, financial_id: financial.id },
   });
   assert.equal(
-    workspace(owner).deal_financials.some((row) => row.id === financial.id),
+    await (
+      await workspace(owner)
+    ).deal_financials.some((row) => row.id === financial.id),
     false,
   );
 });
-
-test("document authorization separates buyers and seller-only records", () => {
-  const deal = getDeal("cedar");
-  const financial = one<Document>(
+test("document authorization separates buyers and seller-only records", async () => {
+  const deal = await getDeal("cedar");
+  const financial = (await one<Document>(
     "SELECT * FROM documents WHERE id='doc-cedar-fin'",
-  )!;
-  const internal = one<Document>(
+  ))!;
+  const internal = (await one<Document>(
     "SELECT * FROM documents WHERE id='doc-cedar-internal'",
-  )!;
-  const nda = one<Document>(
+  ))!;
+  const nda = (await one<Document>(
     "SELECT * FROM documents WHERE id='doc-cedar-nda'",
-  )!;
-  assert.equal(canReadDocument(buyer, deal, financial), true);
-  assert.equal(canReadDocument(otherBuyer, deal, financial), false);
-  assert.equal(canReadDocument(buyer, deal, internal), false);
-  assert.equal(canReadDocument(otherBuyer, deal, nda), false);
-  assert.equal(canReadDocument(advisor, deal, internal), true);
+  ))!;
+  assert.equal(await canReadDocument(buyer, deal, financial), true);
+  assert.equal(await canReadDocument(otherBuyer, deal, financial), false);
+  assert.equal(await canReadDocument(buyer, deal, internal), false);
+  assert.equal(await canReadDocument(otherBuyer, deal, nda), false);
+  assert.equal(await canReadDocument(advisor, deal, internal), true);
   assert.equal(
-    workspace(buyer).documents.some((d) => d.id === internal.id),
+    await (await workspace(buyer)).documents.some((d) => d.id === internal.id),
     false,
   );
 });
-
-test("a buyer cannot publish a deal or approve their own access", () => {
-  assert.throws(
-    () =>
-      mutate(buyer, {
+test("a buyer cannot publish a deal or approve their own access", async () => {
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "updateDeal",
         data: { deal_id: "harbour", stage: "Closed", published: true },
       }),
     /Only/,
   );
-  assert.throws(
-    () =>
-      mutate(buyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "reviewAccess",
         data: { deal_id: "harbour", buyer_id: buyer.id, status: "approved" },
       }),
     /Only/,
   );
 });
-
-test("approval requires a buyer-specific NDA and an explicit human review", () => {
-  assert.throws(
-    () =>
-      mutate(advisor, {
+test("approval requires a buyer-specific NDA and an explicit human review", async () => {
+  await assert.rejects(
+    async () =>
+      await mutate(advisor, {
         action: "reviewAccess",
         data: {
           deal_id: "cedar",
@@ -414,9 +410,9 @@ test("approval requires a buyer-specific NDA and an explicit human review", () =
       }),
     /this buyer/,
   );
-  assert.throws(
-    () =>
-      mutate(advisor, {
+  await assert.rejects(
+    async () =>
+      await mutate(advisor, {
         action: "reviewAccess",
         data: {
           deal_id: "cedar",
@@ -429,9 +425,8 @@ test("approval requires a buyer-specific NDA and an explicit human review", () =
     /Confirm/,
   );
 });
-
-test("buyer conversations, offers and internal tasks do not cross parties", () => {
-  const state = workspace(otherBuyer);
+test("buyer conversations, offers and internal tasks do not cross parties", async () => {
+  const state = await workspace(otherBuyer);
   assert.equal(
     state.messages.some((m) => m.buyer_id === buyer.id),
     false,
@@ -441,31 +436,30 @@ test("buyer conversations, offers and internal tasks do not cross parties", () =
     state.tasks.some((t) => t.buyer_id !== otherBuyer.id),
     false,
   );
-  assert.throws(
-    () =>
-      mutate(otherBuyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(otherBuyer, {
         action: "message",
         data: { deal_id: "cedar", buyer_id: buyer.id, body: "Unauthorized" },
       }),
     /cannot access/,
   );
-  assert.throws(
-    () =>
-      mutate(buyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "toggleTask",
         data: { deal_id: "summit", task_id: "task-3" },
       }),
     /not available/,
   );
 });
-
-test("revocation immediately removes confidential data and document access", () => {
-  run(
+test("revocation immediately removes confidential data and document access", async () => {
+  await run(
     "DELETE FROM notifications WHERE user_id=? AND deal_id=?",
     buyer.id,
     "cedar",
   );
-  notifyUsers(db(), {
+  await notifyUsers(db(), {
     userIds: [buyer.id],
     type: "new_message",
     title: "New message",
@@ -475,43 +469,52 @@ test("revocation immediately removes confidential data and document access", () 
     sourceKey: "test:revocation-confidential-message",
   });
   assert.equal(
-    one<{ count: number }>(
-      "SELECT COUNT(*) count FROM notifications WHERE user_id=? AND deal_id=?",
-      buyer.id,
-      "cedar",
+    (
+      await one<{
+        count: number;
+      }>(
+        "SELECT COUNT(*) count FROM notifications WHERE user_id=? AND deal_id=?",
+        buyer.id,
+        "cedar",
+      )
     )?.count,
     1,
   );
-  mutate(advisor, {
+  await mutate(advisor, {
     action: "reviewAccess",
     data: { deal_id: "cedar", buyer_id: buyer.id, status: "revoked" },
   });
-  const buyerNotifications = workspace(buyer).notifications.filter(
-    (notification) => notification.deal_id === "cedar",
-  );
+  const buyerNotifications = await (
+    await workspace(buyer)
+  ).notifications.filter((notification) => notification.deal_id === "cedar");
   assert.equal(buyerNotifications.length, 1);
   assert.equal(buyerNotifications[0].type, "access_revoked");
   assert.equal(
-    one<{ count: number }>(
-      `SELECT COUNT(*) count FROM email_outbox e
+    (
+      await one<{
+        count: number;
+      }>(
+        `SELECT COUNT(*) count FROM email_outbox e
        JOIN notifications n ON n.id=e.notification_id
        WHERE e.user_id=? AND n.deal_id=?`,
-      buyer.id,
-      "cedar",
+        buyer.id,
+        "cedar",
+      )
     )?.count,
     1,
   );
   assert.equal(
-    workspace(buyer).deals.find((d) => d.id === "cedar")?.has_access,
+    await (await workspace(buyer)).deals.find((d) => d.id === "cedar")
+      ?.has_access,
     false,
   );
   assert.equal(
-    workspace(buyer).documents.some((d) => d.deal_id === "cedar"),
+    await (await workspace(buyer)).documents.some((d) => d.deal_id === "cedar"),
     false,
   );
-  assert.throws(
-    () =>
-      mutate(buyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "message",
         data: {
           deal_id: "cedar",
@@ -521,7 +524,7 @@ test("revocation immediately removes confidential data and document access", () 
       }),
     /cannot access/,
   );
-  notifyUsers(db(), {
+  await notifyUsers(db(), {
     userIds: [buyer.id],
     type: "document_shared",
     title: "Document shared",
@@ -530,17 +533,17 @@ test("revocation immediately removes confidential data and document access", () 
     dealId: "cedar",
     sourceKey: "test:denial-confidential-document",
   });
-  mutate(advisor, {
+  await mutate(advisor, {
     action: "reviewAccess",
     data: { deal_id: "cedar", buyer_id: buyer.id, status: "denied" },
   });
   assert.equal(
-    workspace(buyer).notifications.some(
-      (notification) => notification.deal_id === "cedar",
-    ),
+    await (
+      await workspace(buyer)
+    ).notifications.some((notification) => notification.deal_id === "cedar"),
     false,
   );
-  mutate(advisor, {
+  await mutate(advisor, {
     action: "reviewAccess",
     data: {
       deal_id: "cedar",
@@ -551,9 +554,8 @@ test("revocation immediately removes confidential data and document access", () 
     },
   });
 });
-
-test("a linked owner and appointed advisor share the same mandate", () => {
-  const result = mutate(advisor, {
+test("a linked owner and appointed advisor share the same mandate", async () => {
+  const result = await mutate(advisor, {
     action: "createDeal",
     data: {
       title: "Project Test",
@@ -571,73 +573,78 @@ test("a linked owner and appointed advisor share the same mandate", () => {
     },
   });
   const dealId = result.id!;
-  mutate(advisor, {
+  await mutate(advisor, {
     action: "connectOwner",
     data: { deal_id: dealId, email: owner.email, confirm_authority: true },
   });
-  assert.equal(getDeal(dealId).owner_id, owner.id);
+  assert.equal(await (await getDeal(dealId)).owner_id, owner.id);
   assert.equal(
-    workspace(owner).deals.find((d) => d.id === dealId)?.can_manage,
+    await (await workspace(owner)).deals.find((d) => d.id === dealId)
+      ?.can_manage,
     true,
   );
   assert.equal(
-    workspace(advisor).deals.find((d) => d.id === dealId)?.can_manage,
+    await (await workspace(advisor)).deals.find((d) => d.id === dealId)
+      ?.can_manage,
     true,
   );
   assert.equal(
-    workspace(buyer).deals.some((d) => d.id === dealId),
+    await (await workspace(buyer)).deals.some((d) => d.id === dealId),
     false,
   );
 });
-
-test("organization membership shares firm deals without crossing firm boundaries", () => {
-  const ownerToken = register({
+test("organization membership shares firm deals without crossing firm boundaries", async () => {
+  const ownerToken = await register({
     name: "Firm Owner",
     company: "Shared Firm Inc.",
     email: "firm-owner@example.test",
     role: "owner",
     password: "firm-password-2026",
   });
-  const firmOwner = sessionUser(ownerToken)!;
-  const memberToken = register({
+  const firmOwner = await (await sessionUser(ownerToken))!;
+  const memberToken = await register({
     name: "Firm Member",
     company: "Temporary Member Firm",
     email: "firm-member@example.test",
     role: "owner",
     password: "firm-password-2026",
   });
-  const firmMember = sessionUser(memberToken)!;
-  const viewerToken = register({
+  const firmMember = await (await sessionUser(memberToken))!;
+  const viewerToken = await register({
     name: "Firm Viewer",
     company: "Temporary Viewer Firm",
     email: "firm-viewer@example.test",
     role: "owner",
     password: "firm-password-2026",
   });
-  const firmViewer = sessionUser(viewerToken)!;
-  const outsiderToken = register({
+  const firmViewer = await (await sessionUser(viewerToken))!;
+  const outsiderToken = await register({
     name: "Other Firm",
     company: "Other Firm Inc.",
     email: "other-firm@example.test",
     role: "owner",
     password: "firm-password-2026",
   });
-  const outsider = sessionUser(outsiderToken)!;
-  const organization = one<{ id: string }>(
+  const outsider = await (await sessionUser(outsiderToken))!;
+  const organization = (await one<{
+    id: string;
+  }>(
     "SELECT organization_id id FROM organization_members WHERE user_id=?",
     firmOwner.id,
-  )!;
+  ))!;
   for (const [user, role] of [
     [firmMember, "member"],
     [firmViewer, "viewer"],
   ] as const) {
-    const ownOrganization = one<{ id: string }>(
+    const ownOrganization = (await one<{
+      id: string;
+    }>(
       "SELECT organization_id id FROM organization_members WHERE user_id=?",
       user.id,
-    )!;
-    run("DELETE FROM organization_members WHERE user_id=?", user.id);
-    run("DELETE FROM organizations WHERE id=?", ownOrganization.id);
-    run(
+    ))!;
+    await run("DELETE FROM organization_members WHERE user_id=?", user.id);
+    await run("DELETE FROM organizations WHERE id=?", ownOrganization.id);
+    await run(
       "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,?,?)",
       `membership-${user.id}`,
       organization.id,
@@ -646,7 +653,7 @@ test("organization membership shares firm deals without crossing firm boundaries
       "active",
     );
   }
-  const created = mutate(firmOwner, {
+  const created = await mutate(firmOwner, {
     action: "createDeal",
     data: {
       title: "Project Shared Firm",
@@ -666,34 +673,36 @@ test("organization membership shares firm deals without crossing firm boundaries
     },
   });
   const dealId = created.id!;
-
   assert.equal(
-    workspace(firmMember).deals.find((deal) => deal.id === dealId)?.can_manage,
+    await (await workspace(firmMember)).deals.find((deal) => deal.id === dealId)
+      ?.can_manage,
     true,
   );
   assert.equal(
-    workspace(firmViewer).deals.find((deal) => deal.id === dealId)?.has_access,
+    await (await workspace(firmViewer)).deals.find((deal) => deal.id === dealId)
+      ?.has_access,
     true,
   );
   assert.equal(
-    workspace(firmViewer).deals.find((deal) => deal.id === dealId)?.can_manage,
+    await (await workspace(firmViewer)).deals.find((deal) => deal.id === dealId)
+      ?.can_manage,
     false,
   );
   assert.equal(
-    workspace(outsider).deals.some((deal) => deal.id === dealId),
+    await (await workspace(outsider)).deals.some((deal) => deal.id === dealId),
     false,
   );
-  assert.throws(
-    () =>
-      mutate(firmViewer, {
+  await assert.rejects(
+    async () =>
+      await mutate(firmViewer, {
         action: "updateDeal",
         data: { deal_id: dealId, stage: "On market", published: true },
       }),
     /Only/,
   );
-  assert.throws(
-    () =>
-      mutate(firmViewer, {
+  await assert.rejects(
+    async () =>
+      await mutate(firmViewer, {
         action: "createDeal",
         data: {
           title: "Project Viewer",
@@ -713,10 +722,9 @@ test("organization membership shares firm deals without crossing firm boundaries
       }),
     /Read-only organization members/,
   );
-
-  assert.throws(
-    () =>
-      mutate(firmMember, {
+  await assert.rejects(
+    async () =>
+      await mutate(firmMember, {
         action: "organization",
         data: {
           name: "Unauthorized Rename",
@@ -728,7 +736,7 @@ test("organization membership shares firm deals without crossing firm boundaries
       }),
     /organization owners and administrators/,
   );
-  mutate(firmOwner, {
+  await mutate(firmOwner, {
     action: "organization",
     data: {
       name: "Shared Firm Partners",
@@ -738,28 +746,40 @@ test("organization membership shares firm deals without crossing firm boundaries
       description: "A fictional multi-user Canadian firm.",
     },
   });
-  assert.equal(workspace(firmMember).organization.name, "Shared Firm Partners");
   assert.equal(
-    one<{ company: string }>(
-      "SELECT company FROM users WHERE id=?",
-      firmMember.id,
+    await (
+      await workspace(firmMember)
+    ).organization.name,
+    "Shared Firm Partners",
+  );
+  assert.equal(
+    (
+      await one<{
+        company: string;
+      }>("SELECT company FROM users WHERE id=?", firmMember.id)
     )?.company,
     "Shared Firm Partners",
   );
   assert.deepEqual(
-    workspace(firmOwner)
-      .organization_members.map((member) => member.role)
+    await (
+      await workspace(firmOwner)
+    ).organization_members
+      .map((member) => member.role)
       .sort(),
     ["member", "owner", "viewer"],
   );
-  assert.equal(typeof workspace(firmOwner).organization.can_manage, "boolean");
-
-  run(
+  assert.equal(
+    typeof (await (
+      await workspace(firmOwner)
+    ).organization.can_manage),
+    "boolean",
+  );
+  await run(
     "UPDATE organization_members SET role='admin' WHERE user_id=? AND organization_id=?",
     firmMember.id,
     organization.id,
   );
-  mutate(firmMember, {
+  await mutate(firmMember, {
     action: "organization",
     data: {
       name: "Shared Firm Admin Edit",
@@ -770,15 +790,17 @@ test("organization membership shares firm deals without crossing firm boundaries
     },
   });
   assert.equal(
-    workspace(firmOwner).organization.name,
+    await (
+      await workspace(firmOwner)
+    ).organization.name,
     "Shared Firm Admin Edit",
   );
-  run(
+  await run(
     "UPDATE organization_members SET role='member' WHERE user_id=? AND organization_id=?",
     firmMember.id,
     organization.id,
   );
-  mutate(firmOwner, {
+  await mutate(firmOwner, {
     action: "profile",
     data: {
       name: firmOwner.name,
@@ -786,17 +808,19 @@ test("organization membership shares firm deals without crossing firm boundaries
       province: "",
       bio: "",
       sectors: "",
-      min_revenue: 1_000_000,
-      max_revenue: 20_000_000,
+      min_revenue: 1000000,
+      max_revenue: 20000000,
     },
   });
   assert.equal(
-    workspace(firmMember).organization.name,
+    await (
+      await workspace(firmMember)
+    ).organization.name,
     "Shared Firm Legacy Rename",
   );
-  assert.throws(
-    () =>
-      mutate(firmMember, {
+  await assert.rejects(
+    async () =>
+      await mutate(firmMember, {
         action: "profile",
         data: {
           name: firmMember.name,
@@ -804,80 +828,85 @@ test("organization membership shares firm deals without crossing firm boundaries
           province: "",
           bio: "",
           sectors: "",
-          min_revenue: 1_000_000,
-          max_revenue: 20_000_000,
+          min_revenue: 1000000,
+          max_revenue: 20000000,
         },
       }),
     /organization owners and administrators/,
   );
-
-  run(
+  await run(
     "UPDATE organization_members SET role='viewer' WHERE user_id=? AND organization_id=?",
     firmOwner.id,
     organization.id,
   );
   assert.equal(
-    workspace(firmOwner).deals.find((deal) => deal.id === dealId)?.can_manage,
+    await (await workspace(firmOwner)).deals.find((deal) => deal.id === dealId)
+      ?.can_manage,
     false,
   );
-  assert.throws(
-    () =>
-      mutate(firmOwner, {
+  await assert.rejects(
+    async () =>
+      await mutate(firmOwner, {
         action: "updateDeal",
         data: { deal_id: dealId, stage: "On market", published: true },
       }),
     /authorized deal-team member/,
   );
 });
-
-test("advisor firm members inherit only the permissions granted by their firm role", () => {
-  const advisorToken = register({
+test("advisor firm members inherit only the permissions granted by their firm role", async () => {
+  const advisorToken = await register({
     name: "Advisor Firm Admin",
     company: "Advisor Firm Inc.",
     email: "advisor-firm-admin@example.test",
     role: "advisor",
     password: "advisor-password-2026",
   });
-  const advisorAdmin = sessionUser(advisorToken)!;
-  const viewerToken = register({
+  const advisorAdmin = await (await sessionUser(advisorToken))!;
+  const viewerToken = await register({
     name: "Advisor Firm Viewer",
     company: "Temporary Advisor Firm",
     email: "advisor-firm-viewer@example.test",
     role: "advisor",
     password: "advisor-password-2026",
   });
-  const advisorViewer = sessionUser(viewerToken)!;
-  const ownerToken = register({
+  const advisorViewer = await (await sessionUser(viewerToken))!;
+  const ownerToken = await register({
     name: "Advisor Test Owner",
     company: "Advisor Test Owner Inc.",
     email: "advisor-test-owner@example.test",
     role: "owner",
     password: "advisor-password-2026",
   });
-  const testOwner = sessionUser(ownerToken)!;
-  const advisorOrganization = one<{ id: string }>(
+  const testOwner = await (await sessionUser(ownerToken))!;
+  const advisorOrganization = (await one<{
+    id: string;
+  }>(
     "SELECT organization_id id FROM organization_members WHERE user_id=?",
     advisorAdmin.id,
-  )!;
-  const viewerOrganization = one<{ id: string }>(
+  ))!;
+  const viewerOrganization = (await one<{
+    id: string;
+  }>(
     "SELECT organization_id id FROM organization_members WHERE user_id=?",
     advisorViewer.id,
-  )!;
-  run("DELETE FROM organization_members WHERE user_id=?", advisorViewer.id);
-  run("DELETE FROM organizations WHERE id=?", viewerOrganization.id);
-  run(
+  ))!;
+  await run(
+    "DELETE FROM organization_members WHERE user_id=?",
+    advisorViewer.id,
+  );
+  await run("DELETE FROM organizations WHERE id=?", viewerOrganization.id);
+  await run(
     "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'viewer','active')",
     `membership-${advisorViewer.id}`,
     advisorOrganization.id,
     advisorViewer.id,
   );
-  run(
+  await run(
     "UPDATE organization_members SET role='admin' WHERE user_id=? AND organization_id=?",
     advisorAdmin.id,
     advisorOrganization.id,
   );
-
-  const created = mutate(testOwner, {
+  const created = await mutate(testOwner, {
     action: "createDeal",
     data: {
       title: "Project Advisor Firm",
@@ -885,9 +914,9 @@ test("advisor firm members inherit only the permissions granted by their firm ro
       sector: "Business services",
       province: "Ontario",
       city: "Toronto",
-      revenue: 3_000_000,
-      ebitda: 500_000,
-      asking_price: 4_000_000,
+      revenue: 3000000,
+      ebitda: 500000,
+      asking_price: 4000000,
       employees: 18,
       founded: 2011,
       description:
@@ -895,22 +924,22 @@ test("advisor firm members inherit only the permissions granted by their firm ro
       confidential_summary: "Advisor firm authorization test.",
     },
   });
-  mutate(testOwner, {
+  await mutate(testOwner, {
     action: "appointAdvisor",
     data: { deal_id: created.id, advisor_id: advisorAdmin.id },
   });
-
-  const deal = getDeal(created.id!);
-  assert.equal(isManager(advisorAdmin, deal), true);
-  assert.equal(isManager(advisorViewer, deal), false);
+  const deal = await getDeal(created.id!);
+  assert.equal(await isManager(advisorAdmin, deal), true);
+  assert.equal(await isManager(advisorViewer, deal), false);
   assert.equal(
-    workspace(advisorViewer).deals.find((item) => item.id === deal.id)
-      ?.has_access,
+    await (
+      await workspace(advisorViewer)
+    ).deals.find((item) => item.id === deal.id)?.has_access,
     true,
   );
-  assert.throws(
-    () =>
-      mutate(advisorViewer, {
+  await assert.rejects(
+    async () =>
+      await mutate(advisorViewer, {
         action: "updateDeal",
         data: {
           deal_id: deal.id,
@@ -921,49 +950,57 @@ test("advisor firm members inherit only the permissions granted by their firm ro
     /authorized deal-team member/,
   );
 });
-
-test("real accounts cannot discover or mutate demonstration deals", () => {
-  const token = register({
+test("real accounts cannot discover or mutate demonstration deals", async () => {
+  const token = await register({
     name: "Real Buyer",
     company: "Real Account Inc.",
     email: "real@example.test",
     role: "buyer",
     password: "  exact-password-2026  ",
   });
-  const user = sessionUser(token)!;
-  assert.equal(workspace(user).deals.length, 0);
-  assert.throws(
-    () => mutate(user, { action: "requestAccess", data: { deal_id: "maple" } }),
+  const user = await (await sessionUser(token))!;
+  assert.equal(await (await workspace(user)).deals.length, 0);
+  await assert.rejects(
+    async () =>
+      await mutate(user, {
+        action: "requestAccess",
+        data: { deal_id: "maple" },
+      }),
     /not available/,
   );
   assert.ok(
-    login({ email: "real@example.test", password: "  exact-password-2026  " }),
+    await login({
+      email: "real@example.test",
+      password: "  exact-password-2026  ",
+    }),
   );
-  assert.throws(
-    () =>
-      login({ email: "real@example.test", password: "exact-password-2026" }),
+  await assert.rejects(
+    async () =>
+      await login({
+        email: "real@example.test",
+        password: "exact-password-2026",
+      }),
     /incorrect/,
   );
 });
-
-test("demo buyers cannot enumerate registered Qualified Discovery inventory", () => {
-  const token = register({
+test("demo buyers cannot enumerate registered Qualified Discovery inventory", async () => {
+  const token = await register({
     name: "Preview Owner",
     company: "Preview Owner Inc.",
     email: "preview-owner@example.test",
     role: "owner",
     password: "preview-password-2026",
   });
-  const realOwner = sessionUser(token)!;
-  const advisorToken = register({
+  const realOwner = await (await sessionUser(token))!;
+  const advisorToken = await register({
     name: "Preview Advisor",
     company: "Preview Advisory Inc.",
     email: "preview-advisor@example.test",
     role: "advisor",
     password: "preview-password-2026",
   });
-  const realAdvisor = sessionUser(advisorToken)!;
-  const created = mutate(realOwner, {
+  const realAdvisor = await (await sessionUser(advisorToken))!;
+  const created = await mutate(realOwner, {
     action: "createDeal",
     data: {
       title: "Project Preview",
@@ -983,16 +1020,16 @@ test("demo buyers cannot enumerate registered Qualified Discovery inventory", ()
     },
   });
   const dealId = created.id!;
-  mutate(realOwner, {
+  await mutate(realOwner, {
     action: "appointAdvisor",
     data: { deal_id: dealId, advisor_id: realAdvisor.id },
   });
   assert.equal(
-    workspace(buyer).deals.some((deal) => deal.id === dealId),
+    await (await workspace(buyer)).deals.some((deal) => deal.id === dealId),
     false,
     "an unpublished real listing must remain hidden from the demo buyer",
   );
-  mutate(realOwner, {
+  await mutate(realOwner, {
     action: "updateDeal",
     data: {
       deal_id: dealId,
@@ -1001,14 +1038,13 @@ test("demo buyers cannot enumerate registered Qualified Discovery inventory", ()
       distribution_mode: "qualified_discovery",
     },
   });
-
-  run(
+  await run(
     "INSERT INTO access(id,deal_id,buyer_id,status) VALUES(?,?,?,'approved')",
     "cross-realm-preview",
     dealId,
     buyer.id,
   );
-  run(
+  await run(
     "INSERT INTO documents(id,deal_id,name,storage_key,mime,category,size,audience,uploaded_by) VALUES(?,?,?,?,?,?,?,?,?)",
     "cross-realm-doc",
     dealId,
@@ -1020,7 +1056,7 @@ test("demo buyers cannot enumerate registered Qualified Discovery inventory", ()
     "approved",
     realOwner.id,
   );
-  run(
+  await run(
     "INSERT INTO messages(id,deal_id,buyer_id,sender_id,body) VALUES(?,?,?,?,?)",
     "cross-realm-message",
     dealId,
@@ -1028,7 +1064,7 @@ test("demo buyers cannot enumerate registered Qualified Discovery inventory", ()
     realOwner.id,
     "This imported conversation must remain hidden.",
   );
-  run(
+  await run(
     "INSERT INTO tasks(id,deal_id,title,due_date,buyer_id,created_by) VALUES(?,?,?,?,?,?)",
     "cross-realm-task",
     dealId,
@@ -1037,7 +1073,7 @@ test("demo buyers cannot enumerate registered Qualified Discovery inventory", ()
     buyer.id,
     realOwner.id,
   );
-  run(
+  await run(
     "INSERT INTO offers(id,deal_id,buyer_id,amount,structure,notes,document_id) VALUES(?,?,?,?,?,?,?)",
     "cross-realm-offer",
     dealId,
@@ -1047,15 +1083,14 @@ test("demo buyers cannot enumerate registered Qualified Discovery inventory", ()
     "Imported offer",
     "cross-realm-doc",
   );
-  run(
+  await run(
     "INSERT INTO activity(id,deal_id,actor_id,action) VALUES(?,?,?,?)",
     "cross-realm-activity",
     dealId,
     buyer.id,
     "Imported activity",
   );
-
-  const state = workspace(buyer);
+  const state = await workspace(buyer);
   const preview = state.deals.find((deal) => deal.id === dealId);
   assert.equal(
     preview,
@@ -1091,9 +1126,9 @@ test("demo buyers cannot enumerate registered Qualified Discovery inventory", ()
     state.activity.some((activity) => activity.deal_id === dealId),
     false,
   );
-  assert.throws(
-    () =>
-      mutate(buyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "requestAccess",
         data: {
           deal_id: dealId,
@@ -1103,48 +1138,47 @@ test("demo buyers cannot enumerate registered Qualified Discovery inventory", ()
     /not available/,
   );
 });
-
-test("disabled demo mode invalidates existing demo sessions", () => {
-  const token = createSession(buyer.id);
-  assert.equal(sessionUser(token)?.id, buyer.id);
+test("disabled demo mode invalidates existing demo sessions", async () => {
+  const token = await createSession(buyer.id);
+  assert.equal(await (await sessionUser(token))?.id, buyer.id);
   process.env.ALLOW_DEMO = "false";
-  assert.equal(sessionUser(token), undefined);
+  assert.equal(await sessionUser(token), undefined);
   process.env.ALLOW_DEMO = "true";
 });
-
-test("expired sessions are rejected", () => {
-  const token = createSession(owner.id);
-  run("UPDATE sessions SET expires_at=0 WHERE user_id=?", owner.id);
-  assert.equal(sessionUser(token), undefined);
+test("expired sessions are rejected", async () => {
+  const token = await createSession(owner.id);
+  await run("UPDATE sessions SET expires_at=0 WHERE user_id=?", owner.id);
+  assert.equal(await sessionUser(token), undefined);
 });
-
-test("buyer projects are normalized and scoped to eligible organization members", () => {
-  const ownerToken = register({
+test("buyer projects are normalized and scoped to eligible organization members", async () => {
+  const ownerToken = await register({
     name: "Project Owner",
     company: "Project Equity Co.",
     email: "project-owner@example.test",
     role: "buyer",
     password: "project-password-2026",
   });
-  const projectOwner = sessionUser(ownerToken)!;
-  const ownerOrganization = one<{ id: string }>(
+  const projectOwner = await (await sessionUser(ownerToken))!;
+  const ownerOrganization = (await one<{
+    id: string;
+  }>(
     "SELECT organization_id id FROM organization_members WHERE user_id=?",
     projectOwner.id,
-  )!;
-  const created = mutate(projectOwner, {
+  ))!;
+  const created = await mutate(projectOwner, {
     action: "createBuyerProject",
     data: {
       name: "Project Atlas",
       thesis: "Acquire durable Canadian vertical software businesses.",
       min_revenue: "5000000",
-      max_revenue: 20_000_000,
+      max_revenue: 20000000,
       min_ebitda: "",
       max_ebitda: "2000000",
       min_ebitda_margin: "10.5",
       max_ebitda_margin: 35,
       min_enterprise_value: "",
-      max_enterprise_value: 80_000_000,
-      min_equity_check: 5_000_000,
+      max_enterprise_value: 80000000,
+      min_equity_check: 5000000,
       max_equity_check: "30000000",
       ownership_preference: "majority",
       transaction_type: "majority_acquisition",
@@ -1154,40 +1188,48 @@ test("buyer projects are normalized and scoped to eligible organization members"
     },
   });
   assert.ok(created.id);
-
-  const project = workspace(projectOwner).buyer_projects.find(
-    (item) => item.id === created.id,
-  )!;
+  const project = await (
+    await workspace(projectOwner)
+  ).buyer_projects.find((item) => item.id === created.id)!;
   assert.deepEqual(project.sectors, ["Technology"]);
   assert.deepEqual(project.provinces, ["Ontario", "Québec"]);
-  assert.deepEqual(project.keywords, ["SaaS", "Recurring Revenue"]);
-  assert.equal(project.min_revenue, 5_000_000);
+  assert.deepEqual(project.keywords, ["Recurring Revenue", "SaaS"]);
+  assert.equal(project.min_revenue, 5000000);
   assert.equal(project.min_ebitda, null);
   assert.equal(project.min_ebitda_margin, 10.5);
   assert.equal(project.can_manage, true);
-  assert.equal(workspace(projectOwner).can_manage_buyer_projects, true);
-
-  const memberToken = register({
+  assert.equal(
+    await (
+      await workspace(projectOwner)
+    ).can_manage_buyer_projects,
+    true,
+  );
+  const memberToken = await register({
     name: "Project Member",
     company: "Temporary Project Member Co.",
     email: "project-member@example.test",
     role: "buyer",
     password: "project-password-2026",
   });
-  const projectMember = sessionUser(memberToken)!;
-  const memberOrganization = one<{ id: string }>(
+  const projectMember = await (await sessionUser(memberToken))!;
+  const memberOrganization = (await one<{
+    id: string;
+  }>(
     "SELECT organization_id id FROM organization_members WHERE user_id=?",
     projectMember.id,
-  )!;
-  run("DELETE FROM organization_members WHERE user_id=?", projectMember.id);
-  run("DELETE FROM organizations WHERE id=?", memberOrganization.id);
-  run(
+  ))!;
+  await run(
+    "DELETE FROM organization_members WHERE user_id=?",
+    projectMember.id,
+  );
+  await run("DELETE FROM organizations WHERE id=?", memberOrganization.id);
+  await run(
     "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'member','active')",
     `membership-${projectMember.id}`,
     ownerOrganization.id,
     projectMember.id,
   );
-  mutate(projectMember, {
+  await mutate(projectMember, {
     action: "updateBuyerProject",
     data: {
       buyer_project_id: created.id,
@@ -1195,8 +1237,8 @@ test("buyer projects are normalized and scoped to eligible organization members"
       thesis: "Updated thesis.",
       min_revenue: "",
       max_revenue: "",
-      min_ebitda: 1_000_000,
-      max_ebitda: 3_000_000,
+      min_ebitda: 1000000,
+      max_ebitda: 3000000,
       min_ebitda_margin: "",
       max_ebitda_margin: "",
       min_enterprise_value: "",
@@ -1211,139 +1253,144 @@ test("buyer projects are normalized and scoped to eligible organization members"
     },
   });
   assert.equal(
-    workspace(projectOwner).buyer_projects.find(
-      (item) => item.id === created.id,
-    )?.name,
+    await (
+      await workspace(projectOwner)
+    ).buyer_projects.find((item) => item.id === created.id)?.name,
     "Project Atlas Updated",
   );
   assert.deepEqual(
-    workspace(projectOwner).buyer_projects.find(
-      (item) => item.id === created.id,
-    )?.keywords,
+    await (
+      await workspace(projectOwner)
+    ).buyer_projects.find((item) => item.id === created.id)?.keywords,
     ["services"],
   );
-  mutate(projectMember, {
+  await mutate(projectMember, {
     action: "updateBuyerProject",
     data: { buyer_project_id: created.id, name: "Project Atlas Renamed" },
   });
-  const partiallyUpdated = workspace(projectOwner).buyer_projects.find(
-    (item) => item.id === created.id,
-  )!;
-  assert.equal(partiallyUpdated.min_ebitda, 1_000_000);
+  const partiallyUpdated = await (
+    await workspace(projectOwner)
+  ).buyer_projects.find((item) => item.id === created.id)!;
+  assert.equal(partiallyUpdated.min_ebitda, 1000000);
   assert.deepEqual(partiallyUpdated.sectors, ["Business services"]);
-  mutate(projectMember, {
+  await mutate(projectMember, {
     action: "setBuyerProjectStatus",
     data: { buyer_project_id: created.id, status: "active" },
   });
   assert.equal(
-    workspace(projectOwner).buyer_projects.find(
-      (item) => item.id === created.id,
-    )?.status,
+    await (
+      await workspace(projectOwner)
+    ).buyer_projects.find((item) => item.id === created.id)?.status,
     "active",
   );
-
-  const viewerToken = register({
+  const viewerToken = await register({
     name: "Project Viewer",
     company: "Temporary Project Viewer Co.",
     email: "project-viewer@example.test",
     role: "buyer",
     password: "project-password-2026",
   });
-  const projectViewer = sessionUser(viewerToken)!;
-  const viewerOrganization = one<{ id: string }>(
+  const projectViewer = await (await sessionUser(viewerToken))!;
+  const viewerOrganization = (await one<{
+    id: string;
+  }>(
     "SELECT organization_id id FROM organization_members WHERE user_id=?",
     projectViewer.id,
-  )!;
-  run("DELETE FROM organization_members WHERE user_id=?", projectViewer.id);
-  run("DELETE FROM organizations WHERE id=?", viewerOrganization.id);
-  run(
+  ))!;
+  await run(
+    "DELETE FROM organization_members WHERE user_id=?",
+    projectViewer.id,
+  );
+  await run("DELETE FROM organizations WHERE id=?", viewerOrganization.id);
+  await run(
     "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'viewer','active')",
     `membership-${projectViewer.id}`,
     ownerOrganization.id,
     projectViewer.id,
   );
   assert.equal(
-    workspace(projectViewer).buyer_projects.some(
-      (item) => item.id === created.id,
-    ),
+    await (
+      await workspace(projectViewer)
+    ).buyer_projects.some((item) => item.id === created.id),
     true,
   );
-  assert.equal(workspace(projectViewer).can_manage_buyer_projects, false);
   assert.equal(
-    workspace(projectViewer).buyer_projects.find(
-      (item) => item.id === created.id,
-    )?.can_manage,
+    await (
+      await workspace(projectViewer)
+    ).can_manage_buyer_projects,
     false,
   );
-  assert.throws(
-    () =>
-      mutate(projectViewer, {
+  assert.equal(
+    await (
+      await workspace(projectViewer)
+    ).buyer_projects.find((item) => item.id === created.id)?.can_manage,
+    false,
+  );
+  await assert.rejects(
+    async () =>
+      await mutate(projectViewer, {
         action: "updateBuyerProject",
         data: { buyer_project_id: created.id, name: "Nope" },
       }),
     /Read-only organization members/,
   );
-
-  const outsiderToken = register({
+  const outsiderToken = await register({
     name: "Project Outsider",
     company: "Unrelated Buyer Co.",
     email: "project-outsider@example.test",
     role: "buyer",
     password: "project-password-2026",
   });
-  const outsiderProjectUser = sessionUser(outsiderToken)!;
+  const outsiderProjectUser = await (await sessionUser(outsiderToken))!;
   assert.equal(
-    workspace(outsiderProjectUser).buyer_projects.some(
-      (item) => item.id === created.id,
-    ),
+    await (
+      await workspace(outsiderProjectUser)
+    ).buyer_projects.some((item) => item.id === created.id),
     false,
   );
-  assert.throws(
-    () =>
-      mutate(outsiderProjectUser, {
+  await assert.rejects(
+    async () =>
+      await mutate(outsiderProjectUser, {
         action: "setBuyerProjectStatus",
         data: { buyer_project_id: created.id, status: "paused" },
       }),
     /not available/,
   );
-
-  const businessToken = register({
+  const businessToken = await register({
     name: "Operating Business",
     company: "Operating Business Co.",
     email: "project-business@example.test",
     role: "owner",
     password: "project-password-2026",
   });
-  const businessUser = sessionUser(businessToken)!;
-  assert.throws(
-    () =>
-      mutate(businessUser, {
+  const businessUser = await (await sessionUser(businessToken))!;
+  await assert.rejects(
+    async () =>
+      await mutate(businessUser, {
         action: "createBuyerProject",
         data: { name: "Not eligible", thesis: "" },
       }),
     /eligible buyer organization/,
   );
-
-  const advisorToken = register({
+  const advisorToken = await register({
     name: "Project Advisor",
     company: "Project Advisor Co.",
     email: "project-advisor@example.test",
     role: "advisor",
     password: "project-password-2026",
   });
-  const advisorUser = sessionUser(advisorToken)!;
-  assert.throws(
-    () =>
-      mutate(advisorUser, {
+  const advisorUser = await (await sessionUser(advisorToken))!;
+  await assert.rejects(
+    async () =>
+      await mutate(advisorUser, {
         action: "createBuyerProject",
         data: { name: "Not eligible", thesis: "" },
       }),
     /eligible buyer organization/,
   );
-
-  assert.throws(
-    () =>
-      mutate(projectOwner, {
+  await assert.rejects(
+    async () =>
+      await mutate(projectOwner, {
         action: "createBuyerProject",
         data: {
           name: "Invalid range",
@@ -1353,9 +1400,9 @@ test("buyer projects are normalized and scoped to eligible organization members"
       }),
     /Revenue minimum must not exceed maximum/,
   );
-  assert.throws(
-    () =>
-      mutate(projectOwner, {
+  await assert.rejects(
+    async () =>
+      await mutate(projectOwner, {
         action: "createBuyerProject",
         data: {
           name: "Invalid margin",
@@ -1364,9 +1411,9 @@ test("buyer projects are normalized and scoped to eligible organization members"
       }),
     /Too big/,
   );
-  assert.throws(
-    () =>
-      mutate(projectOwner, {
+  await assert.rejects(
+    async () =>
+      await mutate(projectOwner, {
         action: "createBuyerProject",
         data: {
           name: "Invalid sector",
@@ -1376,28 +1423,27 @@ test("buyer projects are normalized and scoped to eligible organization members"
     /Invalid option/,
   );
 });
-
-test("matching records recalculate on relevant changes and remain seller-authorized", () => {
-  const buyerToken = register({
+test("matching records recalculate on relevant changes and remain seller-authorized", async () => {
+  const buyerToken = await register({
     name: "Matching Buyer",
     company: "Matching Capital",
     email: "matching-buyer@example.test",
     role: "buyer",
     password: "matching-password-2026",
   });
-  const matchingBuyer = sessionUser(buyerToken)!;
-  const projectResult = mutate(matchingBuyer, {
+  const matchingBuyer = await (await sessionUser(buyerToken))!;
+  const projectResult = await mutate(matchingBuyer, {
     action: "createBuyerProject",
     data: {
       name: "Project Match",
       status: "active",
       thesis: "Ontario technology businesses with recurring revenue.",
-      min_revenue: 4_000_000,
-      max_revenue: 12_000_000,
-      min_ebitda: 500_000,
-      max_ebitda: 3_000_000,
-      min_enterprise_value: 6_000_000,
-      max_enterprise_value: 20_000_000,
+      min_revenue: 4000000,
+      max_revenue: 12000000,
+      min_ebitda: 500000,
+      max_ebitda: 3000000,
+      min_enterprise_value: 6000000,
+      max_enterprise_value: 20000000,
       ownership_preference: "majority",
       transaction_type: "majority_acquisition",
       sectors: ["Technology"],
@@ -1405,16 +1451,15 @@ test("matching records recalculate on relevant changes and remain seller-authori
       keywords: ["recurring revenue"],
     },
   });
-
-  const sellerToken = register({
+  const sellerToken = await register({
     name: "Matching Seller",
     company: "Matching Software Inc.",
     email: "matching-seller@example.test",
     role: "owner",
     password: "matching-password-2026",
   });
-  const matchingSeller = sessionUser(sellerToken)!;
-  const dealResult = mutate(matchingSeller, {
+  const matchingSeller = await (await sessionUser(sellerToken))!;
+  const dealResult = await mutate(matchingSeller, {
     action: "createDeal",
     data: {
       title: "Project Match Signal",
@@ -1422,9 +1467,9 @@ test("matching records recalculate on relevant changes and remain seller-authori
       sector: "Technology",
       province: "Ontario",
       city: "Toronto",
-      revenue: 8_000_000,
-      ebitda: 1_600_000,
-      asking_price: 12_000_000,
+      revenue: 8000000,
+      ebitda: 1600000,
+      asking_price: 12000000,
       employees: 30,
       founded: 2012,
       description:
@@ -1437,16 +1482,15 @@ test("matching records recalculate on relevant changes and remain seller-authori
       seller_financing_possible: false,
       management_transition: "Founder available for transition.",
       reason_for_transaction: "Planned succession.",
-      min_expected_value: 10_000_000,
-      max_expected_value: 14_000_000,
+      min_expected_value: 10000000,
+      max_expected_value: 14000000,
       distribution_mode: "private_outreach",
       financial_year: 2025,
-      gross_profit: 5_000_000,
+      gross_profit: 5000000,
       financial_is_projected: false,
     },
   });
-
-  const persisted = one<{
+  const persisted = (await one<{
     score: number;
     eligible: number;
     score_breakdown_json: string;
@@ -1454,22 +1498,20 @@ test("matching records recalculate on relevant changes and remain seller-authori
     "SELECT score,eligible,score_breakdown_json FROM deal_matches WHERE deal_id=? AND buyer_project_id=?",
     dealResult.id!,
     projectResult.id!,
-  )!;
+  ))!;
   assert.equal(persisted.score, 100);
   assert.equal(persisted.eligible, 1);
   assert.equal(JSON.parse(persisted.score_breakdown_json).reasons.length, 8);
-
-  const visible = dealMatchesForUser(matchingSeller, dealResult.id!);
+  const visible = await dealMatchesForUser(matchingSeller, dealResult.id!);
   assert.equal(
     visible.some((match) => match.buyer_project_id === projectResult.id),
     true,
   );
-  assert.throws(
-    () => dealMatchesForUser(matchingBuyer, dealResult.id!),
+  await assert.rejects(
+    async () => await dealMatchesForUser(matchingBuyer, dealResult.id!),
     /authorized deal-team member/,
   );
-
-  mutate(matchingSeller, {
+  await mutate(matchingSeller, {
     action: "updateDeal",
     data: {
       deal_id: dealResult.id,
@@ -1479,31 +1521,35 @@ test("matching records recalculate on relevant changes and remain seller-authori
     },
   });
   assert.equal(
-    one<{ eligible: number }>(
-      "SELECT eligible FROM deal_matches WHERE deal_id=? AND buyer_project_id=?",
-      dealResult.id!,
-      projectResult.id!,
+    (
+      await one<{
+        eligible: number;
+      }>(
+        "SELECT eligible FROM deal_matches WHERE deal_id=? AND buyer_project_id=?",
+        dealResult.id!,
+        projectResult.id!,
+      )
     )?.eligible,
     0,
   );
-
-  mutate(matchingBuyer, {
+  await mutate(matchingBuyer, {
     action: "setBuyerProjectStatus",
     data: { buyer_project_id: projectResult.id, status: "paused" },
   });
   const exclusions = JSON.parse(
-    one<{ score_breakdown_json: string }>(
+    (await one<{
+      score_breakdown_json: string;
+    }>(
       "SELECT score_breakdown_json FROM deal_matches WHERE deal_id=? AND buyer_project_id=?",
       dealResult.id!,
       projectResult.id!,
-    )!.score_breakdown_json,
+    ))!.score_breakdown_json,
   ).hard_exclusions as string[];
   assert.ok(exclusions.some((exclusion) => /not active/i.test(exclusion)));
   assert.ok(exclusions.some((exclusion) => /closed/i.test(exclusion)));
 });
-
-test("deal managers can curate recommended buyers without granting access", () => {
-  const ownerState = workspace(owner);
+test("deal managers can curate recommended buyers without granting access", async () => {
+  const ownerState = await workspace(owner);
   const ownerMatches = ownerState.deal_matches?.filter(
     (match) => match.deal_id === "cedar",
   );
@@ -1517,14 +1563,20 @@ test("deal managers can curate recommended buyers without granting access", () =
     ),
   );
   assert.ok(
-    workspace(advisor).deal_matches?.some((match) => match.deal_id === "cedar"),
+    await (
+      await workspace(advisor)
+    ).deal_matches?.some((match) => match.deal_id === "cedar"),
   );
   assert.equal(
-    Object.prototype.hasOwnProperty.call(workspace(buyer), "deal_matches"),
+    Object.prototype.hasOwnProperty.call(
+      await workspace(buyer),
+      "deal_matches",
+    ),
     false,
   );
-
-  const revokedBuyerOrganizationId = workspace(buyer).organization.id;
+  const revokedBuyerOrganizationId = await (
+    await workspace(buyer)
+  ).organization.id;
   const curatedMatches = [...ownerMatches]
     .sort(
       (left, right) =>
@@ -1533,57 +1585,60 @@ test("deal managers can curate recommended buyers without granting access", () =
     )
     .slice(0, 2);
   const matchIds = curatedMatches.map((match) => match.id);
-  const accessBefore = one<{ count: number }>(
-    "SELECT COUNT(*) count FROM access WHERE deal_id='cedar'",
-  )!.count;
-  mutate(owner, {
+  const accessBefore = (await one<{
+    count: number;
+  }>("SELECT COUNT(*) count FROM access WHERE deal_id='cedar'"))!.count;
+  await mutate(owner, {
     action: "updateDealMatchStatus",
     data: { deal_id: "cedar", match_ids: matchIds, status: "selected" },
   });
   assert.equal(
-    one<{ count: number }>(
+    (await one<{
+      count: number;
+    }>(
       "SELECT COUNT(*) count FROM deal_matches WHERE deal_id='cedar' AND status='selected'",
-    )!.count,
+    ))!.count,
     2,
   );
   assert.equal(
-    one<{ count: number }>(
-      "SELECT COUNT(*) count FROM access WHERE deal_id='cedar'",
-    )!.count,
+    (await one<{
+      count: number;
+    }>("SELECT COUNT(*) count FROM access WHERE deal_id='cedar'"))!.count,
     accessBefore,
     "selecting recommendations must not grant buyer access",
   );
-
-  mutate(owner, {
+  await mutate(owner, {
     action: "updateDealMatchStatus",
     data: { deal_id: "cedar", match_ids: [matchIds[0]], status: "excluded" },
   });
-  const excluded = one<{
+  const excluded = (await one<{
     status: string;
     eligible: number;
     score_breakdown_json: string;
   }>(
     "SELECT status,eligible,score_breakdown_json FROM deal_matches WHERE id=?",
     matchIds[0],
-  )!;
+  ))!;
   assert.equal(excluded.status, "excluded");
   assert.equal(excluded.eligible, 0);
   assert.match(excluded.score_breakdown_json, /excluded/i);
-
-  mutate(owner, {
+  await mutate(owner, {
     action: "updateDealMatchStatus",
     data: { deal_id: "cedar", match_ids: [matchIds[0]], status: "recommended" },
   });
   assert.equal(
-    one<{ status: string }>(
-      "SELECT status FROM deal_matches WHERE id=?",
-      matchIds[0],
+    (
+      await one<{
+        status: string;
+      }>("SELECT status FROM deal_matches WHERE id=?", matchIds[0])
     )?.status,
     "recommended",
   );
   assert.equal(
-    workspace(owner)
-      .buyer_funnels?.find((funnel) => funnel.deal_id === "cedar")
+    await (
+      await workspace(owner)
+    ).buyer_funnels
+      ?.find((funnel) => funnel.deal_id === "cedar")
       ?.buyers.find(
         (entry) =>
           entry.buyer_organization_id ===
@@ -1592,17 +1647,16 @@ test("deal managers can curate recommended buyers without granting access", () =
     "Active",
     "restoring a recommendation must supersede its historical exclusion outcome",
   );
-  mutate(advisor, {
+  await mutate(advisor, {
     action: "updateDealMatchStatus",
     data: { deal_id: "cedar", match_ids: [matchIds[1]], status: "recommended" },
   });
-
-  const otherDealMatch = one<{ id: string }>(
-    "SELECT id FROM deal_matches WHERE deal_id='summit' LIMIT 1",
-  )!;
-  assert.throws(
-    () =>
-      mutate(owner, {
+  const otherDealMatch = (await one<{
+    id: string;
+  }>("SELECT id FROM deal_matches WHERE deal_id='summit' LIMIT 1"))!;
+  await assert.rejects(
+    async () =>
+      await mutate(owner, {
         action: "updateDealMatchStatus",
         data: {
           deal_id: "cedar",
@@ -1612,9 +1666,9 @@ test("deal managers can curate recommended buyers without granting access", () =
       }),
     /not available for this mandate/i,
   );
-  assert.throws(
-    () =>
-      mutate(buyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "updateDealMatchStatus",
         data: {
           deal_id: "cedar",
@@ -1625,10 +1679,9 @@ test("deal managers can curate recommended buyers without granting access", () =
     /authorized deal-team member/i,
   );
 });
-
-test("buyer firms manage a seller-visible profile without exposing verification evidence", () => {
-  const buyerState = workspace(buyer);
-  mutate(buyer, {
+test("buyer firms manage a seller-visible profile without exposing verification evidence", async () => {
+  const buyerState = await workspace(buyer);
+  await mutate(buyer, {
     action: "updateBuyerFirmProfile",
     data: {
       fund_structure:
@@ -1639,7 +1692,6 @@ test("buyer firms manage a seller-visible profile without exposing verification 
       self_reported_acquisition_count: 12,
     },
   });
-
   assert.equal(buyerState.buyer_firm_profile?.can_manage, true);
   assert.equal(
     buyerState.buyer_firm_profile?.self_reported_acquisition_count,
@@ -1649,8 +1701,9 @@ test("buyer firms manage a seller-visible profile without exposing verification 
     Object.prototype.hasOwnProperty.call(buyerState, "deal_matches"),
     false,
   );
-
-  const sellerMatch = workspace(owner).deal_matches?.find(
+  const sellerMatch = await (
+    await workspace(owner)
+  ).deal_matches?.find(
     (match) =>
       match.deal_id === "cedar" &&
       match.buyer_organization_id === buyerState.organization.id,
@@ -1717,39 +1770,43 @@ test("buyer firms manage a seller-visible profile without exposing verification 
     ),
     false,
   );
-
-  run(
-    `INSERT INTO users(
+  await run(`INSERT INTO users(
        id,email,password_hash,name,company,role,is_demo
      ) VALUES('demo-buyer-profile-viewer','profile-viewer@example.test','hash',
-       'Profile Viewer','Evergreen Capital','buyer',1)`,
-  );
-  run(
+       'Profile Viewer','Evergreen Capital','buyer',1)`);
+  await run(
     `INSERT INTO organization_members(
        id,organization_id,user_id,role,status
      ) VALUES('membership-demo-buyer-profile-viewer',?,'demo-buyer-profile-viewer','viewer','active')`,
     buyerState.organization.id,
   );
-  const profileViewer = one<User>(
+  const profileViewer = (await one<User>(
     "SELECT * FROM users WHERE id='demo-buyer-profile-viewer'",
-  )!;
-  assert.equal(workspace(profileViewer).buyer_firm_profile?.can_manage, false);
-  assert.throws(
-    () =>
-      mutate(profileViewer, {
+  ))!;
+  assert.equal(
+    await (
+      await workspace(profileViewer)
+    ).buyer_firm_profile?.can_manage,
+    false,
+  );
+  await assert.rejects(
+    async () =>
+      await mutate(profileViewer, {
         action: "updateBuyerFirmProfile",
         data: {
           fund_structure: "Unauthorized change",
           financing_profile: "Unauthorized change",
-          revision: workspace(profileViewer).buyer_firm_profile!.revision,
+          revision: await (
+            await workspace(profileViewer)
+          ).buyer_firm_profile!.revision,
           self_reported_acquisition_count: 99,
         },
       }),
     /owners and administrators/,
   );
-  assert.throws(
-    () =>
-      mutate(owner, {
+  await assert.rejects(
+    async () =>
+      await mutate(owner, {
         action: "updateBuyerFirmProfile",
         data: {
           fund_structure: "Unauthorized seller change",
@@ -1761,75 +1818,77 @@ test("buyer firms manage a seller-visible profile without exposing verification 
     /buyer organization owners and administrators/,
   );
 });
-
-test("buyer firm profiles distinguish an untouched count from an explicit zero", () => {
+test("buyer firm profiles distinguish an untouched count from an explicit zero", async () => {
   const suffix = Date.now();
-  const token = register({
+  const token = await register({
     name: "Unreported Buyer",
     company: `Unreported Capital ${suffix}`,
     email: `unreported-buyer-${suffix}@example.test`,
     role: "buyer",
     password: "unreported-profile-password-2026",
   });
-  const registeredBuyer = sessionUser(token)!;
-
+  const registeredBuyer = await (await sessionUser(token))!;
   assert.equal(
-    workspace(registeredBuyer).buyer_firm_profile
-      ?.self_reported_acquisition_count,
+    await (
+      await workspace(registeredBuyer)
+    ).buyer_firm_profile?.self_reported_acquisition_count,
     null,
   );
-
-  mutate(registeredBuyer, {
+  await mutate(registeredBuyer, {
     action: "updateBuyerFirmProfile",
     data: {
       fund_structure: "",
       financing_profile: "",
-      revision: workspace(registeredBuyer).buyer_firm_profile!.revision,
+      revision: await (
+        await workspace(registeredBuyer)
+      ).buyer_firm_profile!.revision,
       self_reported_acquisition_count: "",
     },
   });
   assert.equal(
-    workspace(registeredBuyer).buyer_firm_profile
-      ?.self_reported_acquisition_count,
+    await (
+      await workspace(registeredBuyer)
+    ).buyer_firm_profile?.self_reported_acquisition_count,
     null,
   );
-
-  mutate(registeredBuyer, {
+  await mutate(registeredBuyer, {
     action: "updateBuyerFirmProfile",
     data: {
       fund_structure: "",
       financing_profile: "",
-      revision: workspace(registeredBuyer).buyer_firm_profile!.revision,
+      revision: await (
+        await workspace(registeredBuyer)
+      ).buyer_firm_profile!.revision,
       self_reported_acquisition_count: 0,
     },
   });
   assert.equal(
-    workspace(registeredBuyer).buyer_firm_profile
-      ?.self_reported_acquisition_count,
+    await (
+      await workspace(registeredBuyer)
+    ).buyer_firm_profile?.self_reported_acquisition_count,
     0,
   );
 });
-
-test("buyer reclassification pauses projects and blocks stale seller match actions", () => {
+test("buyer reclassification pauses projects and blocks stale seller match actions", async () => {
   const suffix = Date.now();
-  const token = register({
+  const token = await register({
     name: "Reclassified Buyer",
     company: `Reclassified Capital ${suffix}`,
     email: `reclassified-buyer-${suffix}@example.test`,
     role: "buyer",
     password: "reclassified-profile-password-2026",
   });
-  const reclassifiedBuyer = sessionUser(token)!;
-  const organization = workspace(reclassifiedBuyer).organization;
-  const sellerToken = register({
+  const reclassifiedBuyer = await (await sessionUser(token))!;
+  const organization = await (await workspace(reclassifiedBuyer)).organization;
+  const sellerToken = await register({
     name: "Registered Seller",
     company: `Registered Seller Co. ${suffix}`,
     email: `registered-seller-${suffix}@example.test`,
     role: "owner",
     password: "reclassified-seller-password-2026",
   });
-  const registeredSeller = sessionUser(sellerToken)!;
-  const project = mutate(reclassifiedBuyer, {
+  const registeredSeller = await (await sessionUser(sellerToken))!;
+  const project = await mutate(reclassifiedBuyer, {
     action: "createBuyerProject",
     data: {
       name: `Project Reclassified ${suffix}`,
@@ -1842,7 +1901,7 @@ test("buyer reclassification pauses projects and blocks stale seller match actio
     },
   });
   assert.ok(project.id);
-  const deal = mutate(registeredSeller, {
+  const deal = await mutate(registeredSeller, {
     action: "createDeal",
     data: {
       title: `Project Reclassification ${suffix}`,
@@ -1850,9 +1909,9 @@ test("buyer reclassification pauses projects and blocks stale seller match actio
       sector: "Business services",
       province: "Ontario",
       city: "Toronto",
-      revenue: 8_000_000,
-      ebitda: 1_500_000,
-      asking_price: 10_000_000,
+      revenue: 8000000,
+      ebitda: 1500000,
+      asking_price: 10000000,
       employees: 24,
       founded: 2010,
       description:
@@ -1864,30 +1923,29 @@ test("buyer reclassification pauses projects and blocks stale seller match actio
       seller_financing_possible: false,
       management_transition: "Founder will support a transition.",
       reason_for_transaction: "Planned succession.",
-      min_expected_value: 9_000_000,
-      max_expected_value: 11_000_000,
+      min_expected_value: 9000000,
+      max_expected_value: 11000000,
       distribution_mode: "private_outreach",
       financial_year: 2025,
-      gross_profit: 3_000_000,
+      gross_profit: 3000000,
       financial_is_projected: false,
     },
   });
   assert.ok(deal.id);
-  const match = one<{
+  const match = (await one<{
     id: string;
     eligible: number;
   }>(
     "SELECT id,eligible FROM deal_matches WHERE deal_id=? AND buyer_project_id=?",
     deal.id,
     project.id,
-  )!;
+  ))!;
   assert.equal(match.eligible, 1);
-
-  mutate(registeredSeller, {
+  await mutate(registeredSeller, {
     action: "updateDealMatchStatus",
     data: { deal_id: deal.id, match_ids: [match.id], status: "selected" },
   });
-  mutate(registeredSeller, {
+  await mutate(registeredSeller, {
     action: "shareTeaser",
     data: {
       deal_id: deal.id,
@@ -1896,8 +1954,7 @@ test("buyer reclassification pauses projects and blocks stale seller match actio
       message: "Please review this private opportunity.",
     },
   });
-
-  mutate(reclassifiedBuyer, {
+  await mutate(reclassifiedBuyer, {
     action: "organization",
     data: {
       name: organization.name,
@@ -1907,46 +1964,50 @@ test("buyer reclassification pauses projects and blocks stale seller match actio
       description: organization.description,
     },
   });
-
-  const reclassifiedState = workspace(reclassifiedBuyer);
+  const reclassifiedState = await workspace(reclassifiedBuyer);
   assert.equal(reclassifiedState.organization.organization_type, "business");
   assert.equal(reclassifiedState.buyer_firm_profile, undefined);
   assert.deepEqual(reclassifiedState.buyer_projects, []);
   assert.equal(
-    one<{ status: string }>(
-      "SELECT status FROM buyer_projects WHERE id=?",
-      project.id,
+    (
+      await one<{
+        status: string;
+      }>("SELECT status FROM buyer_projects WHERE id=?", project.id)
     )?.status,
     "paused",
   );
   assert.equal(
-    one<{ eligible: number }>(
-      "SELECT eligible FROM deal_matches WHERE id=?",
-      match.id,
+    (
+      await one<{
+        eligible: number;
+      }>("SELECT eligible FROM deal_matches WHERE id=?", match.id)
     )?.eligible,
     0,
   );
   assert.equal(
-    workspace(registeredSeller).deal_matches?.some(
+    await (
+      await workspace(registeredSeller)
+    ).deal_matches?.some(
       (entry) => entry.buyer_organization_id === organization.id,
     ),
     false,
   );
   assert.equal(
-    workspace(registeredSeller).deal_outreach.some(
+    await (
+      await workspace(registeredSeller)
+    ).deal_outreach.some(
       (entry) => entry.buyer_organization_id === organization.id,
     ),
     true,
     "historical outreach remains available to the deal team",
   );
-
-  run(
+  await run(
     "UPDATE deal_matches SET eligible=1,status='selected' WHERE id=?",
     match.id,
   );
-  assert.throws(
-    () =>
-      mutate(registeredSeller, {
+  await assert.rejects(
+    async () =>
+      await mutate(registeredSeller, {
         action: "shareTeaser",
         data: {
           deal_id: deal.id,
@@ -1957,28 +2018,29 @@ test("buyer reclassification pauses projects and blocks stale seller match actio
       }),
     /eligible selected recommendation/,
   );
-  assert.throws(
-    () =>
-      mutate(registeredSeller, {
+  await assert.rejects(
+    async () =>
+      await mutate(registeredSeller, {
         action: "updateDealMatchStatus",
         data: { deal_id: deal.id, match_ids: [match.id], status: "selected" },
       }),
     /not available for this mandate/,
   );
 });
-
-test("buyer firm profile saves reject stale revisions", () => {
+test("buyer firm profile saves reject stale revisions", async () => {
   const suffix = Date.now();
-  const token = register({
+  const token = await register({
     name: "Concurrent Buyer",
     company: `Concurrent Capital ${suffix}`,
     email: `concurrent-buyer-${suffix}@example.test`,
     role: "buyer",
     password: "concurrent-profile-password-2026",
   });
-  const concurrentBuyer = sessionUser(token)!;
-  const revision = workspace(concurrentBuyer).buyer_firm_profile!.revision;
-  mutate(concurrentBuyer, {
+  const concurrentBuyer = await (await sessionUser(token))!;
+  const revision = await (
+    await workspace(concurrentBuyer)
+  ).buyer_firm_profile!.revision;
+  await mutate(concurrentBuyer, {
     action: "updateBuyerFirmProfile",
     data: {
       fund_structure: "First owner update",
@@ -1988,12 +2050,14 @@ test("buyer firm profile saves reject stale revisions", () => {
     },
   });
   assert.equal(
-    workspace(concurrentBuyer).buyer_firm_profile?.revision,
+    await (
+      await workspace(concurrentBuyer)
+    ).buyer_firm_profile?.revision,
     revision + 1,
   );
-  assert.throws(
-    () =>
-      mutate(concurrentBuyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(concurrentBuyer, {
         action: "updateBuyerFirmProfile",
         data: {
           fund_structure: "Stale second-client update",
@@ -2005,65 +2069,70 @@ test("buyer firm profile saves reject stale revisions", () => {
     (error: unknown) =>
       error instanceof Error &&
       error.message.includes("changed in another session") &&
-      (error as { status?: number }).status === 409,
+      (
+        error as {
+          status?: number;
+        }
+      ).status === 409,
   );
   assert.equal(
-    workspace(concurrentBuyer).buyer_firm_profile?.fund_structure,
+    await (
+      await workspace(concurrentBuyer)
+    ).buyer_firm_profile?.fund_structure,
     "First owner update",
   );
 });
-
-test("private teaser outreach is isolated to selected buyer organizations and advances interest", () => {
+test("private teaser outreach is isolated to selected buyer organizations and advances interest", async () => {
   const suffix = Date.now();
-  const buyerAToken = register({
+  const buyerAToken = await register({
     name: "Private Buyer A",
     company: `Private Capital A ${suffix}`,
     email: `private-buyer-a-${suffix}@example.test`,
     role: "buyer",
     password: "private-outreach-password-2026",
   });
-  const buyerA = sessionUser(buyerAToken)!;
-  const projectA = mutate(buyerA, {
+  const buyerA = await (await sessionUser(buyerAToken))!;
+  const projectA = await mutate(buyerA, {
     action: "createBuyerProject",
     data: {
       name: `Project Private A ${suffix}`,
       status: "active",
       thesis: "Ontario business services platforms.",
-      min_revenue: 1_000_000,
-      max_revenue: 20_000_000,
+      min_revenue: 1000000,
+      max_revenue: 20000000,
       sectors: ["Business services"],
       provinces: ["Ontario"],
     },
   });
-  const buyerBToken = register({
+  const buyerBToken = await register({
     name: "Private Buyer B",
     company: `Private Capital B ${suffix}`,
     email: `private-buyer-b-${suffix}@example.test`,
     role: "buyer",
     password: "private-outreach-password-2026",
   });
-  const buyerB = sessionUser(buyerBToken)!;
-  const projectB = mutate(buyerB, {
+  const buyerB = await (await sessionUser(buyerBToken))!;
+  const projectB = await mutate(buyerB, {
     action: "createBuyerProject",
     data: {
       name: `Project Private B ${suffix}`,
       status: "active",
       thesis: "Ontario business services platforms.",
-      min_revenue: 1_000_000,
-      max_revenue: 20_000_000,
+      min_revenue: 1000000,
+      max_revenue: 20000000,
       sectors: ["Business services"],
       provinces: ["Ontario"],
     },
   });
-  const sellerToken = register({
+  const sellerToken = await register({
     name: "Private Seller",
     company: `Private Services ${suffix}`,
     email: `private-seller-${suffix}@example.test`,
     role: "owner",
     password: "private-outreach-password-2026",
   });
-  const seller = sessionUser(sellerToken)!;
-  const deal = mutate(seller, {
+  const seller = await (await sessionUser(sellerToken))!;
+  const deal = await mutate(seller, {
     action: "createDeal",
     data: {
       title: `Project Private ${suffix}`,
@@ -2071,9 +2140,9 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
       sector: "Business services",
       province: "Ontario",
       city: "Toronto",
-      revenue: 8_000_000,
-      ebitda: 1_300_000,
-      asking_price: 10_000_000,
+      revenue: 8000000,
+      ebitda: 1300000,
+      asking_price: 10000000,
       employees: 28,
       founded: 2010,
       description: "A recurring-revenue Canadian services platform.",
@@ -2082,26 +2151,27 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
       financial_year: 2025,
     },
   });
-  const matchA = one<{ id: string }>(
+  const matchA = (await one<{
+    id: string;
+  }>(
     "SELECT id FROM deal_matches WHERE deal_id=? AND buyer_project_id=? AND eligible=1",
     deal.id!,
     projectA.id!,
-  )!;
+  ))!;
   assert.ok(matchA);
   assert.equal(
-    workspace(buyerA).deals.some((item) => item.id === deal.id),
+    await (await workspace(buyerA)).deals.some((item) => item.id === deal.id),
     false,
   );
   assert.equal(
-    workspace(buyerB).deals.some((item) => item.id === deal.id),
+    await (await workspace(buyerB)).deals.some((item) => item.id === deal.id),
     false,
   );
-
-  mutate(seller, {
+  await mutate(seller, {
     action: "updateDealMatchStatus",
     data: { deal_id: deal.id, match_ids: [matchA.id], status: "selected" },
   });
-  const shared = mutate(seller, {
+  const shared = await mutate(seller, {
     action: "shareTeaser",
     data: {
       deal_id: deal.id,
@@ -2111,8 +2181,7 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
     },
   });
   assert.ok(shared.id);
-
-  const buyerAState = workspace(buyerA);
+  const buyerAState = await workspace(buyerA);
   const teaser = buyerAState.deals.find((item) => item.id === deal.id)!;
   assert.ok(teaser);
   assert.equal(teaser.company_name, "Confidential company");
@@ -2120,22 +2189,21 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
   assert.equal(buyerAState.deal_outreach.length, 1);
   assert.equal(buyerAState.deal_outreach[0].buyer_project_id, projectA.id);
   assert.equal(
-    workspace(buyerB).deals.some((item) => item.id === deal.id),
+    await (await workspace(buyerB)).deals.some((item) => item.id === deal.id),
     false,
     "an unselected buyer organization must not discover private outreach",
   );
-  assert.equal(workspace(buyerB).deal_outreach.length, 0);
-
+  assert.equal(await (await workspace(buyerB)).deal_outreach.length, 0);
   const recipientId = buyerAState.deal_outreach[0].id;
-  assert.throws(
-    () =>
-      mutate(buyerB, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyerB, {
         action: "viewOutreach",
         data: { deal_id: deal.id, recipient_id: recipientId },
       }),
     /not available/i,
   );
-  mutate(buyerA, {
+  await mutate(buyerA, {
     action: "respondToOutreach",
     data: {
       deal_id: deal.id,
@@ -2143,13 +2211,18 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
       response: "interested",
     },
   });
-  assert.equal(workspace(seller).deal_outreach[0].status, "pursued");
-  const pursuedFunnel = workspace(seller).buyer_funnels?.find(
-    (candidate) => candidate.deal_id === deal.id,
+  assert.equal(
+    await (
+      await workspace(seller)
+    ).deal_outreach[0].status,
+    "pursued",
   );
+  const pursuedFunnel = await (
+    await workspace(seller)
+  ).buyer_funnels?.find((candidate) => candidate.deal_id === deal.id);
+  const buyerAOrganizationId = (await workspace(buyerA)).organization.id;
   const pursuedBuyer = pursuedFunnel?.buyers.find(
-    (candidate) =>
-      candidate.buyer_organization_id === workspace(buyerA).organization.id,
+    (candidate) => candidate.buyer_organization_id === buyerAOrganizationId,
   );
   assert.ok(pursuedBuyer);
   assert.ok(
@@ -2158,12 +2231,16 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
     ),
   );
   assert.equal(
-    workspace(buyerA).buyer_marketplace_analytics?.opportunities_viewed,
+    await (
+      await workspace(buyerA)
+    ).buyer_marketplace_analytics?.opportunities_viewed,
     1,
     "responding directly from a sent teaser records the buyer view",
   );
   assert.equal(
-    workspace(seller).deal_manager_marketplace_analytics?.find(
+    await (
+      await workspace(seller)
+    ).deal_manager_marketplace_analytics?.find(
       (analytics) => analytics.deal_id === deal.id,
     )?.counts.teaser_views,
     1,
@@ -2172,17 +2249,20 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
   assert.equal(pursuedBuyer.current_stage, "Interested");
   assert.notEqual(pursuedFunnel?.metrics.average_response_hours, null);
   assert.equal(
-    workspace(buyerA).access.find((item) => item.deal_id === deal.id)?.status,
+    await (
+      await workspace(buyerA)
+    ).access.find((item) => item.deal_id === deal.id)?.status,
     "requested",
   );
   assert.equal(
-    workspace(buyerA).deals.find((item) => item.id === deal.id)?.has_access,
+    await (await workspace(buyerA)).deals.find((item) => item.id === deal.id)
+      ?.has_access,
     false,
     "interest must not bypass NDA and deal-team approval",
   );
-  assert.throws(
-    () =>
-      mutate(buyerA, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyerA, {
         action: "respondToOutreach",
         data: {
           deal_id: deal.id,
@@ -2192,14 +2272,13 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
       }),
     /final response/i,
   );
-
-  mutate(seller, {
+  await mutate(seller, {
     action: "updateDealMatchStatus",
     data: { deal_id: deal.id, match_ids: [matchA.id], status: "selected" },
   });
-  assert.throws(
-    () =>
-      mutate(seller, {
+  await assert.rejects(
+    async () =>
+      await mutate(seller, {
         action: "shareTeaser",
         data: {
           deal_id: deal.id,
@@ -2210,17 +2289,18 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
       }),
     /already received/i,
   );
-
-  const matchB = one<{ id: string }>(
+  const matchB = (await one<{
+    id: string;
+  }>(
     "SELECT id FROM deal_matches WHERE deal_id=? AND buyer_project_id=? AND eligible=1",
     deal.id!,
     projectB.id!,
-  )!;
-  mutate(seller, {
+  ))!;
+  await mutate(seller, {
     action: "updateDealMatchStatus",
     data: { deal_id: deal.id, match_ids: [matchB.id], status: "selected" },
   });
-  mutate(seller, {
+  await mutate(seller, {
     action: "shareTeaser",
     data: {
       deal_id: deal.id,
@@ -2229,11 +2309,11 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
       message: "This business appears to fit your acquisition criteria.",
     },
   });
-  const buyerBRecipient = workspace(buyerB).deal_outreach.find(
-    (item) => item.buyer_project_id === projectB.id,
-  )!;
+  const buyerBRecipient = await (
+    await workspace(buyerB)
+  ).deal_outreach.find((item) => item.buyer_project_id === projectB.id)!;
   assert.ok(buyerBRecipient);
-  mutate(buyerB, {
+  await mutate(buyerB, {
     action: "respondToOutreach",
     data: {
       deal_id: deal.id,
@@ -2242,42 +2322,43 @@ test("private teaser outreach is isolated to selected buyer organizations and ad
     },
   });
   assert.equal(
-    workspace(seller).deal_outreach.find(
-      (item) => item.id === buyerBRecipient.id,
-    )?.status,
+    await (
+      await workspace(seller)
+    ).deal_outreach.find((item) => item.id === buyerBRecipient.id)?.status,
     "passed",
   );
   assert.equal(
-    workspace(buyerB).access.some((item) => item.deal_id === deal.id),
+    await (
+      await workspace(buyerB)
+    ).access.some((item) => item.deal_id === deal.id),
     false,
     "passing must not create a transaction access relationship",
   );
 });
-
-test("Qualified Discovery requires an eligible project and seller-approved introduction", () => {
+test("Qualified Discovery requires an eligible project and seller-approved introduction", async () => {
   const suffix = Date.now();
   const password = "qualified-discovery-password-2026";
-  const buyerToken = register({
+  const buyerToken = await register({
     name: "Qualified Buyer",
     company: `Qualified Capital ${suffix}`,
     email: `qualified-buyer-${suffix}@example.test`,
     role: "buyer",
     password,
   });
-  const qualifiedBuyer = sessionUser(buyerToken)!;
-  const project = mutate(qualifiedBuyer, {
+  const qualifiedBuyer = await (await sessionUser(buyerToken))!;
+  const project = await mutate(qualifiedBuyer, {
     action: "createBuyerProject",
     data: {
       name: `Project Discovery ${suffix}`,
       status: "active",
       thesis:
         "Acquire majority positions in profitable Ontario technology platforms with recurring revenue.",
-      min_revenue: 4_000_000,
-      max_revenue: 12_000_000,
-      min_ebitda: 750_000,
-      max_ebitda: 3_000_000,
-      min_enterprise_value: 7_000_000,
-      max_enterprise_value: 18_000_000,
+      min_revenue: 4000000,
+      max_revenue: 12000000,
+      min_ebitda: 750000,
+      max_ebitda: 3000000,
+      min_enterprise_value: 7000000,
+      max_enterprise_value: 18000000,
       ownership_preference: "majority",
       transaction_type: "majority_acquisition",
       sectors: ["Technology"],
@@ -2285,26 +2366,26 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
       keywords: ["recurring revenue"],
     },
   });
-  const lowMatchToken = register({
+  const lowMatchToken = await register({
     name: "Unmatched Buyer",
     company: `Unmatched Capital ${suffix}`,
     email: `unmatched-buyer-${suffix}@example.test`,
     role: "buyer",
     password,
   });
-  const unmatchedBuyer = sessionUser(lowMatchToken)!;
-  mutate(unmatchedBuyer, {
+  const unmatchedBuyer = await (await sessionUser(lowMatchToken))!;
+  await mutate(unmatchedBuyer, {
     action: "createBuyerProject",
     data: {
       name: `Project Pacific ${suffix}`,
       status: "active",
       thesis: "Minority investments in small British Columbia retailers.",
-      min_revenue: 100_000,
-      max_revenue: 500_000,
+      min_revenue: 100000,
+      max_revenue: 500000,
       min_ebitda: 0,
-      max_ebitda: 50_000,
-      min_enterprise_value: 100_000,
-      max_enterprise_value: 600_000,
+      max_ebitda: 50000,
+      min_enterprise_value: 100000,
+      max_enterprise_value: 600000,
       ownership_preference: "minority",
       transaction_type: "minority_investment",
       sectors: ["Consumer & retail"],
@@ -2312,25 +2393,63 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
       keywords: ["retail"],
     },
   });
-  const verificationReviewerId = sessionUser(
-    register({
+  const verificationReviewerEmail = `verification-reviewer-${suffix}@example.test`;
+  const verificationReviewerId = await (await sessionUser(
+    await register({
       name: "Registered Verification Reviewer",
       company: `Platform Operations ${suffix}`,
-      email: `verification-reviewer-${suffix}@example.test`,
+      email: verificationReviewerEmail,
       password: "verification-reviewer-password-2026",
       role: "advisor",
     }),
-  )!.id;
-  run(
+  ))!.id;
+  process.env.ADMIN_EMAILS = verificationReviewerEmail;
+  await run(
     "UPDATE users SET is_platform_admin=1 WHERE id=?",
     verificationReviewerId,
   );
-  const verificationReviewer = one<User>(
+  const verificationReviewer = (await one<User>(
     "SELECT * FROM users WHERE id=?",
     verificationReviewerId,
-  )!;
-  const verifyBuyer = (candidate: User, name: string, website: string) => {
-    mutate(candidate, {
+  ))!;
+  const verifyBuyer = async (
+    candidate: User,
+    name: string,
+    website: string,
+  ) => {
+    const existingIdentity = (await workspace(candidate))
+      .buyer_identity_verification;
+    if (existingIdentity?.status !== "approved") {
+      await mutate(candidate, {
+        action: "submitBuyerIdentityVerification",
+        data: {
+          buyer_type: "private_equity_firm",
+          linkedin_url: null,
+          website_url: website,
+          source_of_capital: "committed_investment_fund",
+          equity_range: "2_5m_5m",
+          completed_acquisitions: 3,
+          experience_summary:
+            "Canadian acquisition and operating experience across established technology businesses.",
+          acquisition_strategy:
+            "Acquire durable Canadian software companies with recurring revenue and experienced management teams.",
+          authorized_to_represent: true,
+        },
+      });
+      const identityVerification = (await workspace(candidate))
+        .buyer_identity_verification;
+      assert.ok(identityVerification);
+      assert.equal(
+        await reviewBuyerIdentityVerification(
+          verificationReviewer,
+          identityVerification.id,
+          "approved",
+          "Buyer identity and profile reviewed for test access.",
+        ),
+        true,
+      );
+    }
+    await mutate(candidate, {
       action: "updateBuyerVerificationProfile",
       data: {
         legal_name: name,
@@ -2340,44 +2459,45 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
         acquisition_history:
           "Completed Canadian acquisitions with operating oversight.",
         capital_source: "Committed private investment capital.",
-        min_equity_check: 1_000_000,
-        max_equity_check: 20_000_000,
+        min_equity_check: 1000000,
+        max_equity_check: 20000000,
         financing_approach: "Equity capital with senior acquisition financing.",
       },
     });
-    mutate(candidate, { action: "submitBuyerVerification", data: {} });
-    const submissionRevision =
-      workspace(candidate).buyer_verification_profile?.submission_revision;
-    mutate(verificationReviewer, {
+    await mutate(candidate, { action: "submitBuyerVerification", data: {} });
+    const submissionRevision = await (
+      await workspace(candidate)
+    ).buyer_verification_profile?.submission_revision;
+    await mutate(verificationReviewer, {
       action: "reviewBuyerVerification",
       data: {
-        organization_id: workspace(candidate).organization.id,
+        organization_id: await (await workspace(candidate)).organization.id,
         submission_revision: submissionRevision,
         decision: "firm_verified",
         notes: "Firm identity reviewed for Qualified Discovery testing.",
       },
     });
   };
-  verifyBuyer(
+  await verifyBuyer(
     qualifiedBuyer,
     `Qualified Capital ${suffix} Inc.`,
     `https://qualified-${suffix}.example.test`,
   );
-  verifyBuyer(
+  await verifyBuyer(
     unmatchedBuyer,
     `Unmatched Capital ${suffix} Inc.`,
     `https://unmatched-${suffix}.example.test`,
   );
-  const sellerToken = register({
+  const sellerToken = await register({
     name: "Discovery Seller",
     company: `Discovery Software ${suffix}`,
     email: `discovery-seller-${suffix}@example.test`,
     role: "owner",
     password,
   });
-  const seller = sessionUser(sellerToken)!;
-  const createDiscoveryDeal = (title: string) => {
-    const result = mutate(seller, {
+  const seller = await (await sessionUser(sellerToken))!;
+  const createDiscoveryDeal = async (title: string) => {
+    const result = await mutate(seller, {
       action: "createDeal",
       data: {
         title,
@@ -2385,9 +2505,9 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
         sector: "Technology",
         province: "Ontario",
         city: "Toronto",
-        revenue: 8_000_000,
-        ebitda: 1_600_000,
-        asking_price: 12_000_000,
+        revenue: 8000000,
+        ebitda: 1600000,
+        asking_price: 12000000,
         employees: 34,
         founded: 2012,
         description:
@@ -2400,15 +2520,15 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
         seller_financing_possible: false,
         management_transition: "Founder available for a transition period.",
         reason_for_transaction: "Planned succession.",
-        min_expected_value: 10_000_000,
-        max_expected_value: 14_000_000,
+        min_expected_value: 10000000,
+        max_expected_value: 14000000,
         distribution_mode: "qualified_discovery",
         financial_year: 2025,
-        gross_profit: 5_000_000,
+        gross_profit: 5000000,
         financial_is_projected: false,
       },
     });
-    mutate(seller, {
+    await mutate(seller, {
       action: "updateDeal",
       data: {
         deal_id: result.id,
@@ -2419,13 +2539,12 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
     });
     return result.id!;
   };
-
-  const declinedDealId = createDiscoveryDeal(
+  const declinedDealId = await createDiscoveryDeal(
     `Project Qualified Discovery ${suffix}`,
   );
-  const discovery = workspace(qualifiedBuyer).deals.find(
-    (deal) => deal.id === declinedDealId,
-  );
+  const discovery = await (
+    await workspace(qualifiedBuyer)
+  ).deals.find((deal) => deal.id === declinedDealId);
   assert.ok(discovery);
   assert.equal(discovery.matched_project_id, project.id);
   assert.equal(discovery.matched_project_name, `Project Discovery ${suffix}`);
@@ -2434,22 +2553,23 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
   assert.equal(discovery.company_name, "Confidential company");
   assert.equal(discovery.owner_id, "");
   assert.equal(
-    workspace(unmatchedBuyer).deals.some((deal) => deal.id === declinedDealId),
+    await (
+      await workspace(unmatchedBuyer)
+    ).deals.some((deal) => deal.id === declinedDealId),
     false,
     "buyers below the configured threshold cannot enumerate the deal",
   );
-  assert.throws(
-    () =>
-      mutate(qualifiedBuyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(qualifiedBuyer, {
         action: "requestAccess",
         data: { deal_id: declinedDealId },
       }),
     /matched introduction request/,
   );
-
   const message =
     "We operate two Canadian software platforms and have committed equity for a majority acquisition.";
-  let request = mutate(qualifiedBuyer, {
+  let request = await mutate(qualifiedBuyer, {
     action: "requestIntroduction",
     data: {
       deal_id: declinedDealId,
@@ -2457,20 +2577,20 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
       message,
     },
   });
-  let sellerRequest = workspace(seller).introduction_requests.find(
-    (candidate) => candidate.id === request.id,
-  );
+  let sellerRequest = await (
+    await workspace(seller)
+  ).introduction_requests.find((candidate) => candidate.id === request.id);
   assert.ok(sellerRequest);
   assert.equal(sellerRequest.message, message);
   assert.equal(sellerRequest.status, "pending");
   assert.equal(sellerRequest.match_score, discovery.match_score);
   assert.equal(
-    workspace(unmatchedBuyer).introduction_requests.some(
-      (candidate) => candidate.id === request.id,
-    ),
+    await (
+      await workspace(unmatchedBuyer)
+    ).introduction_requests.some((candidate) => candidate.id === request.id),
     false,
   );
-  mutate(qualifiedBuyer, {
+  await mutate(qualifiedBuyer, {
     action: "withdrawIntroduction",
     data: {
       deal_id: declinedDealId,
@@ -2478,12 +2598,13 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
     },
   });
   assert.equal(
-    workspace(qualifiedBuyer).introduction_requests.find(
-      (candidate) => candidate.id === request.id,
-    )?.status,
+    await (
+      await workspace(qualifiedBuyer)
+    ).introduction_requests.find((candidate) => candidate.id === request.id)
+      ?.status,
     "withdrawn",
   );
-  request = mutate(qualifiedBuyer, {
+  request = await mutate(qualifiedBuyer, {
     action: "requestIntroduction",
     data: {
       deal_id: declinedDealId,
@@ -2491,11 +2612,11 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
       message,
     },
   });
-  sellerRequest = workspace(seller).introduction_requests.find(
-    (candidate) => candidate.id === request.id,
-  );
+  sellerRequest = await (
+    await workspace(seller)
+  ).introduction_requests.find((candidate) => candidate.id === request.id);
   assert.equal(sellerRequest?.status, "pending");
-  mutate(seller, {
+  await mutate(seller, {
     action: "reviewIntroduction",
     data: {
       deal_id: declinedDealId,
@@ -2504,14 +2625,15 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
     },
   });
   assert.equal(
-    workspace(qualifiedBuyer).introduction_requests.find(
-      (candidate) => candidate.id === request.id,
-    )?.status,
+    await (
+      await workspace(qualifiedBuyer)
+    ).introduction_requests.find((candidate) => candidate.id === request.id)
+      ?.status,
     "declined",
   );
-  assert.throws(
-    () =>
-      mutate(qualifiedBuyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(qualifiedBuyer, {
         action: "requestIntroduction",
         data: {
           deal_id: declinedDealId,
@@ -2522,12 +2644,11 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
     /declined/,
     "a declined organization cannot retry around the seller decision",
   );
-  assert.equal(membership(declinedDealId, qualifiedBuyer.id), undefined);
-
-  const approvedDealId = createDiscoveryDeal(
+  assert.equal(await membership(declinedDealId, qualifiedBuyer.id), undefined);
+  const approvedDealId = await createDiscoveryDeal(
     `Project Approved Discovery ${suffix}`,
   );
-  const approvedRequest = mutate(qualifiedBuyer, {
+  const approvedRequest = await mutate(qualifiedBuyer, {
     action: "requestIntroduction",
     data: {
       deal_id: approvedDealId,
@@ -2535,12 +2656,12 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
       message,
     },
   });
-  const approvedRequestCountBeforeDowngrade = workspace(
-    seller,
+  const approvedRequestCountBeforeDowngrade = await (
+    await workspace(seller)
   ).introduction_requests.filter(
     (candidate) => candidate.deal_id === approvedDealId,
   ).length;
-  mutate(qualifiedBuyer, {
+  await mutate(qualifiedBuyer, {
     action: "updateBuyerVerificationProfile",
     data: {
       legal_name: `Qualified Capital ${suffix} Inc.`,
@@ -2550,18 +2671,20 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
       acquisition_history:
         "Completed Canadian acquisitions with operating oversight.",
       capital_source: "Committed private investment capital.",
-      min_equity_check: 1_000_000,
-      max_equity_check: 20_000_000,
+      min_equity_check: 1000000,
+      max_equity_check: 20000000,
       financing_approach: "Equity capital with senior acquisition financing.",
     },
   });
   assert.equal(
-    workspace(qualifiedBuyer).organization.verification_status,
+    await (
+      await workspace(qualifiedBuyer)
+    ).organization.verification_status,
     "unverified",
   );
-  assert.throws(
-    () =>
-      mutate(qualifiedBuyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(qualifiedBuyer, {
         action: "requestIntroduction",
         data: {
           deal_id: approvedDealId,
@@ -2572,16 +2695,18 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
     /not reached|required/i,
   );
   assert.equal(
-    workspace(seller).introduction_requests.filter(
+    await (
+      await workspace(seller)
+    ).introduction_requests.filter(
       (candidate) => candidate.deal_id === approvedDealId,
     ).length,
     approvedRequestCountBeforeDowngrade,
     "a downgraded buyer cannot create a new introduction request",
   );
-  assert.equal(membership(approvedDealId, qualifiedBuyer.id), undefined);
-  assert.throws(
-    () =>
-      mutate(seller, {
+  assert.equal(await membership(approvedDealId, qualifiedBuyer.id), undefined);
+  await assert.rejects(
+    async () =>
+      await mutate(seller, {
         action: "reviewIntroduction",
         data: {
           deal_id: approvedDealId,
@@ -2592,17 +2717,16 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
     /no longer meets|required/i,
   );
   assert.equal(
-    membership(approvedDealId, qualifiedBuyer.id),
+    await membership(approvedDealId, qualifiedBuyer.id),
     undefined,
     "approval after downgrade must not grant access",
   );
-
-  verifyBuyer(
+  await verifyBuyer(
     qualifiedBuyer,
     `Qualified Capital ${suffix} Inc.`,
     `https://qualified-restored-${suffix}.example.test`,
   );
-  mutate(seller, {
+  await mutate(seller, {
     action: "reviewIntroduction",
     data: {
       deal_id: approvedDealId,
@@ -2611,27 +2735,32 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
     },
   });
   assert.equal(
-    membership(approvedDealId, qualifiedBuyer.id)?.status,
+    await (
+      await membership(approvedDealId, qualifiedBuyer.id)
+    )?.status,
     "requested",
   );
-  const approvedTeaser = workspace(qualifiedBuyer).deals.find(
-    (deal) => deal.id === approvedDealId,
-  )!;
+  const approvedTeaser = await (
+    await workspace(qualifiedBuyer)
+  ).deals.find((deal) => deal.id === approvedDealId)!;
   assert.equal(approvedTeaser.company_name, "Confidential company");
   assert.equal(approvedTeaser.has_access, false);
   assert.equal(
-    workspace(qualifiedBuyer).introduction_requests.find(
+    await (
+      await workspace(qualifiedBuyer)
+    ).introduction_requests.find(
       (candidate) => candidate.id === approvedRequest.id,
     )?.status,
     "approved",
   );
-  const approvedFunnel = workspace(seller).buyer_funnels?.find(
-    (candidate) => candidate.deal_id === approvedDealId,
-  );
+  const approvedFunnel = await (
+    await workspace(seller)
+  ).buyer_funnels?.find((candidate) => candidate.deal_id === approvedDealId);
+  const qualifiedBuyerOrganizationId = (await workspace(qualifiedBuyer))
+    .organization.id;
   const introducedBuyer = approvedFunnel?.buyers.find(
     (candidate) =>
-      candidate.buyer_organization_id ===
-      workspace(qualifiedBuyer).organization.id,
+      candidate.buyer_organization_id === qualifiedBuyerOrganizationId,
   );
   assert.ok(introducedBuyer);
   assert.ok(
@@ -2646,9 +2775,8 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
   );
   assert.equal(introducedBuyer.current_stage, "Interested");
 });
-
-test("deal managers receive an event-backed buyer funnel without exposing it to buyers", () => {
-  const ownerState = workspace(owner);
+test("deal managers receive an event-backed buyer funnel without exposing it to buyers", async () => {
+  const ownerState = await workspace(owner);
   const cedarFunnel = ownerState.buyer_funnels?.find(
     (funnel) => funnel.deal_id === "cedar",
   );
@@ -2668,11 +2796,13 @@ test("deal managers receive an event-backed buyer funnel without exposing it to 
     evergreen.events.some((event) => event.event_type === "nda_approved"),
   );
   assert.equal(
-    Object.prototype.hasOwnProperty.call(workspace(buyer), "buyer_funnels"),
+    Object.prototype.hasOwnProperty.call(
+      await workspace(buyer),
+      "buyer_funnels",
+    ),
     false,
   );
-
-  mutate(owner, {
+  await mutate(owner, {
     action: "recordBuyerFunnelEvent",
     data: {
       deal_id: "cedar",
@@ -2681,9 +2811,9 @@ test("deal managers receive an event-backed buyer funnel without exposing it to 
       event_type: "ioi_received",
     },
   });
-  const updated = workspace(owner).buyer_funnels?.find(
-    (funnel) => funnel.deal_id === "cedar",
-  );
+  const updated = await (
+    await workspace(owner)
+  ).buyer_funnels?.find((funnel) => funnel.deal_id === "cedar");
   assert.equal(
     updated?.buyers.find(
       (entry) => entry.buyer_organization_id === "org-demo-buyer",
@@ -2691,9 +2821,9 @@ test("deal managers receive an event-backed buyer funnel without exposing it to 
     "IOI",
   );
   assert.equal(updated?.metrics.stage_counts.IOI, 1);
-  assert.throws(
-    () =>
-      mutate(buyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "recordBuyerFunnelEvent",
         data: {
           deal_id: "cedar",
@@ -2704,9 +2834,8 @@ test("deal managers receive an event-backed buyer funnel without exposing it to 
     /deal-team|manage/,
   );
 });
-
-test("transaction attribution is manager-only, revisioned, and records closing value separately from workflow", () => {
-  const ownerState = workspace(owner);
+test("transaction attribution is manager-only, revisioned, and records closing value separately from workflow", async () => {
+  const ownerState = await workspace(owner);
   const attribution = ownerState.transaction_attributions?.find(
     (entry) =>
       entry.deal_id === "cedar" &&
@@ -2717,13 +2846,12 @@ test("transaction attribution is manager-only, revisioned, and records closing v
   assert.equal(attribution.introduced_by_acquire, false);
   assert.equal(
     Object.prototype.hasOwnProperty.call(
-      workspace(buyer),
+      await workspace(buyer),
       "transaction_attributions",
     ),
     false,
   );
-
-  mutate(owner, {
+  await mutate(owner, {
     action: "upsertTransactionAttribution",
     data: {
       deal_id: "cedar",
@@ -2735,17 +2863,18 @@ test("transaction attribution is manager-only, revisioned, and records closing v
       revision: attribution.revision,
     },
   });
-  const corrected = workspace(owner).transaction_attributions?.find(
+  const corrected = await (
+    await workspace(owner)
+  ).transaction_attributions?.find(
     (entry) =>
       entry.deal_id === "cedar" &&
       entry.buyer_organization_id === "org-demo-buyer",
   );
   assert.equal(corrected?.introduced_by_acquire, false);
   assert.equal(corrected?.source, "external_relationship");
-
-  assert.throws(
-    () =>
-      mutate(owner, {
+  await assert.rejects(
+    async () =>
+      await mutate(owner, {
         action: "upsertTransactionAttribution",
         data: {
           deal_id: "cedar",
@@ -2759,9 +2888,9 @@ test("transaction attribution is manager-only, revisioned, and records closing v
       }),
     /recorded together/,
   );
-  assert.throws(
-    () =>
-      mutate(owner, {
+  await assert.rejects(
+    async () =>
+      await mutate(owner, {
         action: "upsertTransactionAttribution",
         data: {
           deal_id: "cedar",
@@ -2769,14 +2898,13 @@ test("transaction attribution is manager-only, revisioned, and records closing v
           source: "external_relationship",
           introduction_date: "2025-01-15",
           closed_date: "2026-01-15",
-          enterprise_value: 12_500_000,
+          enterprise_value: 12500000,
           revision: corrected?.revision,
         },
       }),
     /Closed buyer-funnel milestone/,
   );
-
-  mutate(owner, {
+  await mutate(owner, {
     action: "recordBuyerFunnelEvent",
     data: {
       deal_id: "cedar",
@@ -2784,7 +2912,7 @@ test("transaction attribution is manager-only, revisioned, and records closing v
       event_type: "closed",
     },
   });
-  mutate(owner, {
+  await mutate(owner, {
     action: "upsertTransactionAttribution",
     data: {
       deal_id: "cedar",
@@ -2796,14 +2924,16 @@ test("transaction attribution is manager-only, revisioned, and records closing v
       revision: corrected?.revision,
     },
   });
-  const correctedAfterClose = workspace(owner).transaction_attributions?.find(
+  const correctedAfterClose = await (
+    await workspace(owner)
+  ).transaction_attributions?.find(
     (entry) =>
       entry.deal_id === "cedar" &&
       entry.buyer_organization_id === "org-demo-buyer",
   );
   assert.equal(correctedAfterClose?.closed_date, null);
   assert.equal(correctedAfterClose?.enterprise_value, null);
-  mutate(owner, {
+  await mutate(owner, {
     action: "upsertTransactionAttribution",
     data: {
       deal_id: "cedar",
@@ -2811,22 +2941,23 @@ test("transaction attribution is manager-only, revisioned, and records closing v
       source: "external_relationship",
       introduction_date: "2025-01-15",
       closed_date: "2026-01-15",
-      enterprise_value: 12_500_000,
+      enterprise_value: 12500000,
       revision: correctedAfterClose?.revision,
     },
   });
-  const closed = workspace(owner).transaction_attributions?.find(
+  const closed = await (
+    await workspace(owner)
+  ).transaction_attributions?.find(
     (entry) =>
       entry.deal_id === "cedar" &&
       entry.buyer_organization_id === "org-demo-buyer",
   );
   assert.equal(closed?.closed_date, "2026-01-15");
-  assert.equal(closed?.enterprise_value, 12_500_000);
+  assert.equal(closed?.enterprise_value, 12500000);
   assert.equal(closed?.revision, (correctedAfterClose?.revision ?? 0) + 1);
-
-  assert.throws(
-    () =>
-      mutate(owner, {
+  await assert.rejects(
+    async () =>
+      await mutate(owner, {
         action: "upsertTransactionAttribution",
         data: {
           deal_id: "cedar",
@@ -2834,15 +2965,15 @@ test("transaction attribution is manager-only, revisioned, and records closing v
           source: "acquire_match",
           introduction_date: "2025-01-15",
           closed_date: "2026-01-15",
-          enterprise_value: 12_500_000,
+          enterprise_value: 12500000,
           revision: corrected?.revision,
         },
       }),
     /changed in another session/,
   );
-  assert.throws(
-    () =>
-      mutate(buyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "upsertTransactionAttribution",
         data: {
           deal_id: "cedar",
@@ -2850,18 +2981,19 @@ test("transaction attribution is manager-only, revisioned, and records closing v
           source: "acquire_match",
           introduction_date: "2025-01-15",
           closed_date: "2026-01-15",
-          enterprise_value: 12_500_000,
+          enterprise_value: 12500000,
           revision: closed?.revision,
         },
       }),
     /deal-team|manage/,
   );
-
-  mutate(owner, {
+  await mutate(owner, {
     action: "inviteBuyer",
     data: { deal_id: "harbour", email: otherBuyer.email },
   });
-  const directInvitation = workspace(owner).transaction_attributions?.find(
+  const directInvitation = await (
+    await workspace(owner)
+  ).transaction_attributions?.find(
     (entry) =>
       entry.deal_id === "harbour" &&
       entry.buyer_organization_id === "org-demo-buyer-2",
@@ -2869,119 +3001,116 @@ test("transaction attribution is manager-only, revisioned, and records closing v
   assert.equal(directInvitation?.source, "seller_invitation");
   assert.equal(directInvitation?.introduced_by_acquire, false);
 });
-
-test("internal deal notes stay inside the seller-side team", () => {
+test("internal deal notes stay inside the seller-side team", async () => {
   const body = "Strong interest, but financing confirmation is still required.";
-  const result = mutate(owner, {
+  const result = await mutate(owner, {
     action: "createInternalNote",
     data: { deal_id: "cedar", body },
   });
   assert.ok(result.id);
-
-  const ownerNote = workspace(owner).deal_internal_notes?.find(
-    (note) => note.id === result.id,
-  );
-  const advisorNote = workspace(advisor).deal_internal_notes?.find(
-    (note) => note.id === result.id,
-  );
+  const ownerNote = await (
+    await workspace(owner)
+  ).deal_internal_notes?.find((note) => note.id === result.id);
+  const advisorNote = await (
+    await workspace(advisor)
+  ).deal_internal_notes?.find((note) => note.id === result.id);
   assert.equal(ownerNote?.body, body);
   assert.equal(ownerNote?.author_name, owner.name);
   assert.equal(advisorNote?.body, body);
-
-  const buyerState = workspace(buyer);
+  const buyerState = await workspace(buyer);
   assert.equal(
     Object.prototype.hasOwnProperty.call(buyerState, "deal_internal_notes"),
     false,
   );
   assert.doesNotMatch(JSON.stringify(buyerState), new RegExp(body));
-
-  const unrelatedAdvisor = one<User>(
+  const unrelatedAdvisor = (await one<User>(
     "SELECT * FROM users WHERE id='demo-advisor-2'",
-  )!;
+  ))!;
   assert.equal(
-    workspace(unrelatedAdvisor).deal_internal_notes?.some(
-      (note) => note.id === result.id,
-    ) ?? false,
+    (await (
+      await workspace(unrelatedAdvisor)
+    ).deal_internal_notes?.some((note) => note.id === result.id)) ?? false,
     false,
   );
-  assert.throws(
-    () =>
-      mutate(unrelatedAdvisor, {
+  await assert.rejects(
+    async () =>
+      await mutate(unrelatedAdvisor, {
         action: "createInternalNote",
         data: { deal_id: "cedar", body: "Should not be saved." },
       }),
     /deal-team|manage|not found/i,
   );
-  assert.throws(
-    () =>
-      mutate(buyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "createInternalNote",
         data: { deal_id: "cedar", body: "Buyer-only attempt." },
       }),
     /deal-team|manage/i,
   );
-
-  const viewerToken = register({
+  const viewerToken = await register({
     name: "Cedar Note Viewer",
     company: "Temporary Viewer Firm",
     email: "cedar-note-viewer@example.test",
     role: "owner",
     password: "internal-notes-password-2026",
   });
-  const viewer = sessionUser(viewerToken)!;
-  const viewerOrganization = one<{ id: string }>(
+  const viewer = await (await sessionUser(viewerToken))!;
+  const viewerOrganization = (await one<{
+    id: string;
+  }>(
     "SELECT organization_id id FROM organization_members WHERE user_id=?",
     viewer.id,
-  )!;
-  run("DELETE FROM organization_members WHERE user_id=?", viewer.id);
-  run("DELETE FROM organizations WHERE id=?", viewerOrganization.id);
-  run("UPDATE users SET is_demo=1 WHERE id=?", viewer.id);
-  run(
+  ))!;
+  await run("DELETE FROM organization_members WHERE user_id=?", viewer.id);
+  await run("DELETE FROM organizations WHERE id=?", viewerOrganization.id);
+  await run("UPDATE users SET is_demo=1 WHERE id=?", viewer.id);
+  await run(
     "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'viewer','active')",
     `membership-${viewer.id}-cedar-notes`,
     "org-demo-owner",
     viewer.id,
   );
-  const demoViewer = one<User>("SELECT * FROM users WHERE id=?", viewer.id)!;
+  const demoViewer = (await one<User>(
+    "SELECT * FROM users WHERE id=?",
+    viewer.id,
+  ))!;
   assert.equal(
-    workspace(demoViewer).deal_internal_notes?.some(
-      (note) => note.id === result.id,
-    ),
+    await (
+      await workspace(demoViewer)
+    ).deal_internal_notes?.some((note) => note.id === result.id),
     true,
   );
-  assert.throws(
-    () =>
-      mutate(demoViewer, {
+  await assert.rejects(
+    async () =>
+      await mutate(demoViewer, {
         action: "createInternalNote",
         data: { deal_id: "cedar", body: "Viewer cannot add notes." },
       }),
     /deal-team|manage/i,
   );
-
-  assert.throws(
-    () =>
-      mutate(owner, {
+  await assert.rejects(
+    async () =>
+      await mutate(owner, {
         action: "createInternalNote",
         data: { deal_id: "cedar", body: "   " },
       }),
     /characters|invalid/i,
   );
-  assert.throws(
-    () =>
-      mutate(owner, {
+  await assert.rejects(
+    async () =>
+      await mutate(owner, {
         action: "createInternalNote",
-        data: { deal_id: "cedar", body: "x".repeat(5_001) },
+        data: { deal_id: "cedar", body: "x".repeat(5001) },
       }),
     /characters|invalid/i,
   );
 });
-
-test("notifications stay user-scoped while email preferences control only outbox delivery", () => {
-  run("DELETE FROM email_outbox");
-  run("DELETE FROM notifications");
-  run("DELETE FROM notification_preferences");
-
-  mutate(buyer, {
+test("notifications stay user-scoped while email preferences control only outbox delivery", async () => {
+  await run("DELETE FROM email_outbox");
+  await run("DELETE FROM notifications");
+  await run("DELETE FROM notification_preferences");
+  await mutate(buyer, {
     action: "message",
     data: {
       deal_id: "cedar",
@@ -2989,8 +3118,9 @@ test("notifications stay user-scoped while email preferences control only outbox
       body: "Can we confirm the management-call agenda?",
     },
   });
-
-  const ownerNotification = workspace(owner).notifications.find(
+  const ownerNotification = await (
+    await workspace(owner)
+  ).notifications.find(
     (notification) =>
       notification.type === "new_message" &&
       notification.body.includes("management-call agenda"),
@@ -2998,48 +3128,56 @@ test("notifications stay user-scoped while email preferences control only outbox
   assert.ok(ownerNotification);
   assert.equal(ownerNotification.read_at, null);
   assert.equal(
-    workspace(otherBuyer).notifications.some(
+    await (
+      await workspace(otherBuyer)
+    ).notifications.some(
       (notification) => notification.id === ownerNotification.id,
     ),
     false,
   );
   assert.equal(
-    one<{ status: string }>(
-      "SELECT status FROM email_outbox WHERE notification_id=?",
-      ownerNotification.id,
+    (
+      await one<{
+        status: string;
+      }>(
+        "SELECT status FROM email_outbox WHERE notification_id=?",
+        ownerNotification.id,
+      )
     )?.status,
     "recorded",
   );
-
-  assert.throws(
-    () =>
-      mutate(otherBuyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(otherBuyer, {
         action: "setNotificationRead",
         data: { notification_id: ownerNotification.id, read: true },
       }),
     /notification/i,
   );
-  mutate(owner, {
+  await mutate(owner, {
     action: "setNotificationRead",
     data: { notification_id: ownerNotification.id, read: true },
   });
   assert.ok(
-    workspace(owner).notifications.find(
+    await (
+      await workspace(owner)
+    ).notifications.find(
       (notification) => notification.id === ownerNotification.id,
     )?.read_at,
   );
-  mutate(owner, {
+  await mutate(owner, {
     action: "setNotificationRead",
     data: { notification_id: ownerNotification.id, read: false },
   });
   assert.equal(
-    workspace(owner).notifications.find(
+    await (
+      await workspace(owner)
+    ).notifications.find(
       (notification) => notification.id === ownerNotification.id,
     )?.read_at,
     null,
   );
-
-  mutate(owner, {
+  await mutate(owner, {
     action: "notificationPreferences",
     data: {
       preferences: {
@@ -3049,14 +3187,16 @@ test("notifications stay user-scoped while email preferences control only outbox
     },
   });
   assert.equal(
-    workspace(owner).notification_preferences.new_message,
+    await (
+      await workspace(owner)
+    ).notification_preferences.new_message,
     "disabled",
   );
-  const outboxBefore = one<{ count: number }>(
-    "SELECT COUNT(*) count FROM email_outbox WHERE user_id=?",
-    owner.id,
-  )!.count;
-  mutate(buyer, {
+  const outboxBefore = (await one<{
+    count: number;
+  }>("SELECT COUNT(*) count FROM email_outbox WHERE user_id=?", owner.id))!
+    .count;
+  await mutate(buyer, {
     action: "message",
     data: {
       deal_id: "cedar",
@@ -3065,14 +3205,16 @@ test("notifications stay user-scoped while email preferences control only outbox
     },
   });
   assert.equal(
-    one<{ count: number }>(
-      "SELECT COUNT(*) count FROM email_outbox WHERE user_id=?",
-      owner.id,
-    )!.count,
+    (await one<{
+      count: number;
+    }>("SELECT COUNT(*) count FROM email_outbox WHERE user_id=?", owner.id))!
+      .count,
     outboxBefore,
   );
   assert.ok(
-    workspace(owner).notifications.some((notification) =>
+    await (
+      await workspace(owner)
+    ).notifications.some((notification) =>
       notification.body.includes("second message"),
     ),
   );

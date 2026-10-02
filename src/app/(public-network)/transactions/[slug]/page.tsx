@@ -22,7 +22,7 @@ export async function generateMetadata({
 }: {
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
-  const transaction = getPublicTransactionBySlug((await params).slug);
+  const transaction = await getPublicTransactionBySlug((await params).slug);
   if (!transaction)
     return {
       title: "Transaction not found",
@@ -40,7 +40,7 @@ export default async function TransactionRoute({
 }: {
   params: Promise<{ slug: string }>;
 }) {
-  const transaction = getPublicTransactionBySlug((await params).slug);
+  const transaction = await getPublicTransactionBySlug((await params).slug);
   if (!transaction) notFound();
   return (
     <>

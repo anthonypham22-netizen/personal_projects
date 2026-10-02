@@ -62,7 +62,7 @@ const schemaObjects = (database) =>
       sql: row.sql.replace(/\s+/g, " ").trim(),
     }));
 
-test("a fresh database migrates, seeds, and remains idempotent", () => {
+test("a fresh database migrates, seeds, and remains idempotent", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-schema-"));
   const database = new DatabaseSync(":memory:");
   try {
@@ -139,9 +139,9 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
       { name: "teaser_safety_reviews" },
     );
 
-    seed(database, directory);
-    ensureInitialMatchBackfill(database);
-    ensureBuyerFunnelBackfill(database);
+    await seed(database, directory);
+    await ensureInitialMatchBackfill(database);
+    await ensureBuyerFunnelBackfill(database);
     assert.equal(
       database
         .prepare(
@@ -319,7 +319,7 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
         "SELECT revision FROM buyer_firm_profiles WHERE organization_id='org-demo-buyer'",
       )
       .get().revision;
-    seed(database, directory);
+    await seed(database, directory);
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM deals").get().count,
       6,
@@ -400,7 +400,7 @@ test("a fresh database migrates, seeds, and remains idempotent", () => {
   }
 });
 
-test("an existing database upgrades to organizations without losing data", () => {
+test("an existing database upgrades to organizations without losing data", async () => {
   const database = new DatabaseSync(":memory:");
   try {
     database.exec("PRAGMA foreign_keys=ON");
@@ -545,7 +545,7 @@ test("an existing database upgrades to organizations without losing data", () =>
   }
 });
 
-test("an existing Phase 7 database adds an idempotent buyer event ledger", () => {
+test("an existing Phase 7 database adds an idempotent buyer event ledger", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase8-"));
   const database = new DatabaseSync(":memory:");
   try {
@@ -561,15 +561,15 @@ test("an existing Phase 7 database adds an idempotent buyer event ledger", () =>
       qualifiedDiscoveryMigration,
     ];
     applyMigrations(database, phaseSeven);
-    seed(database, directory);
-    ensureInitialMatchBackfill(database);
+    await seed(database, directory);
+    await ensureInitialMatchBackfill(database);
 
     applyMigrations(database, [...phaseSeven, buyerFunnelMigration]);
-    ensureBuyerFunnelBackfill(database);
+    await ensureBuyerFunnelBackfill(database);
     const firstCount = database
       .prepare("SELECT COUNT(*) count FROM deal_buyer_events")
       .get().count;
-    ensureBuyerFunnelBackfill(database);
+    await ensureBuyerFunnelBackfill(database);
 
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM deal_buyer_events").get()
@@ -609,7 +609,7 @@ test("an existing Phase 7 database adds an idempotent buyer event ledger", () =>
   }
 });
 
-test("an existing Phase 8 database adds constrained internal deal notes", () => {
+test("an existing Phase 8 database adds constrained internal deal notes", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "succera-phase9-"));
   const database = new DatabaseSync(":memory:");
   try {
@@ -626,10 +626,10 @@ test("an existing Phase 8 database adds constrained internal deal notes", () => 
       buyerFunnelMigration,
     ];
     applyMigrations(database, phaseEight);
-    seed(database, directory);
+    await seed(database, directory);
 
     applyMigrations(database, [...phaseEight, internalDealNotesMigration]);
-    seed(database, directory);
+    await seed(database, directory);
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM deal_internal_notes").get()
         .count,
@@ -652,7 +652,7 @@ test("an existing Phase 8 database adds constrained internal deal notes", () => 
       changesAfterUpgrade,
       "re-running Phase 9 must not write to the database",
     );
-    seed(database, directory);
+    await seed(database, directory);
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM deal_internal_notes").get()
         .count,
@@ -699,7 +699,7 @@ test("an existing Phase 8 database adds constrained internal deal notes", () => 
   }
 });
 
-test("an existing Phase 9 database adds notification infrastructure without losing private notes", () => {
+test("an existing Phase 9 database adds notification infrastructure without losing private notes", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "succera-phase10-"));
   const database = new DatabaseSync(":memory:");
   try {
@@ -717,7 +717,7 @@ test("an existing Phase 9 database adds notification infrastructure without losi
       internalDealNotesMigration,
     ];
     applyMigrations(database, phaseNine);
-    seed(database, directory);
+    await seed(database, directory);
     const notesBefore = database
       .prepare("SELECT COUNT(*) count FROM deal_internal_notes")
       .get().count;
@@ -812,7 +812,7 @@ test("an existing Phase 9 database adds notification infrastructure without losi
   }
 });
 
-test("an existing Phase 10 database adds buyer verification without losing marketplace data", () => {
+test("an existing Phase 10 database adds buyer verification without losing marketplace data", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "succera-phase11-"));
   const database = new DatabaseSync(":memory:");
   try {
@@ -833,7 +833,7 @@ test("an existing Phase 10 database adds buyer verification without losing marke
       emailProcessingTokenMigration,
     ];
     applyMigrations(database, phaseTen);
-    seed(database, directory);
+    await seed(database, directory);
     const longLegacyName = `Legacy ${"Acquisition Holdings ".repeat(20)}`;
     assert.ok(longLegacyName.length > 200);
     database
@@ -860,7 +860,7 @@ test("an existing Phase 10 database adds buyer verification without losing marke
         ) VALUES('legacy-unknown-buyer','Legacy Unknown Buyer','legacy-unknown-buyer','buyer','Québec','legacy_future_status')`,
       )
       .run();
-    ensureInitialMatchBackfill(database);
+    await ensureInitialMatchBackfill(database);
     const before = {
       users: database.prepare("SELECT COUNT(*) count FROM users").get().count,
       deals: database.prepare("SELECT COUNT(*) count FROM deals").get().count,
@@ -982,8 +982,8 @@ test("an existing Phase 10 database adds buyer verification without losing marke
       "re-running Phase 11 initialization must not write to the database",
     );
 
-    seed(database, directory);
-    seed(database, directory);
+    await seed(database, directory);
+    await seed(database, directory);
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM deal_matches").get().count,
       before.matches,
@@ -1004,7 +1004,7 @@ test("an existing Phase 10 database adds buyer verification without losing marke
   }
 });
 
-test("buyer verification schema constrains statuses, decisions, and cheque ranges", () => {
+test("buyer verification schema constrains statuses, decisions, and cheque ranges", async () => {
   const database = new DatabaseSync(":memory:");
   try {
     database.exec("PRAGMA foreign_keys=ON");
@@ -1060,7 +1060,7 @@ test("buyer verification schema constrains statuses, decisions, and cheque range
   }
 });
 
-test("an existing Phase 11 database gains private buyer firm profiles without losing marketplace data", () => {
+test("an existing Phase 11 database gains private buyer firm profiles without losing marketplace data", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase12-"));
   const database = new DatabaseSync(":memory:");
   try {
@@ -1082,8 +1082,8 @@ test("an existing Phase 11 database gains private buyer firm profiles without lo
       buyerVerificationMigration,
     ];
     applyMigrations(database, phaseEleven);
-    seed(database, directory);
-    ensureInitialMatchBackfill(database);
+    await seed(database, directory);
+    await ensureInitialMatchBackfill(database);
     database
       .prepare(
         "UPDATE buyer_verification_profiles SET acquisition_history='Preserve this private evidence' WHERE organization_id='org-demo-buyer'",
@@ -1186,7 +1186,7 @@ test("an existing Phase 11 database gains private buyer firm profiles without lo
   }
 });
 
-test("an existing Phase 12 preview profile table gains nullable counts and revisions", () => {
+test("an existing Phase 12 preview profile table gains nullable counts and revisions", async () => {
   const database = new DatabaseSync(":memory:");
   try {
     database.exec("PRAGMA foreign_keys=ON");
@@ -1289,7 +1289,7 @@ test("an existing Phase 12 preview profile table gains nullable counts and revis
   }
 });
 
-test("an existing Phase 12 database adds constrained transaction tombstones without rewriting marketplace data", () => {
+test("an existing Phase 12 database adds constrained transaction tombstones without rewriting marketplace data", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase13-"));
   const database = new DatabaseSync(":memory:");
   try {
@@ -1313,8 +1313,8 @@ test("an existing Phase 12 database adds constrained transaction tombstones with
       buyerFirmProfileRevisionMigration,
     ];
     applyMigrations(database, phaseTwelve);
-    seed(database, directory);
-    ensureInitialMatchBackfill(database);
+    await seed(database, directory);
+    await ensureInitialMatchBackfill(database);
     const before = {
       users: database.prepare("SELECT COUNT(*) count FROM users").get().count,
       deals: database.prepare("SELECT COUNT(*) count FROM deals").get().count,
@@ -1356,7 +1356,7 @@ test("an existing Phase 12 database adds constrained transaction tombstones with
       before,
     );
 
-    seed(database, directory);
+    await seed(database, directory);
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM closed_transactions").get()
         .count,
@@ -1402,7 +1402,7 @@ test("an existing Phase 12 database adds constrained transaction tombstones with
   }
 });
 
-test("an existing Phase 13 database adds reputation indexes without inventing metrics", () => {
+test("an existing Phase 13 database adds reputation indexes without inventing metrics", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase14-"));
   const database = new DatabaseSync(":memory:");
   try {
@@ -1427,9 +1427,9 @@ test("an existing Phase 13 database adds reputation indexes without inventing me
       closedTransactionsMigration,
     ];
     applyMigrations(database, phaseThirteen);
-    seed(database, directory);
-    ensureInitialMatchBackfill(database);
-    ensureBuyerFunnelBackfill(database);
+    await seed(database, directory);
+    await ensureInitialMatchBackfill(database);
+    await ensureBuyerFunnelBackfill(database);
     const before = {
       events: database
         .prepare("SELECT COUNT(*) count FROM deal_buyer_events")
@@ -1482,7 +1482,7 @@ test("an existing Phase 13 database adds reputation indexes without inventing me
   }
 });
 
-test("an existing Phase 14 database adds electronic NDA ledgers without changing access", () => {
+test("an existing Phase 14 database adds electronic NDA ledgers without changing access", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase15-"));
   const database = new DatabaseSync(":memory:");
   const phaseFourteen = [
@@ -1508,7 +1508,7 @@ test("an existing Phase 14 database adds electronic NDA ledgers without changing
   try {
     database.exec("PRAGMA foreign_keys=ON");
     applyMigrations(database, phaseFourteen);
-    seed(database, directory);
+    await seed(database, directory);
     const before = database
       .prepare(
         "SELECT id,deal_id,buyer_id,status,nda_status,nda_document_id,notes,created_at FROM access ORDER BY id",
@@ -1555,7 +1555,7 @@ test("an existing Phase 14 database adds electronic NDA ledgers without changing
   }
 });
 
-test("an existing Phase 15 database adds watermark caching without changing documents", () => {
+test("an existing Phase 15 database adds watermark caching without changing documents", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase16-"));
   const database = new DatabaseSync(":memory:");
   const phaseFifteen = [
@@ -1582,7 +1582,7 @@ test("an existing Phase 15 database adds watermark caching without changing docu
   try {
     database.exec("PRAGMA foreign_keys=ON");
     applyMigrations(database, phaseFifteen);
-    seed(database, directory);
+    await seed(database, directory);
     const before = database
       .prepare(
         `SELECT id,deal_id,name,storage_key,mime,category,size,version,
@@ -1636,7 +1636,7 @@ test("an existing Phase 15 database adds watermark caching without changing docu
   }
 });
 
-test("an existing Phase 16 database adds private teaser review history without changing deals", () => {
+test("an existing Phase 16 database adds private teaser review history without changing deals", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase17-"));
   const database = new DatabaseSync(":memory:");
   const phaseSixteen = [
@@ -1664,7 +1664,7 @@ test("an existing Phase 16 database adds private teaser review history without c
   try {
     database.exec("PRAGMA foreign_keys=ON");
     applyMigrations(database, phaseSixteen);
-    seed(database, directory);
+    await seed(database, directory);
     const before = database
       .prepare("SELECT * FROM deals ORDER BY id")
       .all()
@@ -1697,7 +1697,7 @@ test("an existing Phase 16 database adds private teaser review history without c
   }
 });
 
-test("an existing Phase 17 database adds default-private public network state without changing transaction history", () => {
+test("an existing Phase 17 database adds default-private public network state without changing transaction history", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase18-"));
   const database = new DatabaseSync(":memory:");
   const phaseTwentyOne = [
@@ -1726,7 +1726,7 @@ test("an existing Phase 17 database adds default-private public network state wi
   try {
     database.exec("PRAGMA foreign_keys=ON");
     applyMigrations(database, phaseTwentyOne);
-    seed(database, directory);
+    await seed(database, directory);
     const beforeTransactions = database
       .prepare(
         `SELECT id,buyer_organization_id,seller_organization_id,
@@ -1790,7 +1790,7 @@ test("an existing Phase 17 database adds default-private public network state wi
   }
 });
 
-test("an existing marketplace database adds idempotent transaction attribution without losing deal history", () => {
+test("an existing marketplace database adds idempotent transaction attribution without losing deal history", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase20-"));
   const database = new DatabaseSync(":memory:");
   const phaseNineteen = [
@@ -1820,9 +1820,9 @@ test("an existing marketplace database adds idempotent transaction attribution w
   try {
     database.exec("PRAGMA foreign_keys=ON");
     applyMigrations(database, phaseNineteen);
-    seed(database, directory);
-    ensureInitialMatchBackfill(database);
-    ensureBuyerFunnelBackfill(database);
+    await seed(database, directory);
+    await ensureInitialMatchBackfill(database);
+    await ensureBuyerFunnelBackfill(database);
     const eventsBefore = database
       .prepare("SELECT * FROM deal_buyer_events ORDER BY rowid")
       .all()
@@ -1832,7 +1832,7 @@ test("an existing marketplace database adds idempotent transaction attribution w
       ...phaseNineteen,
       transactionAttributionMigration,
     ]);
-    ensureTransactionAttributionBackfill(database);
+    await ensureTransactionAttributionBackfill(database);
 
     assert.deepEqual(
       database
@@ -1884,7 +1884,7 @@ test("an existing marketplace database adds idempotent transaction attribution w
       "legacy access without a supported funnel event must retain attribution coverage",
     );
     assert.equal(
-      recordInitialTransactionAttribution(database, {
+      await recordInitialTransactionAttribution(database, {
         dealId: "cedar",
         buyerOrganizationId: "org-demo-buyer",
         source: "acquire_match",
@@ -1913,7 +1913,7 @@ test("an existing marketplace database adds idempotent transaction attribution w
     const changes = database
       .prepare("SELECT total_changes() value")
       .get().value;
-    ensureTransactionAttributionBackfill(database);
+    await ensureTransactionAttributionBackfill(database);
     assert.equal(
       database.prepare("SELECT total_changes() value").get().value,
       changes,
@@ -1936,7 +1936,7 @@ test("an existing marketplace database adds idempotent transaction attribution w
   }
 });
 
-test("an existing Phase 6 database adds controlled introduction requests without losing outreach", () => {
+test("an existing Phase 6 database adds controlled introduction requests without losing outreach", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase7-"));
   const database = new DatabaseSync(":memory:");
   try {
@@ -1951,8 +1951,8 @@ test("an existing Phase 6 database adds controlled introduction requests without
       privateTeaserDistributionMigration,
     ];
     applyMigrations(database, phaseSix);
-    seed(database, directory);
-    ensureInitialMatchBackfill(database);
+    await seed(database, directory);
+    await ensureInitialMatchBackfill(database);
     const outreachBefore = database
       .prepare("SELECT COUNT(*) count FROM deal_outreach")
       .get().count;
@@ -2014,7 +2014,7 @@ test("an existing Phase 6 database adds controlled introduction requests without
   }
 });
 
-test("an existing Phase 5 database adds private teaser distribution without losing matches", () => {
+test("an existing Phase 5 database adds private teaser distribution without losing matches", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase6-"));
   const database = new DatabaseSync(":memory:");
   try {
@@ -2027,8 +2027,8 @@ test("an existing Phase 5 database adds private teaser distribution without losi
       matchingEngineMigration,
       recommendedBuyersMigration,
     ]);
-    seed(database, directory);
-    ensureInitialMatchBackfill(database);
+    await seed(database, directory);
+    await ensureInitialMatchBackfill(database);
     const matchesBefore = database
       .prepare("SELECT COUNT(*) count FROM deal_matches")
       .get().count;
@@ -2090,7 +2090,7 @@ test("an existing Phase 5 database adds private teaser distribution without losi
   }
 });
 
-test("an existing Phase 2 database upgrades sell-side mandates without losing deals", () => {
+test("an existing Phase 2 database upgrades sell-side mandates without losing deals", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase3-"));
   const database = new DatabaseSync(":memory:");
   try {
@@ -2100,7 +2100,7 @@ test("an existing Phase 2 database upgrades sell-side mandates without losing de
       organizationsMigration,
       buyerProjectsMigration,
     ]);
-    seed(database, directory);
+    await seed(database, directory);
     const dealsBefore = database
       .prepare("SELECT COUNT(*) count FROM deals")
       .get().count;
@@ -2136,8 +2136,8 @@ test("an existing Phase 2 database upgrades sell-side mandates without losing de
         .count,
       0,
     );
-    seed(database, directory);
-    ensureInitialMatchBackfill(database);
+    await seed(database, directory);
+    await ensureInitialMatchBackfill(database);
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM deal_financials").get()
         .count,
@@ -2156,7 +2156,7 @@ test("an existing Phase 2 database upgrades sell-side mandates without losing de
   }
 });
 
-test("an existing Phase 3 database backfills matching history without losing marketplace data", () => {
+test("an existing Phase 3 database backfills matching history without losing marketplace data", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase4-"));
   const database = new DatabaseSync(":memory:");
   try {
@@ -2167,7 +2167,7 @@ test("an existing Phase 3 database backfills matching history without losing mar
       buyerProjectsMigration,
       sellSideMandatesMigration,
     ]);
-    seed(database, directory);
+    await seed(database, directory);
     const before = {
       users: database.prepare("SELECT COUNT(*) count FROM users").get().count,
       deals: database.prepare("SELECT COUNT(*) count FROM deals").get().count,
@@ -2186,7 +2186,7 @@ test("an existing Phase 3 database backfills matching history without losing mar
       sellSideMandatesMigration,
       matchingEngineMigration,
     ]);
-    ensureInitialMatchBackfill(database);
+    await ensureInitialMatchBackfill(database);
 
     assert.deepEqual(
       {
@@ -2208,7 +2208,7 @@ test("an existing Phase 3 database backfills matching history without losing mar
     const changes = database
       .prepare("SELECT total_changes() value")
       .get().value;
-    ensureInitialMatchBackfill(database);
+    await ensureInitialMatchBackfill(database);
     assert.equal(
       database.prepare("SELECT total_changes() value").get().value,
       changes,
@@ -2220,7 +2220,7 @@ test("an existing Phase 3 database backfills matching history without losing mar
   }
 });
 
-test("an existing Phase 4 database upgrades recommendation statuses without losing matches", () => {
+test("an existing Phase 4 database upgrades recommendation statuses without losing matches", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase5-"));
   const database = new DatabaseSync(":memory:");
   try {
@@ -2232,8 +2232,8 @@ test("an existing Phase 4 database upgrades recommendation statuses without losi
       sellSideMandatesMigration,
       matchingEngineMigration,
     ]);
-    seed(database, directory);
-    ensureInitialMatchBackfill(database);
+    await seed(database, directory);
+    await ensureInitialMatchBackfill(database);
     const matches = database
       .prepare("SELECT id FROM deal_matches ORDER BY id LIMIT 2")
       .all();
@@ -2293,7 +2293,7 @@ test("an existing Phase 4 database upgrades recommendation statuses without losi
   }
 });
 
-test("sell-side mandate constraints reject unsafe distribution and financial data", () => {
+test("sell-side mandate constraints reject unsafe distribution and financial data", async () => {
   const database = new DatabaseSync(":memory:");
   try {
     database.exec("PRAGMA foreign_keys=ON");
@@ -2358,14 +2358,14 @@ test("sell-side mandate constraints reject unsafe distribution and financial dat
   }
 });
 
-test("matching records enforce uniqueness, valid scores, and valid explanations", () => {
+test("matching records enforce uniqueness, valid scores, and valid explanations", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-matches-"));
   const database = new DatabaseSync(":memory:");
   try {
     database.exec("PRAGMA foreign_keys=ON");
     runMigrations(database);
-    seed(database, directory);
-    ensureInitialMatchBackfill(database);
+    await seed(database, directory);
+    await ensureInitialMatchBackfill(database);
     const existing = database
       .prepare("SELECT * FROM deal_matches LIMIT 1")
       .get();
@@ -2406,13 +2406,13 @@ test("matching records enforce uniqueness, valid scores, and valid explanations"
   }
 });
 
-test("an already-seeded Phase 1 demo database receives idempotent buyer projects", () => {
+test("an already-seeded Phase 1 demo database receives idempotent buyer projects", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "northlane-phase2-"));
   const database = new DatabaseSync(":memory:");
   try {
     database.exec("PRAGMA foreign_keys=ON");
     applyMigrations(database, [initialUpgrade, organizationsMigration]);
-    seed(database, directory);
+    await seed(database, directory);
     assert.equal(
       database
         .prepare(
@@ -2427,7 +2427,7 @@ test("an already-seeded Phase 1 demo database receives idempotent buyer projects
       organizationsMigration,
       buyerProjectsMigration,
     ]);
-    seed(database, directory);
+    await seed(database, directory);
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM buyer_projects").get().count,
       2,
@@ -2448,7 +2448,7 @@ test("an already-seeded Phase 1 demo database receives idempotent buyer projects
       provinces: 4,
       keywords: 6,
     });
-    seed(database, directory);
+    await seed(database, directory);
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM buyer_projects").get().count,
       2,
@@ -2464,7 +2464,7 @@ test("an already-seeded Phase 1 demo database receives idempotent buyer projects
   }
 });
 
-test("buyer project ranges allow unspecified values and reject invalid persisted values", () => {
+test("buyer project ranges allow unspecified values and reject invalid persisted values", async () => {
   const database = new DatabaseSync(":memory:");
   try {
     database.exec("PRAGMA foreign_keys=ON");
@@ -2542,7 +2542,7 @@ test("buyer project ranges allow unspecified values and reject invalid persisted
   }
 });
 
-test("the initial migration matches the frozen pre-migration schema", () => {
+test("the initial migration matches the frozen pre-migration schema", async () => {
   const legacyDatabase = new DatabaseSync(":memory:");
   const migratedDatabase = new DatabaseSync(":memory:");
   try {
@@ -2558,7 +2558,7 @@ test("the initial migration matches the frozen pre-migration schema", () => {
   }
 });
 
-test("a failed migration rolls back its schema and history record", () => {
+test("a failed migration rolls back its schema and history record", async () => {
   const database = new DatabaseSync(":memory:");
   try {
     assert.throws(
@@ -2591,7 +2591,7 @@ test("a failed migration rolls back its schema and history record", () => {
   }
 });
 
-test("migrations run in order exactly once", () => {
+test("migrations run in order exactly once", async () => {
   const database = new DatabaseSync(":memory:");
   const calls = [];
   const orderedMigrations = [
@@ -2633,7 +2633,7 @@ test("migrations run in order exactly once", () => {
   }
 });
 
-test("incompatible migration history is rejected", () => {
+test("incompatible migration history is rejected", async () => {
   const database = new DatabaseSync(":memory:");
   try {
     applyMigrations(database, [{ version: 1, name: "recorded_name", up() {} }]);

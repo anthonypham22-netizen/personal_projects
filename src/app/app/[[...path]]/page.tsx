@@ -18,7 +18,7 @@ export default async function AppPage({
   return (
     <Workspace
       key={path.join("/")}
-      initial={workspace(user)}
+      initial={await workspace(user)}
       section={path[0] || "overview"}
       dealId={path[0] === "deals" ? path[1] : undefined}
       rolePreviewEnabled={isRolePreviewEnabled()}

@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db";
 import {
   degrees,
   PDFDocument,
@@ -11,7 +10,8 @@ import {
   type PDFPage,
 } from "pdf-lib";
 import { AppError } from "./service";
-import { inImmediateTransaction } from "./sqlite-transaction";
+import { inTransaction } from "./transaction";
+import { createPrivateFileStore } from "./private-file-store";
 
 const WATERMARK_FORMAT_VERSION = 1;
 
@@ -38,7 +38,7 @@ type WatermarkVariantRow = {
 };
 
 type PersonalizedPdfInput = {
-  database: DatabaseSync;
+  database: DatabaseClient;
   dataDirectory: string;
   originalBytes: Uint8Array;
   document: { id: string; storageKey: string };
@@ -199,19 +199,19 @@ const getCachedPersonalizedPdf = async ({
   sourceSha256,
   watermarkSignature,
 }: {
-  database: DatabaseSync;
+  database: DatabaseClient;
   dataDirectory: string;
   document: { id: string };
   buyer: { id: string };
   sourceSha256: string;
   watermarkSignature: string;
 }): Promise<PersonalizedPdfResult | undefined> => {
-  const existing = database
+  const existing = (await database
     .prepare(
       `SELECT storage_key,source_sha256,watermark_signature,content_sha256
        FROM document_watermark_variants WHERE document_id=? AND buyer_id=?`,
     )
-    .get(document.id, buyer.id) as WatermarkVariantRow | undefined;
+    .get(document.id, buyer.id)) as WatermarkVariantRow | undefined;
   if (
     !existing ||
     existing.source_sha256 !== sourceSha256 ||
@@ -220,11 +220,12 @@ const getCachedPersonalizedPdf = async ({
   )
     return undefined;
   try {
-    const bytes = await readFile(
-      path.join(dataDirectory, "watermarks", existing.storage_key),
+    const bytes = await createPrivateFileStore({ dataDirectory }).read(
+      "watermarks",
+      existing.storage_key,
     );
     if (sha256(bytes) !== existing.content_sha256) return undefined;
-    database
+    await database
       .prepare(
         `UPDATE document_watermark_variants
          SET last_accessed_at=CURRENT_TIMESTAMP
@@ -300,24 +301,24 @@ export async function getOrCreatePersonalizedPdf({
     });
     if (cachedAfterLock) return cachedAfterLock;
 
-    const cacheDirectory = path.join(dataDirectory, "watermarks");
     const bytes = await renderPersonalizedPdf(originalBytes, details);
     const contentSha256 = sha256(bytes);
     const storageKey = randomUUID();
-    await mkdir(cacheDirectory, { recursive: true, mode: 0o700 });
-    const storedPath = path.join(cacheDirectory, storageKey);
-    await writeFile(storedPath, bytes, { mode: 0o600, flag: "wx" });
+    const fileStore = createPrivateFileStore({ dataDirectory });
+    await fileStore.write("watermarks", storageKey, bytes, {
+      contentType: "application/pdf",
+    });
     let oldStorageKey: string | undefined;
     try {
-      inImmediateTransaction(database, () => {
+      await inTransaction(database, async (transaction) => {
         oldStorageKey = (
-          database
+          (await transaction
             .prepare(
               "SELECT storage_key FROM document_watermark_variants WHERE document_id=? AND buyer_id=?",
             )
-            .get(document.id, buyer.id) as { storage_key: string } | undefined
+            .get(document.id, buyer.id)) as { storage_key: string } | undefined
         )?.storage_key;
-        database
+        await transaction
           .prepare(
             `INSERT INTO document_watermark_variants(
                id,document_id,buyer_id,storage_key,source_sha256,
@@ -342,7 +343,7 @@ export async function getOrCreatePersonalizedPdf({
           );
       });
     } catch (error) {
-      await unlink(storedPath).catch(() => {});
+      await fileStore.delete("watermarks", storageKey).catch(() => {});
       throw error;
     }
     if (
@@ -350,7 +351,7 @@ export async function getOrCreatePersonalizedPdf({
       oldStorageKey !== storageKey &&
       safeCacheKey(oldStorageKey)
     )
-      await unlink(path.join(cacheDirectory, oldStorageKey)).catch(() => {});
+      await fileStore.delete("watermarks", oldStorageKey).catch(() => {});
     return { bytes, cacheHit: false, storageKey };
   })();
   const trackedGeneration = generation.finally(() => {

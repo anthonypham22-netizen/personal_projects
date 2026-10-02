@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db";
 
 export type EmailMessage = {
   to: string;
@@ -47,12 +47,12 @@ export function emailProvider(): EmailProvider {
 }
 
 export async function deliverPendingEmails(
-  database: DatabaseSync,
+  database: DatabaseClient,
   provider: EmailProvider = emailProvider(),
   limit = 25,
   deliveryTimeoutMs = 60_000,
 ) {
-  const rows = database
+  const rows = (await database
     .prepare(
       `SELECT e.id,e.recipient_email,e.subject,e.body
        FROM email_outbox e
@@ -69,7 +69,7 @@ export async function deliverPendingEmails(
          )
        ORDER BY e.available_at,e.created_at,e.id LIMIT ?`,
     )
-    .all(limit) as Array<{
+    .all(limit)) as Array<{
     id: string;
     recipient_email: string;
     subject: string;
@@ -104,7 +104,7 @@ export async function deliverPendingEmails(
   let failed = 0;
   for (const row of rows) {
     const processingToken = randomUUID();
-    const claimed = claim.run(processingToken, row.id);
+    const claimed = await claim.run(processingToken, row.id);
     if (!claimed.changes) continue;
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -128,19 +128,27 @@ export async function deliverPendingEmails(
         timeoutPromise,
       ]);
       if (
-        markSent.run(result.provider, result.messageId, row.id, processingToken)
-          .changes
+        (
+          await markSent.run(
+            result.provider,
+            result.messageId,
+            row.id,
+            processingToken,
+          )
+        ).changes
       )
         sent += 1;
     } catch (error) {
       if (
-        markFailed.run(
-          (error instanceof Error
-            ? error.message
-            : "Email delivery failed"
-          ).slice(0, 1000),
-          row.id,
-          processingToken,
+        (
+          await markFailed.run(
+            (error instanceof Error
+              ? error.message
+              : "Email delivery failed"
+            ).slice(0, 1000),
+            row.id,
+            processingToken,
+          )
         ).changes
       )
         failed += 1;

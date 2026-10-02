@@ -1,10 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { hashPassword } from "./passwords.ts";
 import { notifyUsers } from "./notifications.ts";
-import { tableExists } from "./sqlite-schema.ts";
+import { columnExists, tableExists } from "./schema";
+import { inTransaction } from "./transaction";
 
 type DemoDocument = {
   id: string;
@@ -95,10 +96,10 @@ const demoDocuments: readonly DemoDocument[] = [
   },
 ];
 
-function syncDemoDocuments(d: DatabaseSync, directory: string) {
+async function syncDemoDocuments(d: DatabaseClient, directory: string) {
   mkdirSync(path.join(directory, "uploads"), { recursive: true, mode: 0o700 });
   const upsert =
-    d.prepare(`INSERT INTO documents(id,deal_id,name,storage_key,mime,category,size,audience,buyer_id,uploaded_by)
+    await d.prepare(`INSERT INTO documents(id,deal_id,name,storage_key,mime,category,size,audience,buyer_id,uploaded_by)
     VALUES(?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET name=excluded.name,mime=excluded.mime,category=excluded.category,size=excluded.size,audience=excluded.audience,buyer_id=excluded.buyer_id,uploaded_by=excluded.uploaded_by`);
   for (const document of demoDocuments) {
@@ -107,7 +108,7 @@ function syncDemoDocuments(d: DatabaseSync, directory: string) {
       document.content,
       { mode: 0o600 },
     );
-    upsert.run(
+    await upsert.run(
       document.id,
       document.deal,
       document.name,
@@ -169,15 +170,9 @@ const demoBuyerProjects = [
   },
 ] as const;
 
-function syncDemoBuyerProjects(d: DatabaseSync) {
-  const tableExists = d
-    .prepare(
-      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='buyer_projects'",
-    )
-    .get();
-  if (!tableExists) return;
-
-  const upsert = d.prepare(`
+async function syncDemoBuyerProjects(d: DatabaseClient) {
+  if (!(await tableExists(d, "buyer_projects"))) return;
+  const upsert = await d.prepare(`
     INSERT INTO buyer_projects(
       id,organization_id,created_by_user_id,name,status,thesis,
       min_revenue,max_revenue,min_ebitda,max_ebitda,min_ebitda_margin,max_ebitda_margin,
@@ -204,27 +199,27 @@ function syncDemoBuyerProjects(d: DatabaseSync) {
       transaction_type=excluded.transaction_type,
       updated_at=CURRENT_TIMESTAMP
   `);
-  const deleteSectors = d.prepare(
+  const deleteSectors = await d.prepare(
     "DELETE FROM buyer_project_sectors WHERE buyer_project_id=?",
   );
-  const deleteProvinces = d.prepare(
+  const deleteProvinces = await d.prepare(
     "DELETE FROM buyer_project_provinces WHERE buyer_project_id=?",
   );
-  const deleteKeywords = d.prepare(
+  const deleteKeywords = await d.prepare(
     "DELETE FROM buyer_project_keywords WHERE buyer_project_id=?",
   );
-  const insertSector = d.prepare(
+  const insertSector = await d.prepare(
     "INSERT INTO buyer_project_sectors(id,buyer_project_id,sector) VALUES(?,?,?)",
   );
-  const insertProvince = d.prepare(
+  const insertProvince = await d.prepare(
     "INSERT INTO buyer_project_provinces(id,buyer_project_id,province) VALUES(?,?,?)",
   );
-  const insertKeyword = d.prepare(
+  const insertKeyword = await d.prepare(
     "INSERT INTO buyer_project_keywords(id,buyer_project_id,keyword) VALUES(?,?,?)",
   );
 
   for (const project of demoBuyerProjects) {
-    upsert.run(
+    await upsert.run(
       project.id,
       "org-demo-buyer",
       "demo-buyer",
@@ -244,26 +239,27 @@ function syncDemoBuyerProjects(d: DatabaseSync) {
       project.ownership_preference,
       project.transaction_type,
     );
-    deleteSectors.run(project.id);
-    deleteProvinces.run(project.id);
-    deleteKeywords.run(project.id);
-    project.sectors.forEach((sector, index) =>
-      insertSector.run(`${project.id}-sector-${index + 1}`, project.id, sector),
-    );
-    project.provinces.forEach((province, index) =>
-      insertProvince.run(
+    await deleteSectors.run(project.id);
+    await deleteProvinces.run(project.id);
+    await deleteKeywords.run(project.id);
+    for (const [index, sector] of project.sectors.entries())
+      await insertSector.run(
+        `${project.id}-sector-${index + 1}`,
+        project.id,
+        sector,
+      );
+    for (const [index, province] of project.provinces.entries())
+      await insertProvince.run(
         `${project.id}-province-${index + 1}`,
         project.id,
         province,
-      ),
-    );
-    project.keywords.forEach((keyword, index) =>
-      insertKeyword.run(
+      );
+    for (const [index, keyword] of project.keywords.entries())
+      await insertKeyword.run(
         `${project.id}-keyword-${index + 1}`,
         project.id,
         keyword,
-      ),
-    );
+      );
   }
 }
 
@@ -378,26 +374,21 @@ const demoMandates = [
   },
 ] as const;
 
-function syncDemoMandates(d: DatabaseSync) {
-  const tableExists = d
-    .prepare(
-      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='deal_financials'",
-    )
-    .get();
-  if (!tableExists) return;
-
-  const update = d.prepare(`UPDATE deals SET
+async function syncDemoMandates(d: DatabaseClient) {
+  if (!(await tableExists(d, "deal_financials"))) return;
+  const update = await d.prepare(`UPDATE deals SET
     transaction_type=?,ownership_percentage_available=?,seller_rollover_possible=?,
     seller_financing_possible=?,management_transition=?,reason_for_transaction=?,
     min_expected_value=COALESCE(min_expected_value,?),
     max_expected_value=COALESCE(max_expected_value,?)
     WHERE id=?`);
-  const insertFinancial = d.prepare(`INSERT OR IGNORE INTO deal_financials(
+  const insertFinancial =
+    await d.prepare(`INSERT OR IGNORE INTO deal_financials(
     id,deal_id,fiscal_year,period_type,revenue,ebitda,gross_profit,is_projected
   ) VALUES(?,?,?,'annual',?,?,?,?)`);
 
   for (const mandate of demoMandates) {
-    update.run(
+    await update.run(
       mandate.transactionType,
       mandate.ownership,
       mandate.rollover,
@@ -415,7 +406,7 @@ function syncDemoMandates(d: DatabaseSync) {
       grossProfit,
       projected,
     ] of mandate.financials)
-      insertFinancial.run(
+      await insertFinancial.run(
         `${mandate.id}-financial-${year}`,
         mandate.id,
         year,
@@ -427,25 +418,19 @@ function syncDemoMandates(d: DatabaseSync) {
   }
 }
 
-function syncDemoInternalNotes(d: DatabaseSync) {
-  const tableExists = d
-    .prepare(
-      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='deal_internal_notes'",
-    )
-    .get();
-  if (!tableExists) return;
-
-  const insert = d.prepare(`INSERT OR IGNORE INTO deal_internal_notes(
+async function syncDemoInternalNotes(d: DatabaseClient) {
+  if (!(await tableExists(d, "deal_internal_notes"))) return;
+  const insert = await d.prepare(`INSERT OR IGNORE INTO deal_internal_notes(
     id,deal_id,author_user_id,body,created_at
   ) VALUES(?,?,?,?,?)`);
-  insert.run(
+  await insert.run(
     "internal-note-cedar-financing",
     "cedar",
     "demo-advisor",
     "Spoke with the buyer team after the management call. Interest is strong, but we still need confirmation of financing sources before the next process update.",
     "2026-09-22 18:15:00",
   );
-  insert.run(
+  await insert.run(
     "internal-note-cedar-confidentiality",
     "cedar",
     "demo-owner",
@@ -454,15 +439,9 @@ function syncDemoInternalNotes(d: DatabaseSync) {
   );
 }
 
-function syncDemoNotifications(d: DatabaseSync) {
-  const tableExists = d
-    .prepare(
-      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='notifications'",
-    )
-    .get();
-  if (!tableExists) return;
-
-  notifyUsers(d, {
+async function syncDemoNotifications(d: DatabaseClient) {
+  if (!(await tableExists(d, "notifications"))) return;
+  await notifyUsers(d, {
     userIds: ["demo-owner", "demo-advisor"],
     type: "new_match",
     title: "New buyer match",
@@ -471,7 +450,7 @@ function syncDemoNotifications(d: DatabaseSync) {
     dealId: "atlas",
     sourceKey: "demo:atlas:new-match",
   });
-  notifyUsers(d, {
+  await notifyUsers(d, {
     userIds: ["demo-buyer"],
     type: "new_task",
     title: "New diligence task",
@@ -480,7 +459,7 @@ function syncDemoNotifications(d: DatabaseSync) {
     dealId: "cedar",
     sourceKey: "demo:cedar:new-task",
   });
-  notifyUsers(d, {
+  await notifyUsers(d, {
     userIds: ["demo-buyer"],
     type: "opportunity_shared",
     title: "New private opportunity",
@@ -491,14 +470,15 @@ function syncDemoNotifications(d: DatabaseSync) {
   });
 }
 
-function syncDemoVerification(d: DatabaseSync) {
-  if (!tableExists(d, "buyer_verification_profiles")) return;
+async function syncDemoVerification(d: DatabaseClient) {
+  if (!(await tableExists(d, "buyer_verification_profiles"))) return;
 
-  d.prepare(
-    "UPDATE users SET is_platform_admin=1 WHERE id='demo-advisor'",
-  ).run();
-  d.prepare(
-    `UPDATE organizations
+  await d
+    .prepare("UPDATE users SET is_platform_admin=1 WHERE id='demo-advisor'")
+    .run();
+  await d
+    .prepare(
+      `UPDATE organizations
      SET verification_status='verified_acquirer',
        website=CASE id
          WHEN 'org-demo-buyer' THEN 'https://evergreen-capital.example'
@@ -507,9 +487,10 @@ function syncDemoVerification(d: DatabaseSync) {
        END,
        updated_at=CURRENT_TIMESTAMP
      WHERE id IN ('org-demo-buyer','org-demo-buyer-2')`,
-  ).run();
+    )
+    .run();
 
-  const upsert = d.prepare(`
+  const upsert = await d.prepare(`
     INSERT INTO buyer_verification_profiles(
       organization_id,legal_name,principals,acquisition_history,capital_source,
       min_equity_check,max_equity_check,financing_approach,updated_by_user_id
@@ -525,7 +506,7 @@ function syncDemoVerification(d: DatabaseSync) {
       updated_by_user_id=excluded.updated_by_user_id,
       updated_at=CURRENT_TIMESTAMP
   `);
-  upsert.run(
+  await upsert.run(
     "org-demo-buyer",
     "Evergreen Capital Partners Inc.",
     "Taylor Reid, Managing Director",
@@ -536,7 +517,7 @@ function syncDemoVerification(d: DatabaseSync) {
     "Equity capital supplemented by senior acquisition financing where appropriate.",
     "demo-buyer",
   );
-  upsert.run(
+  await upsert.run(
     "org-demo-buyer-2",
     "Laurent Partners Inc.",
     "Sam Laurent, Principal",
@@ -549,10 +530,10 @@ function syncDemoVerification(d: DatabaseSync) {
   );
 }
 
-function syncDemoBuyerFirmProfiles(d: DatabaseSync) {
-  if (!tableExists(d, "buyer_firm_profiles")) return;
+async function syncDemoBuyerFirmProfiles(d: DatabaseClient) {
+  if (!(await tableExists(d, "buyer_firm_profiles"))) return;
 
-  const upsert = d.prepare(`
+  const upsert = await d.prepare(`
     INSERT INTO buyer_firm_profiles(
       organization_id,fund_structure,financing_profile,
       self_reported_acquisition_count,updated_by_user_id
@@ -564,40 +545,42 @@ function syncDemoBuyerFirmProfiles(d: DatabaseSync) {
       updated_by_user_id=excluded.updated_by_user_id,
       revision=buyer_firm_profiles.revision+1,
       updated_at=CURRENT_TIMESTAMP
-    WHERE buyer_firm_profiles.fund_structure IS NOT excluded.fund_structure
-       OR buyer_firm_profiles.financing_profile IS NOT excluded.financing_profile
+    WHERE buyer_firm_profiles.fund_structure IS DISTINCT FROM excluded.fund_structure
+       OR buyer_firm_profiles.financing_profile IS DISTINCT FROM excluded.financing_profile
        OR buyer_firm_profiles.self_reported_acquisition_count
-          IS NOT excluded.self_reported_acquisition_count
-       OR buyer_firm_profiles.updated_by_user_id IS NOT excluded.updated_by_user_id
+          IS DISTINCT FROM excluded.self_reported_acquisition_count
+       OR buyer_firm_profiles.updated_by_user_id IS DISTINCT FROM excluded.updated_by_user_id
   `);
-  upsert.run(
+  await upsert.run(
     "org-demo-buyer",
     "Canadian lower-middle-market private equity fund with committed partner and institutional capital.",
     "Committed equity supplemented by senior acquisition financing when appropriate for the business.",
     12,
     "demo-buyer",
   );
-  upsert.run(
+  await upsert.run(
     "org-demo-buyer-2",
     "Operator-led search fund supported by Canadian entrepreneurs and private investors.",
     "Investor equity with conventional senior lending, subject to transaction diligence.",
     3,
     "demo-buyer-2",
   );
-  d.prepare(
-    `UPDATE organizations SET description=CASE id
+  await d
+    .prepare(
+      `UPDATE organizations SET description=CASE id
        WHEN 'org-demo-buyer'
          THEN 'A Canadian investment firm partnering with established owner-operated businesses through succession.'
        WHEN 'org-demo-buyer-2'
          THEN 'An operator-led acquisition firm focused on enduring Canadian small and mid-sized businesses.'
        ELSE description END
      WHERE id IN ('org-demo-buyer','org-demo-buyer-2')`,
-  ).run();
+    )
+    .run();
 }
 
-function syncDemoClosedTransactions(d: DatabaseSync) {
-  if (!tableExists(d, "closed_transactions")) return;
-  const insert = d.prepare(`
+async function syncDemoClosedTransactions(d: DatabaseClient) {
+  if (!(await tableExists(d, "closed_transactions"))) return;
+  const insert = await d.prepare(`
     INSERT OR IGNORE INTO closed_transactions(
       id,buyer_organization_id,seller_organization_id,
       advisor_organization_id,industry,province,enterprise_value,
@@ -605,7 +588,7 @@ function syncDemoClosedTransactions(d: DatabaseSync) {
       verified_by_user_id,verified_at
     ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
   `);
-  insert.run(
+  await insert.run(
     "closed-demo-evergreen-services",
     "org-demo-buyer",
     "org-demo-owner",
@@ -620,7 +603,7 @@ function syncDemoClosedTransactions(d: DatabaseSync) {
     "demo-advisor",
     "2025-07-15 14:00:00",
   );
-  insert.run(
+  await insert.run(
     "closed-demo-evergreen-manufacturing",
     "org-demo-buyer",
     null,
@@ -635,7 +618,7 @@ function syncDemoClosedTransactions(d: DatabaseSync) {
     null,
     null,
   );
-  insert.run(
+  await insert.run(
     "closed-demo-laurent-technology",
     "org-demo-buyer-2",
     "org-demo-owner",
@@ -715,50 +698,50 @@ const demoPublicNetworkProfiles: readonly DemoPublicNetworkProfile[] = [
   },
 ];
 
-function syncDemoPublicNetwork(d: DatabaseSync) {
+async function syncDemoPublicNetwork(d: DatabaseClient) {
   if (
-    !tableExists(d, "organization_public_profiles") ||
-    !tableExists(d, "organization_public_industries") ||
-    !tableExists(d, "organization_public_locations") ||
-    !tableExists(d, "closed_transactions")
+    !(await tableExists(d, "organization_public_profiles")) ||
+    !(await tableExists(d, "organization_public_industries")) ||
+    !(await tableExists(d, "organization_public_locations")) ||
+    !(await tableExists(d, "closed_transactions"))
   )
     return;
 
-  const ensureProfile = d.prepare(
+  const ensureProfile = await d.prepare(
     "INSERT OR IGNORE INTO organization_public_profiles(organization_id) VALUES(?)",
   );
-  const readProfile = d.prepare(
+  const readProfile = await d.prepare(
     "SELECT revision,updated_by_user_id FROM organization_public_profiles WHERE organization_id=?",
   );
-  const updateProfile = d.prepare(`
+  const updateProfile = await d.prepare(`
     UPDATE organization_public_profiles SET
       is_public=?,headline=?,public_description=?,show_website=?,
       show_province=?,show_verified_transactions=?,updated_by_user_id=?,
       revision=revision+1,updated_at=CURRENT_TIMESTAMP
     WHERE organization_id=? AND revision=1 AND updated_by_user_id IS NULL
   `);
-  const deleteIndustries = d.prepare(
+  const deleteIndustries = await d.prepare(
     "DELETE FROM organization_public_industries WHERE organization_id=?",
   );
-  const insertIndustry = d.prepare(
+  const insertIndustry = await d.prepare(
     "INSERT INTO organization_public_industries(organization_id,industry) VALUES(?,?)",
   );
-  const deleteLocations = d.prepare(
+  const deleteLocations = await d.prepare(
     "DELETE FROM organization_public_locations WHERE organization_id=?",
   );
-  const insertLocation = d.prepare(
+  const insertLocation = await d.prepare(
     "INSERT INTO organization_public_locations(organization_id,province) VALUES(?,?)",
   );
 
   for (const profile of demoPublicNetworkProfiles) {
-    ensureProfile.run(profile.organizationId);
-    const existing = readProfile.get(profile.organizationId) as
+    await ensureProfile.run(profile.organizationId);
+    const existing = (await readProfile.get(profile.organizationId)) as
       { revision: number; updated_by_user_id: string | null } | undefined;
     // Demo seeding establishes fictional examples once, but it must not undo a
     // profile owner’s later privacy or taxonomy choices on app restart.
     if (!existing || existing.revision !== 1 || existing.updated_by_user_id)
       continue;
-    updateProfile.run(
+    await updateProfile.run(
       1,
       profile.headline,
       profile.description,
@@ -768,12 +751,12 @@ function syncDemoPublicNetwork(d: DatabaseSync) {
       profile.updatedByUserId,
       profile.organizationId,
     );
-    deleteIndustries.run(profile.organizationId);
+    await deleteIndustries.run(profile.organizationId);
     for (const industry of profile.industries)
-      insertIndustry.run(profile.organizationId, industry);
-    deleteLocations.run(profile.organizationId);
+      await insertIndustry.run(profile.organizationId, industry);
+    await deleteLocations.run(profile.organizationId);
     for (const location of profile.locations)
-      insertLocation.run(profile.organizationId, location);
+      await insertLocation.run(profile.organizationId, location);
   }
 
   const publicTransactions = [
@@ -786,7 +769,7 @@ function syncDemoPublicNetwork(d: DatabaseSync) {
       slug: "technology-quebec-laurent-technology",
     },
   ] as const;
-  const publishTransaction = d.prepare(`
+  const publishTransaction = await d.prepare(`
     UPDATE closed_transactions
     SET public_slug=?,public_opt_in=1,updated_at=CURRENT_TIMESTAMP
     WHERE id=? AND verified=1 AND public_slug IS NULL AND public_opt_in=0
@@ -797,24 +780,23 @@ function syncDemoPublicNetwork(d: DatabaseSync) {
       )
   `);
   for (const transaction of publicTransactions)
-    publishTransaction.run(transaction.slug, transaction.id);
+    await publishTransaction.run(transaction.slug, transaction.id);
 }
 
-export function seed(d: DatabaseSync, directory: string) {
-  if (d.prepare("SELECT id FROM users WHERE id='demo-advisor'").get()) {
-    syncDemoVerification(d);
-    syncDemoBuyerFirmProfiles(d);
-    syncDemoClosedTransactions(d);
-    syncDemoPublicNetwork(d);
-    syncDemoDocuments(d, directory);
-    syncDemoBuyerProjects(d);
-    syncDemoMandates(d);
-    syncDemoInternalNotes(d);
-    syncDemoNotifications(d);
+export async function seed(d: DatabaseClient, directory: string) {
+  if (await d.prepare("SELECT id FROM users WHERE id='demo-advisor'").get()) {
+    await syncDemoVerification(d);
+    await syncDemoBuyerFirmProfiles(d);
+    await syncDemoClosedTransactions(d);
+    await syncDemoPublicNetwork(d);
+    await syncDemoDocuments(d, directory);
+    await syncDemoBuyerProjects(d);
+    await syncDemoMandates(d);
+    await syncDemoInternalNotes(d);
+    await syncDemoNotifications(d);
     return;
   }
-  d.exec("BEGIN IMMEDIATE");
-  try {
+  await inTransaction(d, async (d) => {
     const password = hashPassword(randomBytes(32).toString("hex"));
     const people = [
       [
@@ -878,39 +860,45 @@ export function seed(d: DatabaseSync, directory: string) {
       province,
       bio,
     ] of people) {
-      d.prepare(
-        "INSERT INTO users(id,email,password_hash,name,company,role,province,bio,sectors,is_demo) VALUES(?,?,?,?,?,?,?,?,?,1)",
-      ).run(
-        id,
-        email,
-        password,
-        name,
-        company,
-        role,
-        province,
-        bio,
-        "Business services,Manufacturing",
-      );
-      d.prepare(
-        "INSERT INTO organizations(id,name,slug,organization_type,province) VALUES(?,?,?,?,?)",
-      ).run(
-        `org-${id}`,
-        company,
-        `${company
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/(^-|-$)/g, "")}-${id}`,
-        organizationType,
-        province,
-      );
-      d.prepare(
-        "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'owner','active')",
-      ).run(`membership-${id}`, `org-${id}`, id);
+      await d
+        .prepare(
+          "INSERT INTO users(id,email,password_hash,name,company,role,province,bio,sectors,is_demo) VALUES(?,?,?,?,?,?,?,?,?,1)",
+        )
+        .run(
+          id,
+          email,
+          password,
+          name,
+          company,
+          role,
+          province,
+          bio,
+          "Business services,Manufacturing",
+        );
+      await d
+        .prepare(
+          "INSERT INTO organizations(id,name,slug,organization_type,province) VALUES(?,?,?,?,?)",
+        )
+        .run(
+          `org-${id}`,
+          company,
+          `${company
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/(^-|-$)/g, "")}-${id}`,
+          organizationType,
+          province,
+        );
+      await d
+        .prepare(
+          "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'owner','active')",
+        )
+        .run(`membership-${id}`, `org-${id}`, id);
     }
-    syncDemoVerification(d);
-    syncDemoBuyerFirmProfiles(d);
-    syncDemoClosedTransactions(d);
-    syncDemoPublicNetwork(d);
+    await syncDemoVerification(d);
+    await syncDemoBuyerFirmProfiles(d);
+    await syncDemoClosedTransactions(d);
+    await syncDemoPublicNetwork(d);
     const deals = [
       [
         "cedar",
@@ -1009,13 +997,12 @@ export function seed(d: DatabaseSync, directory: string) {
         "On market",
       ],
     ];
-    const hasDistributionMode = d
-      .prepare("PRAGMA table_info(deals)")
-      .all()
-      .some(
-        (column) => (column as { name?: string }).name === "distribution_mode",
-      );
-    const insertDeal = d.prepare(
+    const hasDistributionMode = await columnExists(
+      d,
+      "deals",
+      "distribution_mode",
+    );
+    const insertDeal = await d.prepare(
       hasDistributionMode
         ? "INSERT INTO deals(id,title,company_name,sector,province,city,revenue,ebitda,asking_price,employees,founded,description,confidential_summary,stage,owner_id,advisor_id,published,owner_organization_id,advisor_organization_id,created_by_user_id,distribution_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'demo-owner','demo-advisor',?,'org-demo-owner','org-demo-advisor','demo-owner',?)"
         : "INSERT INTO deals(id,title,company_name,sector,province,city,revenue,ebitda,asking_price,employees,founded,description,confidential_summary,stage,owner_id,advisor_id,published,owner_organization_id,advisor_organization_id,created_by_user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'demo-owner','demo-advisor',?,'org-demo-owner','org-demo-advisor','demo-owner')",
@@ -1023,12 +1010,12 @@ export function seed(d: DatabaseSync, directory: string) {
     for (const row of deals) {
       const published = row[13] === "Preparation" ? 0 : 1;
       if (hasDistributionMode)
-        insertDeal.run(
+        await insertDeal.run(
           ...row,
           published,
           published ? "qualified_discovery" : "private_outreach",
         );
-      else insertDeal.run(...row, published);
+      else await insertDeal.run(...row, published);
     }
     for (const [id, deal, buyer, status, nda] of [
       ["access-cedar", "cedar", "demo-buyer", "approved", "verified"],
@@ -1036,20 +1023,55 @@ export function seed(d: DatabaseSync, directory: string) {
       ["access-harbour", "harbour", "demo-buyer", "requested", "not_requested"],
       ["access-cedar-2", "cedar", "demo-buyer-2", "nda_pending", "requested"],
     ])
-      d.prepare(
-        "INSERT INTO access(id,deal_id,buyer_id,status,nda_status,notes) VALUES(?,?,?,?,?,?)",
-      ).run(
-        id,
-        deal,
-        buyer,
-        status,
-        nda,
-        "Fictional demonstration record. No legal agreement was signed.",
-      );
-    syncDemoDocuments(d, directory);
-    d.prepare(
-      "UPDATE access SET nda_document_id='doc-cedar-nda' WHERE id='access-cedar'",
-    ).run();
+      await d
+        .prepare(
+          "INSERT INTO access(id,deal_id,buyer_id,status,nda_status,notes) VALUES(?,?,?,?,?,?)",
+        )
+        .run(
+          id,
+          deal,
+          buyer,
+          status,
+          nda,
+          "Fictional demonstration record. No legal agreement was signed.",
+        );
+    if (await tableExists(d, "buyer_verifications")) {
+      for (const [id, userId, buyerType, acquisitions] of [
+        [
+          "8d1ca591-61dc-4782-af27-0dcf8bf728b8",
+          "demo-buyer",
+          "private_equity_firm",
+          12,
+        ],
+        [
+          "99c782d7-8ba5-46a3-8f2a-5393e6b27a16",
+          "demo-buyer-2",
+          "search_fund",
+          1,
+        ],
+      ] as const)
+        await d
+          .prepare(
+            `INSERT OR IGNORE INTO buyer_verifications(
+               id,user_id,status,buyer_type,linkedin_url,website_url,
+               source_of_capital,equity_range,completed_acquisitions,
+               experience_summary,acquisition_strategy,
+               authorized_to_represent,submitted_at,reviewed_at,review_notes
+             ) VALUES(?,?,'approved',?,NULL,NULL,
+               'committed_investment_fund','2_5m_5m',?,
+               'Experienced Canadian lower-middle-market acquisition team with completed control investments.',
+               'Acquire established Canadian businesses with durable cash flow and capable management teams.',
+               TRUE,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,
+               'Approved demonstration identity for local and staging preview only.')`,
+          )
+          .run(id, userId, buyerType, acquisitions);
+    }
+    await syncDemoDocuments(d, directory);
+    await d
+      .prepare(
+        "UPDATE access SET nda_document_id='doc-cedar-nda' WHERE id='access-cedar'",
+      )
+      .run();
     for (const [id, deal, title, days, buyer] of [
       [
         "task-1",
@@ -1065,29 +1087,35 @@ export function seed(d: DatabaseSync, directory: string) {
       const date = new Date(Date.now() + days * 86400000)
         .toISOString()
         .slice(0, 10);
-      d.prepare(
-        "INSERT INTO tasks(id,deal_id,title,due_date,buyer_id,created_by) VALUES(?,?,?,?,?,'demo-advisor')",
-      ).run(id, deal, title, date, buyer);
+      await d
+        .prepare(
+          "INSERT INTO tasks(id,deal_id,title,due_date,buyer_id,created_by) VALUES(?,?,?,?,?,'demo-advisor')",
+        )
+        .run(id, deal, title, date, buyer);
     }
-    d.prepare(
-      "INSERT INTO offers(id,deal_id,buyer_id,amount,structure,notes,document_id) VALUES('offer-1','summit','demo-buyer',13200000,'Share purchase','Fictional indicative offer, subject to diligence.','doc-summit-loi')",
-    ).run();
-    d.prepare(
-      "INSERT INTO messages(id,deal_id,buyer_id,sender_id,body) VALUES('message-1','cedar','demo-buyer','demo-advisor','Welcome to the Cedar workspace. The financial overview is ready to review. Please add your questions here so we can keep the process organized.')",
-    ).run();
-    d.prepare(
-      "INSERT INTO messages(id,deal_id,buyer_id,sender_id,body) VALUES('message-2','cedar','demo-buyer','demo-buyer','Thank you, Alex. We will review the financials ahead of the management meeting.')",
-    ).run();
-    d.prepare(
-      "INSERT INTO activity(id,deal_id,actor_id,action) VALUES('activity-1','cedar','demo-advisor','Opened the demonstration deal room'),('activity-2','summit','demo-buyer','Submitted an indicative LOI'),('activity-3','harbour','demo-buyer','Requested confidential access')",
-    ).run();
-    syncDemoBuyerProjects(d);
-    syncDemoMandates(d);
-    syncDemoInternalNotes(d);
-    syncDemoNotifications(d);
-    d.exec("COMMIT");
-  } catch (e) {
-    d.exec("ROLLBACK");
-    throw e;
-  }
+    await d
+      .prepare(
+        "INSERT INTO offers(id,deal_id,buyer_id,amount,structure,notes,document_id) VALUES('offer-1','summit','demo-buyer',13200000,'Share purchase','Fictional indicative offer, subject to diligence.','doc-summit-loi')",
+      )
+      .run();
+    await d
+      .prepare(
+        "INSERT INTO messages(id,deal_id,buyer_id,sender_id,body) VALUES('message-1','cedar','demo-buyer','demo-advisor','Welcome to the Cedar workspace. The financial overview is ready to review. Please add your questions here so we can keep the process organized.')",
+      )
+      .run();
+    await d
+      .prepare(
+        "INSERT INTO messages(id,deal_id,buyer_id,sender_id,body) VALUES('message-2','cedar','demo-buyer','demo-buyer','Thank you, Alex. We will review the financials ahead of the management meeting.')",
+      )
+      .run();
+    await d
+      .prepare(
+        "INSERT INTO activity(id,deal_id,actor_id,action) VALUES('activity-1','cedar','demo-advisor','Opened the demonstration deal room'),('activity-2','summit','demo-buyer','Submitted an indicative LOI'),('activity-3','harbour','demo-buyer','Requested confidential access')",
+      )
+      .run();
+    await syncDemoBuyerProjects(d);
+    await syncDemoMandates(d);
+    await syncDemoInternalNotes(d);
+    await syncDemoNotifications(d);
+  });
 }

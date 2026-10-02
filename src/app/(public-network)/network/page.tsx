@@ -25,12 +25,14 @@ export const metadata = publicPageMetadata({
   path: "/network",
 });
 
-export default function NetworkPage() {
+export default async function NetworkPage() {
   const indexingEnabled = isPublicNetworkIndexingEnabled();
-  const firms = listPublicFirms();
-  const industries = listPublicIndustries();
-  const locations = listPublicLocations();
-  const transactions = listPublicTransactions({ limit: 6 });
+  const [firms, industries, locations, transactions] = await Promise.all([
+    listPublicFirms(),
+    listPublicIndustries(),
+    listPublicLocations(),
+    listPublicTransactions({ limit: 6 }),
+  ]);
   return (
     <>
       <section className="public-network-hero">

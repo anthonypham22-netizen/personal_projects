@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db";
 import {
   BUYER_FUNNEL_STAGES,
   type BuyerFunnelEntry,
@@ -11,8 +11,8 @@ import {
   type DealBuyerFunnel,
   type DealMatchStatus,
 } from "./types.ts";
-import { inImmediateTransaction } from "./sqlite-transaction.ts";
-import { tableExists } from "./sqlite-schema.ts";
+import { inTransaction } from "./transaction";
+import { tableExists } from "./schema";
 
 export type RecordBuyerEventInput = {
   dealId: string;
@@ -25,12 +25,12 @@ export type RecordBuyerEventInput = {
   createdAt?: string | null;
 };
 
-export function recordDealBuyerEvent(
-  database: DatabaseSync,
+export async function recordDealBuyerEvent(
+  database: DatabaseClient,
   input: RecordBuyerEventInput,
 ) {
-  if (!tableExists(database, "deal_buyer_events")) return false;
-  const result = database
+  if (!(await tableExists(database, "deal_buyer_events"))) return false;
+  const result = await database
     .prepare(
       `INSERT OR IGNORE INTO deal_buyer_events(
         id,deal_id,buyer_organization_id,buyer_project_id,event_type,
@@ -51,44 +51,44 @@ export function recordDealBuyerEvent(
   return result.changes > 0;
 }
 
-export function buyerOrganizationIdForUser(
-  database: DatabaseSync,
+export async function buyerOrganizationIdForUser(
+  database: DatabaseClient,
   userId: string,
 ) {
   return (
-    database
+    (await database
       .prepare(
         `SELECT organization_id FROM organization_members
          WHERE user_id=? AND status='active'
          ORDER BY CASE role WHEN 'owner' THEN 1 WHEN 'admin' THEN 2 WHEN 'member' THEN 3 ELSE 4 END,
            created_at,id LIMIT 1`,
       )
-      .get(userId) as { organization_id: string } | undefined
+      .get(userId)) as { organization_id: string } | undefined
   )?.organization_id;
 }
 
-export function bestBuyerProjectForDeal(
-  database: DatabaseSync,
+export async function bestBuyerProjectForDeal(
+  database: DatabaseClient,
   dealId: string,
   buyerOrganizationId: string,
 ) {
-  return database
+  return (await database
     .prepare(
       `SELECT buyer_project_id FROM deal_matches
        WHERE deal_id=? AND buyer_organization_id=?
        ORDER BY eligible DESC,score DESC,updated_at DESC,id LIMIT 1`,
     )
-    .get(dealId, buyerOrganizationId) as
+    .get(dealId, buyerOrganizationId)) as
     { buyer_project_id: string } | undefined;
 }
 
-function backfillMatches(database: DatabaseSync) {
-  const matches = database
+async function backfillMatches(database: DatabaseClient) {
+  const matches = (await database
     .prepare(
       `SELECT id,deal_id,buyer_project_id,buyer_organization_id,status,
         created_at,updated_at FROM deal_matches WHERE eligible=1`,
     )
-    .all() as Array<{
+    .all()) as Array<{
     id: string;
     deal_id: string;
     buyer_project_id: string;
@@ -103,21 +103,21 @@ function backfillMatches(database: DatabaseSync) {
       buyerOrganizationId: match.buyer_organization_id,
       buyerProjectId: match.buyer_project_id,
     };
-    recordDealBuyerEvent(database, {
+    await recordDealBuyerEvent(database, {
       ...base,
       eventType: "matched",
       sourceKey: `match:${match.id}`,
       createdAt: match.created_at,
     });
     if (["selected", "contacted"].includes(match.status))
-      recordDealBuyerEvent(database, {
+      await recordDealBuyerEvent(database, {
         ...base,
         eventType: "selected",
         sourceKey: `match-selection:${match.id}`,
         createdAt: match.updated_at,
       });
     if (match.status === "excluded")
-      recordDealBuyerEvent(database, {
+      await recordDealBuyerEvent(database, {
         ...base,
         eventType: "excluded",
         sourceKey: `match-exclusion:${match.id}`,
@@ -126,14 +126,14 @@ function backfillMatches(database: DatabaseSync) {
   }
 }
 
-function backfillOutreach(database: DatabaseSync) {
-  const rows = database
+async function backfillOutreach(database: DatabaseClient) {
+  const rows = (await database
     .prepare(
       `SELECT dor.*,o.deal_id,o.sender_user_id,o.created_at outreach_created_at
        FROM deal_outreach_recipients dor
        JOIN deal_outreach o ON o.id=dor.outreach_id`,
     )
-    .all() as Array<Record<string, string | null>>;
+    .all()) as Array<Record<string, string | null>>;
   for (const row of rows) {
     const base = {
       dealId: String(row.deal_id),
@@ -142,7 +142,7 @@ function backfillOutreach(database: DatabaseSync) {
       createdByUserId: String(row.sender_user_id),
     };
     if (row.status !== "queued")
-      recordDealBuyerEvent(database, {
+      await recordDealBuyerEvent(database, {
         ...base,
         eventType: "teaser_sent",
         sourceKey: `outreach:${row.id}:sent`,
@@ -154,7 +154,7 @@ function backfillOutreach(database: DatabaseSync) {
       ["passed", row.passed_at],
     ] as const)
       if (timestamp)
-        recordDealBuyerEvent(database, {
+        await recordDealBuyerEvent(database, {
           ...base,
           eventType,
           sourceKey: `outreach:${row.id}:${eventType}`,
@@ -163,17 +163,17 @@ function backfillOutreach(database: DatabaseSync) {
   }
 }
 
-function backfillIntroductions(database: DatabaseSync) {
-  const rows = database
+async function backfillIntroductions(database: DatabaseClient) {
+  const rows = (await database
     .prepare("SELECT * FROM introduction_requests")
-    .all() as Array<Record<string, string | null>>;
+    .all()) as Array<Record<string, string | null>>;
   for (const row of rows) {
     const base = {
       dealId: String(row.deal_id),
       buyerOrganizationId: String(row.buyer_organization_id),
       buyerProjectId: String(row.buyer_project_id),
     };
-    recordDealBuyerEvent(database, {
+    await recordDealBuyerEvent(database, {
       ...base,
       eventType: "intro_requested",
       sourceKey: `introduction:${row.id}:requested`,
@@ -181,7 +181,7 @@ function backfillIntroductions(database: DatabaseSync) {
       createdAt: row.created_at,
     });
     if (row.status === "approved" || row.status === "declined")
-      recordDealBuyerEvent(database, {
+      await recordDealBuyerEvent(database, {
         ...base,
         eventType:
           row.status === "approved" ? "intro_approved" : "intro_declined",
@@ -192,40 +192,43 @@ function backfillIntroductions(database: DatabaseSync) {
   }
 }
 
-function backfillAccess(database: DatabaseSync) {
-  const rows = database.prepare("SELECT * FROM access").all() as Array<
+async function backfillAccess(database: DatabaseClient) {
+  const rows = (await database.prepare("SELECT * FROM access").all()) as Array<
     Record<string, string | null>
   >;
   for (const row of rows) {
-    const organizationId = buyerOrganizationIdForUser(
+    const organizationId = await buyerOrganizationIdForUser(
       database,
       String(row.buyer_id),
     );
     if (!organizationId) continue;
-    const projectId =
-      bestBuyerProjectForDeal(database, String(row.deal_id), organizationId)
-        ?.buyer_project_id ?? null;
+    const project = await bestBuyerProjectForDeal(
+      database,
+      String(row.deal_id),
+      organizationId,
+    );
+    const projectId = project?.buyer_project_id ?? null;
     const base = {
       dealId: String(row.deal_id),
       buyerOrganizationId: organizationId,
       buyerProjectId: projectId,
     };
     if (["requested", "verified"].includes(String(row.nda_status)))
-      recordDealBuyerEvent(database, {
+      await recordDealBuyerEvent(database, {
         ...base,
         eventType: "nda_requested",
         sourceKey: `access:${row.id}:nda-requested`,
         createdAt: row.created_at,
       });
     if (row.status === "approved" && row.nda_status === "verified")
-      recordDealBuyerEvent(database, {
+      await recordDealBuyerEvent(database, {
         ...base,
         eventType: "nda_approved",
         sourceKey: `access:${row.id}:nda-approved`,
         createdAt: row.created_at,
       });
     if (row.status === "revoked")
-      recordDealBuyerEvent(database, {
+      await recordDealBuyerEvent(database, {
         ...base,
         eventType: "access_revoked",
         sourceKey: `access:${row.id}:revoked`,
@@ -234,13 +237,13 @@ function backfillAccess(database: DatabaseSync) {
   }
 }
 
-function backfillDocuments(database: DatabaseSync) {
-  const documents = database
+async function backfillDocuments(database: DatabaseClient) {
+  const documents = (await database
     .prepare(
       `SELECT id,deal_id,category,audience,buyer_id,uploaded_by,created_at
        FROM documents WHERE category IN ('NDA','Company overview')`,
     )
-    .all() as Array<Record<string, string | null>>;
+    .all()) as Array<Record<string, string | null>>;
   for (const document of documents) {
     const recipients =
       document.audience === "buyer" && document.buyer_id
@@ -248,23 +251,26 @@ function backfillDocuments(database: DatabaseSync) {
         : document.category === "Company overview" &&
             document.audience === "approved"
           ? (
-              database
+              (await database
                 .prepare(
                   "SELECT buyer_id FROM access WHERE deal_id=? AND status='approved'",
                 )
-                .all(document.deal_id) as { buyer_id: string }[]
+                .all(document.deal_id)) as { buyer_id: string }[]
             ).map(({ buyer_id }) => buyer_id)
           : [];
     for (const buyerId of recipients) {
-      const organizationId = buyerOrganizationIdForUser(database, buyerId);
+      const organizationId = await buyerOrganizationIdForUser(
+        database,
+        buyerId,
+      );
       if (!organizationId) continue;
-      const projectId =
-        bestBuyerProjectForDeal(
-          database,
-          String(document.deal_id),
-          organizationId,
-        )?.buyer_project_id ?? null;
-      recordDealBuyerEvent(database, {
+      const project = await bestBuyerProjectForDeal(
+        database,
+        String(document.deal_id),
+        organizationId,
+      );
+      const projectId = project?.buyer_project_id ?? null;
+      await recordDealBuyerEvent(database, {
         dealId: String(document.deal_id),
         buyerOrganizationId: organizationId,
         buyerProjectId: projectId,
@@ -277,19 +283,22 @@ function backfillDocuments(database: DatabaseSync) {
   }
 }
 
-function backfillOffers(database: DatabaseSync) {
-  const offers = database.prepare("SELECT * FROM offers").all() as Array<
-    Record<string, string | number | null>
-  >;
+async function backfillOffers(database: DatabaseClient) {
+  const offers = (await database
+    .prepare("SELECT * FROM offers")
+    .all()) as Array<Record<string, string | number | null>>;
   for (const offer of offers) {
-    const organizationId = buyerOrganizationIdForUser(
+    const organizationId = await buyerOrganizationIdForUser(
       database,
       String(offer.buyer_id),
     );
     if (!organizationId) continue;
-    const projectId =
-      bestBuyerProjectForDeal(database, String(offer.deal_id), organizationId)
-        ?.buyer_project_id ?? null;
+    const project = await bestBuyerProjectForDeal(
+      database,
+      String(offer.deal_id),
+      organizationId,
+    );
+    const projectId = project?.buyer_project_id ?? null;
     const base = {
       dealId: String(offer.deal_id),
       buyerOrganizationId: organizationId,
@@ -297,21 +306,21 @@ function backfillOffers(database: DatabaseSync) {
       createdByUserId: String(offer.buyer_id),
       metadata: { offer_id: offer.id, amount: offer.amount },
     };
-    recordDealBuyerEvent(database, {
+    await recordDealBuyerEvent(database, {
       ...base,
       eventType: "loi_received",
       sourceKey: `offer:${offer.id}:received`,
       createdAt: String(offer.created_at),
     });
     if (offer.status === "Shortlisted")
-      recordDealBuyerEvent(database, {
+      await recordDealBuyerEvent(database, {
         ...base,
         eventType: "shortlisted",
         sourceKey: `offer:${offer.id}:shortlisted`,
         createdAt: String(offer.created_at),
       });
     if (offer.status === "Not proceeding")
-      recordDealBuyerEvent(database, {
+      await recordDealBuyerEvent(database, {
         ...base,
         eventType: "not_proceeding",
         sourceKey: `offer:${offer.id}:not-proceeding`,
@@ -320,33 +329,33 @@ function backfillOffers(database: DatabaseSync) {
   }
 }
 
-export function ensureBuyerFunnelBackfill(database: DatabaseSync) {
+export async function ensureBuyerFunnelBackfill(database: DatabaseClient) {
   if (
-    !tableExists(database, "deal_buyer_events") ||
-    !tableExists(database, "buyer_funnel_state") ||
-    database
+    !(await tableExists(database, "deal_buyer_events")) ||
+    !(await tableExists(database, "buyer_funnel_state")) ||
+    (await database
       .prepare(
         "SELECT 1 FROM buyer_funnel_state WHERE key='initial_backfill_v1'",
       )
-      .get()
+      .get())
   )
     return;
-  inImmediateTransaction(database, () => {
+  await inTransaction(database, async (transaction) => {
     if (
-      database
+      await transaction
         .prepare(
           "SELECT 1 FROM buyer_funnel_state WHERE key='initial_backfill_v1'",
         )
         .get()
     )
       return;
-    backfillMatches(database);
-    backfillOutreach(database);
-    backfillIntroductions(database);
-    backfillAccess(database);
-    backfillDocuments(database);
-    backfillOffers(database);
-    database
+    await backfillMatches(transaction);
+    await backfillOutreach(transaction);
+    await backfillIntroductions(transaction);
+    await backfillAccess(transaction);
+    await backfillDocuments(transaction);
+    await backfillOffers(transaction);
+    await transaction
       .prepare(
         "INSERT INTO buyer_funnel_state(key,value) VALUES('initial_backfill_v1','complete')",
       )
@@ -437,13 +446,14 @@ function metricsFor(entries: BuyerFunnelEntry[]): BuyerFunnelMetrics {
   };
 }
 
-export function buyerFunnelsForDeals(
-  database: DatabaseSync,
+export async function buyerFunnelsForDeals(
+  database: DatabaseClient,
   dealIds: string[],
-): DealBuyerFunnel[] {
-  if (!dealIds.length || !tableExists(database, "deal_buyer_events")) return [];
+): Promise<DealBuyerFunnel[]> {
+  if (!dealIds.length || !(await tableExists(database, "deal_buyer_events")))
+    return [];
   const placeholders = dealIds.map(() => "?").join(",");
-  const rows = database
+  const rows = (await database
     .prepare(
       `SELECT e.*,organization.name buyer_organization_name,
         organization.verification_status buyer_organization_verification_status,
@@ -453,9 +463,9 @@ export function buyerFunnelsForDeals(
        LEFT JOIN buyer_projects project ON project.id=e.buyer_project_id
        LEFT JOIN users creator ON creator.id=e.created_by_user_id
        WHERE e.deal_id IN (${placeholders})
-       ORDER BY e.created_at,e.rowid`,
+       ORDER BY e.created_at,e.id`,
     )
-    .all(...dealIds) as Array<
+    .all(...dealIds)) as Array<
     Omit<DealBuyerEvent, "metadata"> & {
       metadata_json: string;
       buyer_organization_name: string;
@@ -463,7 +473,7 @@ export function buyerFunnelsForDeals(
       buyer_project_name: string | null;
     }
   >;
-  const matches = database
+  const matches = (await database
     .prepare(
       `SELECT dm.deal_id,dm.buyer_organization_id,dm.buyer_project_id,
         bp.name buyer_project_name,dm.score,dm.status
@@ -471,7 +481,7 @@ export function buyerFunnelsForDeals(
        WHERE dm.deal_id IN (${placeholders})
        ORDER BY dm.eligible DESC,dm.score DESC,dm.updated_at DESC,dm.id`,
     )
-    .all(...dealIds) as Array<{
+    .all(...dealIds)) as Array<{
     deal_id: string;
     buyer_organization_id: string;
     buyer_project_id: string;

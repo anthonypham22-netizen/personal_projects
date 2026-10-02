@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { db, one, run } from "../src/lib/db";
+import { closeDatabase, databaseReady, db, one, run } from "../src/lib/db";
 import { mutate, register, sessionUser, workspace } from "../src/lib/service";
 import {
   getPublicFirmBySlug,
@@ -20,23 +20,23 @@ let directory: string;
 let buyer: User;
 let reviewer: User;
 
-before(() => {
+before(async () => {
   directory = mkdtempSync(path.join(tmpdir(), "northlane-public-network-"));
   process.env.DATA_DIR = directory;
   process.env.ALLOW_DEMO = "true";
   process.env.ALLOW_REGISTRATION = "true";
-  db();
-  buyer = one<User>("SELECT * FROM users WHERE id='demo-buyer'")!;
-  reviewer = one<User>("SELECT * FROM users WHERE id='demo-advisor'")!;
+  await databaseReady();
+  buyer = (await one<User>("SELECT * FROM users WHERE id='demo-buyer'"))!;
+  reviewer = (await one<User>("SELECT * FROM users WHERE id='demo-advisor'"))!;
 });
 
-after(() => {
-  db().close();
+after(async () => {
+  await closeDatabase();
   rmSync(directory, { recursive: true, force: true });
 });
 
-test("demo public examples are explicit while sellers and self-reported history remain private", () => {
-  const profile = one<{
+test("demo public examples are explicit while sellers and self-reported history remain private", async () => {
+  const profile = await one<{
     is_public: number;
     headline: string;
     revision: number;
@@ -51,34 +51,34 @@ test("demo public examples are explicit while sellers and self-reported history 
   );
   assert.equal(profile?.revision, 2);
 
-  const sellerProfile = one<{ is_public: number }>(
+  const sellerProfile = await one<{ is_public: number }>(
     "SELECT is_public FROM organization_public_profiles WHERE organization_id='org-demo-owner'",
   );
   assert.deepEqual(sellerProfile, { is_public: 0 });
 
-  const transaction = one<{
+  const transaction = await one<{
     public_slug: string | null;
     public_opt_in: number;
   }>(
     "SELECT public_slug,public_opt_in FROM closed_transactions WHERE id='closed-demo-evergreen-manufacturing'",
   );
   assert.deepEqual(transaction, { public_slug: null, public_opt_in: 0 });
-  assert.equal(listPublicFirms().length, 4);
-  assert.equal(listPublicTransactions().length, 2);
-  assert.equal(listPublicTransactions({ limit: 1 }).length, 1);
+  assert.equal((await listPublicFirms()).length, 4);
+  assert.equal((await listPublicTransactions()).length, 2);
+  assert.equal((await listPublicTransactions({ limit: 1 })).length, 1);
   assert.equal(
-    listPublicFirms().some((firm) => firm.name === "Cedar & Co."),
+    (await listPublicFirms()).some((firm) => firm.name === "Cedar & Co."),
     false,
   );
 });
 
-test("public profile updates require owner/admin and use revision-checked taxonomy replacement", () => {
+test("public profile updates require owner/admin and use revision-checked taxonomy replacement", async () => {
   const organizationId = "org-demo-buyer";
-  const initial = workspace(buyer).public_network_profile!;
+  const initial = (await workspace(buyer)).public_network_profile!;
   assert.equal(initial.can_manage, true);
-  assert.throws(
-    () =>
-      mutate(buyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "updatePublicNetworkProfile",
         data: {
           is_public: true,
@@ -94,7 +94,7 @@ test("public profile updates require owner/admin and use revision-checked taxono
       }),
     /headline and description/i,
   );
-  mutate(buyer, {
+  await mutate(buyer, {
     action: "updatePublicNetworkProfile",
     data: {
       is_public: true,
@@ -109,24 +109,25 @@ test("public profile updates require owner/admin and use revision-checked taxono
     },
   });
 
-  const updated = workspace(buyer).public_network_profile!;
+  const updated = (await workspace(buyer)).public_network_profile!;
   assert.equal(updated.is_public, true);
-  assert.deepEqual(updated.industries, ["Manufacturing", "Business services"]);
-  assert.deepEqual(updated.locations, ["Ontario", "Alberta"]);
+  assert.deepEqual(updated.industries, ["Business services", "Manufacturing"]);
+  assert.deepEqual(updated.locations, ["Alberta", "Ontario"]);
   assert.equal(updated.revision, initial.revision + 1);
   assert.deepEqual(
-    db()
-      .prepare(
-        "SELECT industry FROM organization_public_industries WHERE organization_id=? ORDER BY rowid",
-      )
-      .all(organizationId)
-      .map((row) => ({ ...row })),
-    [{ industry: "Manufacturing" }, { industry: "Business services" }],
+    (
+      await db()
+        .prepare(
+          "SELECT industry FROM organization_public_industries WHERE organization_id=? ORDER BY industry",
+        )
+        .all(organizationId)
+    ).map((row) => ({ ...row })),
+    [{ industry: "Business services" }, { industry: "Manufacturing" }],
   );
 
-  assert.throws(
-    () =>
-      mutate(buyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "updatePublicNetworkProfile",
         data: {
           is_public: false,
@@ -146,25 +147,25 @@ test("public profile updates require owner/admin and use revision-checked taxono
       (error as { status?: number }).status === 409,
   );
 
-  const viewerToken = register({
+  const viewerToken = await register({
     name: "Public Profile Viewer",
     company: `Viewer Capital ${Date.now()}`,
     email: `public-profile-viewer-${Date.now()}@example.test`,
     role: "buyer",
     password: "public-network-viewer-password",
   });
-  const viewer = sessionUser(viewerToken)!;
-  run("DELETE FROM organization_members WHERE user_id=?", viewer.id);
-  run(
+  const viewer = (await sessionUser(viewerToken))!;
+  await run("DELETE FROM organization_members WHERE user_id=?", viewer.id);
+  await run(
     "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'viewer','active')",
     `membership-viewer-${viewer.id}`,
     organizationId,
     viewer.id,
   );
-  const viewerWithMembership = sessionUser(viewerToken)!;
-  assert.throws(
-    () =>
-      mutate(viewerWithMembership, {
+  const viewerWithMembership = (await sessionUser(viewerToken))!;
+  await assert.rejects(
+    async () =>
+      await mutate(viewerWithMembership, {
         action: "updatePublicNetworkProfile",
         data: {
           is_public: false,
@@ -175,14 +176,14 @@ test("public profile updates require owner/admin and use revision-checked taxono
           show_verified_transactions: false,
           industries: [],
           locations: [],
-          revision:
-            workspace(viewerWithMembership).public_network_profile!.revision,
+          revision: (await workspace(viewerWithMembership))
+            .public_network_profile!.revision,
         },
       }),
     /owners and administrators/i,
   );
-  const reset = workspace(buyer).public_network_profile!;
-  mutate(buyer, {
+  const reset = (await workspace(buyer)).public_network_profile!;
+  await mutate(buyer, {
     action: "updatePublicNetworkProfile",
     data: {
       is_public: false,
@@ -198,12 +199,12 @@ test("public profile updates require owner/admin and use revision-checked taxono
   });
 });
 
-test("operating-business sellers cannot publish public network profiles", () => {
-  const owner = one<User>("SELECT * FROM users WHERE id='demo-owner'")!;
-  const profile = workspace(owner).public_network_profile!;
-  assert.throws(
-    () =>
-      mutate(owner, {
+test("operating-business sellers cannot publish public network profiles", async () => {
+  const owner = (await one<User>("SELECT * FROM users WHERE id='demo-owner'"))!;
+  const profile = (await workspace(owner)).public_network_profile!;
+  await assert.rejects(
+    async () =>
+      await mutate(owner, {
         action: "updatePublicNetworkProfile",
         data: {
           is_public: true,
@@ -220,43 +221,45 @@ test("operating-business sellers cannot publish public network profiles", () => 
     /acquisition firms and M&A advisors/i,
   );
   assert.equal(
-    one<{ is_public: number }>(
-      "SELECT is_public FROM organization_public_profiles WHERE organization_id='org-demo-owner'",
+    (
+      await one<{ is_public: number }>(
+        "SELECT is_public FROM organization_public_profiles WHERE organization_id='org-demo-owner'",
+      )
     )?.is_public,
     0,
   );
 
-  run(
+  await run(
     `UPDATE organization_public_profiles
      SET is_public=1,headline='Stale public seller',public_description='Legacy state'
      WHERE organization_id='org-demo-owner'`,
   );
-  run(
+  await run(
     "INSERT OR IGNORE INTO organization_public_industries(organization_id,industry) VALUES('org-demo-owner','Business services')",
   );
   assert.equal(
-    listPublicFirms().some((firm) => firm.slug === "cedar-co"),
+    (await listPublicFirms()).some((firm) => firm.slug === "cedar-co"),
     false,
   );
   assert.equal(
-    getPublicIndustry("Business services")?.firms.some(
+    (await getPublicIndustry("Business services"))?.firms.some(
       (firm) => firm.slug === "cedar-co",
     ),
     false,
   );
   assert.equal(
-    listPublicSitemapPaths().some((path) => path.includes("cedar-co")),
+    (await listPublicSitemapPaths()).some((path) => path.includes("cedar-co")),
     false,
   );
-  run(
+  await run(
     "UPDATE organization_public_profiles SET is_public=0 WHERE organization_id='org-demo-owner'",
   );
 });
 
-test("verified transactions require a public firm and explicit transaction opt-in", () => {
+test("verified transactions require a public firm and explicit transaction opt-in", async () => {
   const transactionId = "closed-demo-evergreen-services";
-  const privateProfile = workspace(buyer).public_network_profile!;
-  mutate(buyer, {
+  const privateProfile = (await workspace(buyer)).public_network_profile!;
+  await mutate(buyer, {
     action: "updatePublicNetworkProfile",
     data: {
       is_public: false,
@@ -270,17 +273,17 @@ test("verified transactions require a public firm and explicit transaction opt-i
       revision: privateProfile.revision,
     },
   });
-  assert.throws(
-    () =>
-      mutate(buyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "setClosedTransactionPublic",
         data: { transaction_id: transactionId, public_opt_in: true },
       }),
     /public profile.*verified transactions/i,
   );
 
-  const profile = workspace(buyer).public_network_profile!;
-  mutate(buyer, {
+  const profile = (await workspace(buyer)).public_network_profile!;
+  await mutate(buyer, {
     action: "updatePublicNetworkProfile",
     data: {
       is_public: true,
@@ -295,32 +298,32 @@ test("verified transactions require a public firm and explicit transaction opt-i
     },
   });
 
-  const viewerToken = register({
+  const viewerToken = await register({
     name: "Transaction History Viewer",
     company: `Transaction Viewer ${Date.now()}`,
     email: `transaction-viewer-${Date.now()}@example.test`,
     role: "buyer",
     password: "transaction-viewer-password",
   });
-  const viewer = sessionUser(viewerToken)!;
-  run("DELETE FROM organization_members WHERE user_id=?", viewer.id);
-  run(
+  const viewer = (await sessionUser(viewerToken))!;
+  await run("DELETE FROM organization_members WHERE user_id=?", viewer.id);
+  await run(
     "INSERT INTO organization_members(id,organization_id,user_id,role,status) VALUES(?,?,?,'viewer','active')",
     `membership-transaction-viewer-${viewer.id}`,
     "org-demo-buyer",
     viewer.id,
   );
-  const viewerWithMembership = sessionUser(viewerToken)!;
-  const transactionBeforeUnauthorizedAttempt = one<{
+  const viewerWithMembership = (await sessionUser(viewerToken))!;
+  const transactionBeforeUnauthorizedAttempt = await one<{
     public_opt_in: number;
     public_slug: string | null;
   }>(
     "SELECT public_opt_in,public_slug FROM closed_transactions WHERE id=?",
     transactionId,
   );
-  assert.throws(
-    () =>
-      mutate(viewerWithMembership, {
+  await assert.rejects(
+    async () =>
+      await mutate(viewerWithMembership, {
         action: "setClosedTransactionPublic",
         data: { transaction_id: transactionId, public_opt_in: true },
       }),
@@ -330,7 +333,7 @@ test("verified transactions require a public firm and explicit transaction opt-i
       (error as { status?: number }).status === 403,
   );
   assert.deepEqual(
-    one<{ public_opt_in: number; public_slug: string | null }>(
+    await one<{ public_opt_in: number; public_slug: string | null }>(
       "SELECT public_opt_in,public_slug FROM closed_transactions WHERE id=?",
       transactionId,
     ),
@@ -338,25 +341,25 @@ test("verified transactions require a public firm and explicit transaction opt-i
   );
 
   const unverifiedTransactionId = "closed-demo-evergreen-manufacturing";
-  assert.throws(
-    () =>
-      mutate(buyer, {
+  await assert.rejects(
+    async () =>
+      await mutate(buyer, {
         action: "setClosedTransactionPublic",
         data: { transaction_id: unverifiedTransactionId, public_opt_in: true },
       }),
     /independently verified/i,
   );
-  run(
+  await run(
     "UPDATE closed_transactions SET verified=1,verified_by_user_id=?,verified_at=CURRENT_TIMESTAMP WHERE id=?",
     reviewer.id,
     unverifiedTransactionId,
   );
   const publicTransactionId = unverifiedTransactionId;
-  mutate(buyer, {
+  await mutate(buyer, {
     action: "setClosedTransactionPublic",
     data: { transaction_id: publicTransactionId, public_opt_in: true },
   });
-  const publicTransaction = listPublicTransactions().find(
+  const publicTransaction = (await listPublicTransactions()).find(
     (transaction) => transaction.closed_date === "2023-11-15",
   );
   assert.ok(publicTransaction);
@@ -367,22 +370,23 @@ test("verified transactions require a public firm and explicit transaction opt-i
   assert.equal("seller_organization_id" in publicTransaction, false);
   assert.equal("advisor_organization_id" in publicTransaction, false);
   assert.deepEqual(
-    getPublicTransactionBySlug(publicTransaction.public_slug)?.public_slug,
+    (await getPublicTransactionBySlug(publicTransaction.public_slug))
+      ?.public_slug,
     publicTransaction.public_slug,
   );
-  mutate(buyer, {
+  await mutate(buyer, {
     action: "setClosedTransactionPublic",
     data: { transaction_id: publicTransactionId, public_opt_in: false },
   });
   assert.equal(
-    listPublicTransactions().some(
+    (await listPublicTransactions()).some(
       (transaction) =>
         transaction.public_slug === publicTransaction.public_slug,
     ),
     false,
   );
-  const reset = workspace(buyer).public_network_profile!;
-  mutate(buyer, {
+  const reset = (await workspace(buyer)).public_network_profile!;
+  await mutate(buyer, {
     action: "updatePublicNetworkProfile",
     data: {
       is_public: false,
@@ -398,18 +402,18 @@ test("verified transactions require a public firm and explicit transaction opt-i
   });
 });
 
-test("public queries minimize fields, suppress demo-only firms, and never surface active deals", () => {
+test("public queries minimize fields, suppress demo-only firms, and never surface active deals", async () => {
   const suffix = Date.now();
-  const token = register({
+  const token = await register({
     name: "Public Network Buyer",
     company: `Public Network Capital ${suffix}`,
     email: `public-network-buyer-${suffix}@example.test`,
     role: "buyer",
     password: "public-network-buyer-password",
   });
-  const registeredBuyer = sessionUser(token)!;
-  const profile = workspace(registeredBuyer).public_network_profile!;
-  mutate(registeredBuyer, {
+  const registeredBuyer = (await sessionUser(token))!;
+  const profile = (await workspace(registeredBuyer)).public_network_profile!;
+  await mutate(registeredBuyer, {
     action: "updatePublicNetworkProfile",
     data: {
       is_public: true,
@@ -423,8 +427,8 @@ test("public queries minimize fields, suppress demo-only firms, and never surfac
       revision: profile.revision,
     },
   });
-  const registeredSlug = workspace(registeredBuyer).organization.slug;
-  const firm = getPublicFirmBySlug(registeredSlug, "buyer");
+  const registeredSlug = (await workspace(registeredBuyer)).organization.slug;
+  const firm = await getPublicFirmBySlug(registeredSlug, "buyer");
   assert.equal(firm?.slug, registeredSlug);
   assert.equal(firm?.public_description, "A public buyer profile.");
   assert.equal("fund_structure" in firm!, false);
@@ -433,30 +437,35 @@ test("public queries minimize fields, suppress demo-only firms, and never surfac
   assert.equal("capital_source" in firm!, false);
   assert.equal("deals" in firm!, false);
   assert.ok(
-    (listPublicIndustries().find(({ value }) => value === "Business services")
-      ?.count ?? 0) >= 4,
+    ((await listPublicIndustries()).find(
+      ({ value }) => value === "Business services",
+    )?.count ?? 0) >= 4,
   );
   assert.equal(
-    getPublicIndustry("Business services")?.firms.some(
+    (await getPublicIndustry("Business services"))?.firms.some(
       (entry) => entry.slug === registeredSlug,
     ),
     true,
   );
-  assert.ok(listPublicSitemapPaths().includes(`/buyers/${registeredSlug}`));
+  assert.ok(
+    (await listPublicSitemapPaths()).includes(`/buyers/${registeredSlug}`),
+  );
   assert.equal(
-    listPublicSitemapPaths().includes(`/firms/${registeredSlug}`),
+    (await listPublicSitemapPaths()).includes(`/firms/${registeredSlug}`),
     false,
   );
-  assert.ok(listPublicSitemapPaths().includes("/industries/business-services"));
-  assert.equal(getPublicFirmBySlug("cedar", "buyer"), undefined);
+  assert.ok(
+    (await listPublicSitemapPaths()).includes("/industries/business-services"),
+  );
+  assert.equal(await getPublicFirmBySlug("cedar", "buyer"), undefined);
 
   process.env.ALLOW_DEMO = "false";
   assert.equal(
-    getPublicFirmBySlug("laurent-partners-demo-buyer-2", "buyer"),
+    await getPublicFirmBySlug("laurent-partners-demo-buyer-2", "buyer"),
     undefined,
   );
   assert.equal(
-    listPublicFirms().some((entry) => entry.slug === registeredSlug),
+    (await listPublicFirms()).some((entry) => entry.slug === registeredSlug),
     true,
   );
   process.env.ALLOW_DEMO = "true";

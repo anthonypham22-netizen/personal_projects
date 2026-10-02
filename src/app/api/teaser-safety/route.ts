@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { db, type DatabaseClient } from "@/lib/db";
 import { checkOrigin, failure, jsonBody } from "@/lib/http";
 import { AppError, audit, getDeal, limit, requireManager } from "@/lib/service";
-import { inImmediateTransaction } from "@/lib/sqlite-transaction";
+import { inTransaction } from "@/lib/transaction";
 import {
   analyzeTeaserSafety,
   teaserSafetyReviewInputDigest,
@@ -19,13 +19,13 @@ export const runtime = "nodejs";
 const unavailableMandate = () =>
   new AppError("This mandate is not available.", 404);
 
-const managedDealOrNotFound = (
+const managedDealOrNotFound = async (
   user: NonNullable<Awaited<ReturnType<typeof currentUser>>>,
   dealId: string,
 ) => {
   try {
-    const deal = getDeal(dealId);
-    requireManager(user, deal);
+    const deal = await getDeal(dealId);
+    await requireManager(user, deal);
     return deal;
   } catch (error) {
     if (error instanceof AppError && [403, 404].includes(error.status))
@@ -34,16 +34,44 @@ const managedDealOrNotFound = (
   }
 };
 
-const reviewInputForDeal = (
+const managedDealInTransactionOrNotFound = async (
+  database: DatabaseClient,
+  user: NonNullable<Awaited<ReturnType<typeof currentUser>>>,
+  dealId: string,
+) => {
+  const deal = (await database
+    .prepare("SELECT * FROM deals WHERE id=?")
+    .get(dealId)) as Awaited<ReturnType<typeof getDeal>> | undefined;
+  if (!deal || user.role === "buyer") throw unavailableMandate();
+  const legacyManager =
+    (!deal.owner_organization_id && deal.owner_id === user.id) ||
+    (!deal.advisor_organization_id && deal.advisor_id === user.id);
+  const membership = await database
+    .prepare(
+      `SELECT role FROM organization_members
+       WHERE user_id=? AND status='active' AND organization_id IN (?,?)
+         AND role IN ('owner','admin','member')
+       LIMIT 1`,
+    )
+    .get(
+      user.id,
+      deal.owner_organization_id || "",
+      deal.advisor_organization_id || "",
+    );
+  if (!legacyManager && !membership) throw unavailableMandate();
+  return deal;
+};
+
+const reviewInputForDeal = async (
   database: ReturnType<typeof db>,
-  deal: ReturnType<typeof getDeal>,
-): TeaserSafetyReviewInput => {
+  deal: Awaited<ReturnType<typeof getDeal>>,
+): Promise<TeaserSafetyReviewInput> => {
   const historicalFinancialPeriods = (
-    database
+    (await database
       .prepare(
         "SELECT COUNT(*) count FROM deal_financials WHERE deal_id=? AND is_projected=0",
       )
-      .get(deal.id) as { count: number }
+      .get(deal.id)) as { count: number }
   ).count;
   return {
     companyName: deal.company_name,
@@ -73,7 +101,7 @@ export async function POST(request: Request) {
       .safeParse(await jsonBody(request));
     if (!parsed.success) throw new AppError("A valid mandate is required.");
     limit(`teaser-safety:${user.id}`, 20, 60);
-    const deal = managedDealOrNotFound(user, parsed.data.deal_id);
+    const deal = await managedDealOrNotFound(user, parsed.data.deal_id);
     const provider = configuredTeaserSafetyProvider();
     if (!provider)
       throw new AppError(
@@ -82,20 +110,24 @@ export async function POST(request: Request) {
       );
     const database = db();
     const analysis = await analyzeTeaserSafety(
-      reviewInputForDeal(database, deal),
+      await reviewInputForDeal(database, deal),
       provider,
     );
     const id = randomUUID();
     let persistedDeal = deal;
-    inImmediateTransaction(database, () => {
-      persistedDeal = managedDealOrNotFound(user, deal.id);
-      const currentInput = reviewInputForDeal(database, persistedDeal);
+    await inTransaction(database, async (transaction) => {
+      persistedDeal = await managedDealInTransactionOrNotFound(
+        transaction,
+        user,
+        deal.id,
+      );
+      const currentInput = await reviewInputForDeal(transaction, persistedDeal);
       if (teaserSafetyReviewInputDigest(currentInput) !== analysis.inputSha256)
         throw new AppError(
           "The mandate changed during this review. Run the safety review again.",
           409,
         );
-      database
+      await transaction
         .prepare(
           `INSERT INTO teaser_safety_reviews(
             id,deal_id,requested_by_user_id,provider,provider_name,
@@ -118,7 +150,7 @@ export async function POST(request: Request) {
           JSON.stringify(analysis.missingFinancials),
         );
     });
-    audit(user, persistedDeal.id, "Ran a teaser safety review");
+    await audit(user, persistedDeal.id, "Ran a teaser safety review");
     const review: TeaserSafetyReview = {
       id,
       deal_id: persistedDeal.id,
