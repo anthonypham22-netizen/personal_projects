@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireAdmin } from "@/lib/auth";
+import { requirePlatformAdmin } from "@/lib/auth";
 import { buyerVerificationForAdmin } from "@/lib/buyer-identity-verification";
 import { Brand } from "@/components/brand";
 import { BuyerVerificationDecisionForm } from "@/components/buyer-verification-admin";
+import { money as formatMoney } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const metadata = {
@@ -27,19 +28,17 @@ const dateTimeLabel = (value: string | null) =>
       }).format(new Date(value))
     : "Not yet";
 
-const money = (value: number) =>
-  new Intl.NumberFormat("en-CA", {
-    style: "currency",
-    currency: "CAD",
-    maximumFractionDigits: 0,
-  }).format(value);
+const money = (value: number | null | undefined) =>
+  value === null || value === undefined
+    ? "Not specified"
+    : formatMoney(value, false);
 
 export default async function BuyerReviewDetailPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const admin = await requireAdmin();
+  const admin = await requirePlatformAdmin();
   const verification = await buyerVerificationForAdmin(
     admin,
     (await params).id,
@@ -80,7 +79,11 @@ export default async function BuyerReviewDetailPage({
             </div>
             <div>
               <span>Province</span>
-              <strong>{verification.buyer_province}</strong>
+              <strong>{verification.buyer_province || "Not provided"}</strong>
+            </div>
+            <div>
+              <span>Marketplace role</span>
+              <strong>{label(verification.buyer_role)}</strong>
             </div>
           </div>
         </section>
@@ -166,26 +169,42 @@ export default async function BuyerReviewDetailPage({
 
         <section className="panel">
           <div className="panel-heading">
-            <h2>Experience and strategy</h2>
+            <h2>Experience</h2>
           </div>
           <div className="panel-body verification-evidence-sheet">
             <div>
               <span>Completed acquisitions</span>
               <strong>{verification.completed_acquisitions}</strong>
             </div>
-            <div>
-              <span>Authorized to represent</span>
-              <strong>
-                {verification.authorized_to_represent ? "Yes" : "No"}
-              </strong>
-            </div>
             <div className="full">
               <span>Experience</span>
               <p>{verification.experience_summary}</p>
             </div>
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-heading">
+            <h2>Strategy</h2>
+          </div>
+          <div className="panel-body verification-evidence-sheet">
             <div className="full">
               <span>Acquisition strategy</span>
               <p>{verification.acquisition_strategy}</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-heading">
+            <h2>Declaration</h2>
+          </div>
+          <div className="panel-body verification-evidence-sheet">
+            <div className="full">
+              <span>Authorized to represent</span>
+              <strong>
+                {verification.authorized_to_represent ? "Yes" : "No"}
+              </strong>
             </div>
           </div>
         </section>
@@ -210,7 +229,9 @@ export default async function BuyerReviewDetailPage({
             <div>
               <span>Reviewer</span>
               <strong>
-                {verification.reviewer_name || "Not yet reviewed"}
+                {verification.reviewer_name
+                  ? `${verification.reviewer_name}${verification.reviewer_email ? ` · ${verification.reviewer_email}` : ""}`
+                  : "Not yet reviewed"}
               </strong>
             </div>
             <div className="full">

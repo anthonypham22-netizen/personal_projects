@@ -45,21 +45,20 @@ fallback. Demo data is synthetic and remains separated from registered users.
 
 ## Environment variables
 
-| Variable             | Purpose                                                                                     |
-| -------------------- | ------------------------------------------------------------------------------------------- |
-| `APP_ENV`            | `development`, `staging`, or `production`                                                   |
-| `APP_URL`            | Exact public application origin used for origin checks                                      |
-| `DATABASE_URL`       | Server-only Supabase Postgres connection string; mandatory in production                    |
-| `DATABASE_POOL_MAX`  | Maximum server connection-pool size; defaults to 10                                         |
-| `ADMIN_EMAILS`       | Comma-separated, lower/upper-case-insensitive internal buyer reviewers                      |
-| `DATA_DIR`           | Local PGlite and filesystem-document location                                               |
-| `PRIVATE_FILE_STORAGE` | `filesystem` locally/Docker or `vercel_blob` on Vercel                                     |
-| `ALLOW_DEMO`         | Enables synthetic seed data only outside production                                         |
-| `COOKIE_SECURE`      | Must be `true` in staging and production                                                    |
-| `ALLOW_REGISTRATION` | Enables or closes public registration                                                       |
+| Variable               | Purpose                                                                  |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `APP_ENV`              | `development`, `staging`, or `production`                                |
+| `APP_URL`              | Exact public application origin used for origin checks                   |
+| `DATABASE_URL`         | Server-only Supabase Postgres connection string; mandatory in production |
+| `DATABASE_POOL_MAX`    | Maximum server connection-pool size; defaults to 10                      |
+| `DATA_DIR`             | Local PGlite and filesystem-document location                            |
+| `PRIVATE_FILE_STORAGE` | `filesystem` locally/Docker or `vercel_blob` on Vercel                   |
+| `ALLOW_DEMO`           | Enables synthetic seed data only outside production                      |
+| `COOKIE_SECURE`        | Must be `true` in staging and production                                 |
+| `ALLOW_REGISTRATION`   | Enables or closes public registration                                    |
 
 See `.env.example` for the remaining marketplace and provider settings. Never
-use `NEXT_PUBLIC_*` for database credentials or administrator addresses.
+use `NEXT_PUBLIC_*` for database credentials.
 
 ## Database migrations
 
@@ -104,10 +103,10 @@ not delete or alter the SQLite source.
 ## Buyer profile review
 
 Buyers submit a server-validated profile at `/app/verification`. Internal
-reviewers configured through `ADMIN_EMAILS` use `/app/admin/buyers` to approve,
+reviewers with `users.is_platform_admin = 1` use `/app/admin/buyers` to approve,
 request more information, or reject it. Marketplace roles remain `buyer`,
-`owner`, and `advisor`; administrator access is a separate server-side
-privilege.
+`owner`, and `advisor`; administrator access is a separate persisted
+server-side privilege.
 
 An unapproved buyer may browse eligible anonymous opportunities and maintain
 acquisition criteria, but may not request an introduction leading to

@@ -108,7 +108,7 @@ import { isDemoAllowed } from "./app-environment";
 import {
   buyerIdentityIsApproved,
   buyerIdentityVerificationForUser,
-  isAdmin,
+  isPlatformAdmin,
   submitBuyerIdentityVerification,
 } from "./buyer-identity-verification";
 
@@ -208,9 +208,6 @@ const organizationMembers = async (organizationId: string) =>
   WHERE om.organization_id=? ORDER BY CASE om.role WHEN 'owner' THEN 1 WHEN 'admin' THEN 2 WHEN 'member' THEN 3 ELSE 4 END,u.name`,
     organizationId,
   );
-const isPlatformAdmin = (user: User) => {
-  return Boolean(user.is_platform_admin) || isAdmin(user);
-};
 const buyerVerificationProfileFor = async (
   organization: Organization,
 ): Promise<BuyerVerificationProfile | undefined> => {
@@ -1712,8 +1709,7 @@ export async function workspace(user: User): Promise<WorkspaceData> {
       managing = canManageDeal(d),
       teamMember = teamMemberForDeal(d),
       allowed =
-        teamMember ||
-        (member?.status === "approved" && buyerIdentityApproved),
+        teamMember || (member?.status === "approved" && buyerIdentityApproved),
       discoveryMatch = qualifiedDiscoveryMatches.get(d.id);
     return {
       ...deal,
@@ -1959,7 +1955,6 @@ export async function workspace(user: User): Promise<WorkspaceData> {
       ? await buyerMarketplaceAnalyticsFor(db(), organization.id)
       : undefined;
   const platformAdmin = isPlatformAdmin(user);
-  const administrator = isAdmin(user);
   const buyerIdentityVerification =
     user.role === "buyer"
       ? await buyerIdentityVerificationForUser(user.id)
@@ -2028,7 +2023,6 @@ export async function workspace(user: User): Promise<WorkspaceData> {
       : {}),
     closed_transactions: closedTransactions,
     is_platform_admin: platformAdmin,
-    is_admin: administrator,
     ...(platformAdmin
       ? {
           verification_admin_queue: await verificationAdminQueue(user),

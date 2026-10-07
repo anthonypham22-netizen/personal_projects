@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { currentUser } from "@/lib/auth";
+import { requirePlatformAdminApi } from "@/lib/auth";
 import {
+  approveBuyerVerification,
   buyerVerificationForAdmin,
-  isAdmin,
-  reviewBuyerIdentityVerification,
+  rejectBuyerVerification,
+  requestBuyerVerificationInfo,
 } from "@/lib/buyer-identity-verification";
 import { AppError } from "@/lib/service";
 import { checkOrigin, failure, jsonBody } from "@/lib/http";
@@ -17,31 +18,30 @@ export async function POST(
 ) {
   try {
     checkOrigin(request);
-    const admin = await currentUser();
-    if (!admin) throw new AppError("Please sign in.", 401);
-    if (!isAdmin(admin))
-      throw new AppError("Administrator access required.", 403);
+    const admin = await requirePlatformAdminApi();
     const { id } = await params;
     const existing = await buyerVerificationForAdmin(admin, id);
     if (!existing) throw new AppError("Buyer verification not found.", 404);
     const parsed = z
       .object({
-        status: z.enum(["approved", "needs_info", "rejected"]),
+        action: z.enum(["approve", "request_more_information", "reject"]),
         notes: z.string().trim().max(5000),
       })
       .safeParse(await jsonBody(request));
     if (!parsed.success)
       throw new AppError("Choose a valid decision and review note.");
-    if (parsed.data.status !== "approved" && parsed.data.notes.length < 10)
+    if (parsed.data.action !== "approve" && parsed.data.notes.length < 10)
       throw new AppError(
         "Explain what the buyer needs to change (at least 10 characters).",
       );
-    const changed = await reviewBuyerIdentityVerification(
-      admin,
-      id,
-      parsed.data.status,
-      parsed.data.notes,
-    );
+    if (existing.user_id === admin.id)
+      throw new AppError("You cannot review your own application.", 403);
+    const changed =
+      parsed.data.action === "approve"
+        ? await approveBuyerVerification(admin, id, parsed.data.notes)
+        : parsed.data.action === "request_more_information"
+          ? await requestBuyerVerificationInfo(admin, id, parsed.data.notes)
+          : await rejectBuyerVerification(admin, id, parsed.data.notes);
     if (!changed) throw new AppError("Buyer verification not found.", 404);
     return NextResponse.json({ message: "Buyer verification updated." });
   } catch (error) {

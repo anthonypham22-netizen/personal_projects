@@ -11,18 +11,11 @@ import type {
   BuyerVerificationAdminEntry,
   User,
 } from "./types";
+import { BUYER_IDENTITY_VERIFICATION_STATUSES } from "./types";
 import { randomUUID } from "node:crypto";
 
-const adminEmails = () =>
-  new Set(
-    (process.env.ADMIN_EMAILS || "")
-      .split(",")
-      .map((email) => email.trim().toLowerCase())
-      .filter(Boolean),
-  );
-
-export const isAdmin = (user: Pick<User, "email">) =>
-  adminEmails().has(user.email.trim().toLowerCase());
+export const isPlatformAdmin = (user: Pick<User, "is_platform_admin">) =>
+  user.is_platform_admin === 1;
 
 const normalizeVerification = (
   verification: BuyerIdentityVerification | undefined,
@@ -62,11 +55,12 @@ export async function listBuyerVerificationsForAdmin(
   admin: User,
   database: DatabaseClient = db(),
 ): Promise<BuyerVerificationAdminEntry[]> {
-  if (!isAdmin(admin)) return [];
+  if (!isPlatformAdmin(admin)) return [];
   const rows = await database
     .prepare(
       `SELECT verification.*,buyer.name buyer_name,buyer.email buyer_email,
          buyer.company buyer_company,buyer.province buyer_province,
+         buyer.role buyer_role,
          buyer.sectors buyer_sectors,buyer.min_revenue buyer_min_revenue,
          buyer.max_revenue buyer_max_revenue,
          reviewer.name reviewer_name,reviewer.email reviewer_email
@@ -85,16 +79,40 @@ export async function listBuyerVerificationsForAdmin(
   ) as BuyerVerificationAdminEntry[];
 }
 
+export async function buyerVerificationCountsForAdmin(
+  admin: User,
+  database: DatabaseClient = db(),
+) {
+  const counts = Object.fromEntries(
+    BUYER_IDENTITY_VERIFICATION_STATUSES.map((status) => [status, 0]),
+  ) as Record<BuyerIdentityVerificationStatus, number>;
+  if (!isPlatformAdmin(admin)) return counts;
+  const rows = await database
+    .prepare(
+      `SELECT verification.status,COUNT(*) count
+       FROM buyer_verifications verification
+       JOIN users buyer ON buyer.id=verification.user_id
+       WHERE buyer.is_demo=?
+       GROUP BY verification.status`,
+    )
+    .all<{ status: BuyerIdentityVerificationStatus; count: number }>(
+      admin.is_demo,
+    );
+  for (const row of rows) counts[row.status] = row.count;
+  return counts;
+}
+
 export async function buyerVerificationForAdmin(
   admin: User,
   verificationId: string,
   database: DatabaseClient = db(),
 ): Promise<BuyerVerificationAdminEntry | undefined> {
-  if (!isAdmin(admin)) return undefined;
+  if (!isPlatformAdmin(admin)) return undefined;
   const row = await database
     .prepare(
       `SELECT verification.*,buyer.name buyer_name,buyer.email buyer_email,
        buyer.company buyer_company,buyer.province buyer_province,
+       buyer.role buyer_role,
        buyer.sectors buyer_sectors,buyer.min_revenue buyer_min_revenue,
        buyer.max_revenue buyer_max_revenue,
        reviewer.name reviewer_name,reviewer.email reviewer_email
@@ -162,14 +180,16 @@ export async function submitBuyerIdentityVerification(
   return true;
 }
 
-export async function reviewBuyerIdentityVerification(
+async function reviewBuyerIdentityVerification(
   admin: User,
   verificationId: string,
   status: BuyerIdentityVerificationStatus,
   notes: string,
   database: DatabaseClient = db(),
 ) {
-  if (!isAdmin(admin)) return false;
+  if (!isPlatformAdmin(admin)) return false;
+  const normalizedNotes = notes.trim();
+  if (status !== "approved" && normalizedNotes.length < 10) return false;
   const result = await database
     .prepare(
       `UPDATE buyer_verifications verification
@@ -177,8 +197,60 @@ export async function reviewBuyerIdentityVerification(
          reviewed_by=?,updated_at=CURRENT_TIMESTAMP
        FROM users buyer
        WHERE verification.id=? AND buyer.id=verification.user_id
-         AND buyer.is_demo=?`,
+         AND buyer.is_demo=? AND verification.user_id<>?`,
     )
-    .run(status, notes, admin.id, verificationId, admin.is_demo);
+    .run(
+      status,
+      normalizedNotes,
+      admin.id,
+      verificationId,
+      admin.is_demo,
+      admin.id,
+    );
   return result.changes > 0;
+}
+
+export async function approveBuyerVerification(
+  admin: User,
+  verificationId: string,
+  notes: string,
+  database: DatabaseClient = db(),
+) {
+  return reviewBuyerIdentityVerification(
+    admin,
+    verificationId,
+    "approved",
+    notes,
+    database,
+  );
+}
+
+export async function requestBuyerVerificationInfo(
+  admin: User,
+  verificationId: string,
+  notes: string,
+  database: DatabaseClient = db(),
+) {
+  return reviewBuyerIdentityVerification(
+    admin,
+    verificationId,
+    "needs_info",
+    notes,
+    database,
+  );
+}
+
+export async function rejectBuyerVerification(
+  admin: User,
+  verificationId: string,
+  notes: string,
+  database: DatabaseClient = db(),
+) {
+  return reviewBuyerIdentityVerification(
+    admin,
+    verificationId,
+    "rejected",
+    notes,
+    database,
+  );
 }

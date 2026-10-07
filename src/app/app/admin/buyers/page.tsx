@@ -1,8 +1,12 @@
 import Link from "next/link";
 import { ArrowRight, ShieldCheck } from "lucide-react";
-import { requireAdmin } from "@/lib/auth";
+import { requirePlatformAdmin } from "@/lib/auth";
 import { listBuyerVerificationsForAdmin } from "@/lib/buyer-identity-verification";
-import type { BuyerIdentityVerificationStatus } from "@/lib/types";
+import {
+  BUYER_IDENTITY_VERIFICATION_STATUSES,
+  BUYER_IDENTITY_VERIFICATION_STATUS_LABELS,
+  type BuyerIdentityVerificationStatus,
+} from "@/lib/types";
 import { Brand } from "@/components/brand";
 
 export const dynamic = "force-dynamic";
@@ -12,10 +16,10 @@ export const metadata = {
 };
 
 const filters = [
-  ["pending", "Pending"],
-  ["needs_info", "Needs info"],
-  ["approved", "Approved"],
-  ["rejected", "Rejected"],
+  ...BUYER_IDENTITY_VERIFICATION_STATUSES.map(
+    (status) =>
+      [status, BUYER_IDENTITY_VERIFICATION_STATUS_LABELS[status]] as const,
+  ),
   ["all", "All"],
 ] as const;
 
@@ -40,7 +44,7 @@ export default async function BuyerReviewsPage({
 }: {
   searchParams: Promise<{ status?: string | string[] }>;
 }) {
-  const admin = await requireAdmin();
+  const admin = await requirePlatformAdmin();
 
   const requestedStatus = (await searchParams).status;
   const selected = filters.some(([value]) => value === requestedStatus)
@@ -129,9 +133,18 @@ export default async function BuyerReviewsPage({
             </Link>
           ))}
           {!visible.length && (
-            <p className="notice">
-              No buyer profiles match this review status.
-            </p>
+            <div className="admin-review-empty">
+              <strong>
+                {selected === "pending"
+                  ? "No buyer reviews waiting"
+                  : "No buyer profiles match this review status"}
+              </strong>
+              <p>
+                {selected === "pending"
+                  ? "New buyer verification submissions will appear here."
+                  : "Choose another status to continue reviewing applications."}
+              </p>
+            </div>
           )}
         </div>
       </main>

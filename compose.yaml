@@ -7,7 +7,6 @@ services:
       APP_URL: ${APP_URL:?Set APP_URL in .env}
       DATABASE_URL: ${DATABASE_URL:?Set the environment-specific Supabase Postgres connection in .env}
       DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
-      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       DATA_DIR: /app/data
       ALLOW_DEMO: ${ALLOW_DEMO:-false}
       COOKIE_SECURE: "true"

@@ -19,7 +19,7 @@ import {
 } from "../src/lib/service";
 import type { User, Document } from "../src/lib/types";
 import { notifyUsers } from "../src/lib/notifications";
-import { reviewBuyerIdentityVerification } from "../src/lib/buyer-identity-verification";
+import { approveBuyerVerification } from "../src/lib/buyer-identity-verification";
 let directory: string;
 let buyer: User, otherBuyer: User, owner: User, advisor: User;
 before(async () => {
@@ -2403,7 +2403,6 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
       role: "advisor",
     }),
   ))!.id;
-  process.env.ADMIN_EMAILS = verificationReviewerEmail;
   await run(
     "UPDATE users SET is_platform_admin=1 WHERE id=?",
     verificationReviewerId,
@@ -2440,10 +2439,9 @@ test("Qualified Discovery requires an eligible project and seller-approved intro
         .buyer_identity_verification;
       assert.ok(identityVerification);
       assert.equal(
-        await reviewBuyerIdentityVerification(
+        await approveBuyerVerification(
           verificationReviewer,
           identityVerification.id,
-          "approved",
           "Buyer identity and profile reviewed for test access.",
         ),
         true,

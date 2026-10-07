@@ -33,14 +33,14 @@ This is an operational checklist, not a claim of legal or security compliance.
 - [ ] `anon` and `authenticated` cannot read sensitive application tables,
       including users, password hashes, session digests, confidential deals,
       documents, buyer reviews, messages, tasks, and offers.
-- [ ] Database credentials and `ADMIN_EMAILS` exist only in server secret stores.
+- [ ] Database credentials exist only in server secret stores.
 - [ ] No policy assumes Supabase `auth.uid()` because Succera still uses custom
       authentication.
 
 ## Buyer profile review
 
-- [ ] `ADMIN_EMAILS` contains only current internal Succera reviewers and has
-      been tested case-insensitively.
+- [ ] Each internal reviewer was explicitly promoted by setting only their
+      `users.is_platform_admin` flag after confirming one exact account match.
 - [ ] Owner and advisor accounts cannot submit buyer profiles.
 - [ ] Buyers cannot approve or otherwise set their own review status.
 - [ ] Non-admins receive no admin navigation and cannot load admin routes or

@@ -1,5 +1,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { PDFDocument } from "pdf-lib";
+import {
+  E2E_PLATFORM_ADMIN_EMAIL,
+  E2E_PLATFORM_ADMIN_PASSWORD,
+} from "./platform-admin-fixture";
 
 const E2E_ORIGIN = "http://localhost:3317";
 
@@ -1058,18 +1062,15 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
     headers,
     data: { action: "logout" },
   });
-  const reviewerEmail = "discovery-reviewer@example.test";
+  const reviewerEmail = E2E_PLATFORM_ADMIN_EMAIL;
   expect(
     (
       await page.request.post("/api/auth", {
         headers,
         data: {
-          action: "register",
-          name: "Discovery Verification Reviewer",
-          company: `Platform Operations ${suffix}`,
+          action: "login",
           email: reviewerEmail,
-          password,
-          role: "advisor",
+          password: E2E_PLATFORM_ADMIN_PASSWORD,
         },
       })
     ).status(),
@@ -1099,7 +1100,7 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
         {
           headers,
           data: {
-            status: "approved",
+            action: "approve",
             notes: "Buyer identity and profile reviewed for discovery testing.",
           },
         },
@@ -1852,32 +1853,32 @@ test("buyer submits a profile and a Succera admin approves it", async ({
     headers,
     data: { action: "logout" },
   });
-  const reviewerEmail = "verification-reviewer@example.test";
+  const reviewerEmail = E2E_PLATFORM_ADMIN_EMAIL;
   expect(
     (
       await page.request.post("/api/auth", {
         headers,
         data: {
-          action: "register",
-          name: "Verification Operations Reviewer",
-          company: `Platform Operations ${suffix}`,
+          action: "login",
           email: reviewerEmail,
-          password,
-          role: "advisor",
+          password: E2E_PLATFORM_ADMIN_PASSWORD,
         },
       })
     ).status(),
   ).toBe(200);
-  await page.goto("/app/admin/buyers");
+  await page.goto("/app/admin");
+  await expect(
+    page.getByRole("heading", { name: "Platform administration" }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: /Open review queue/ }).click();
   await expect(
     page.getByRole("heading", { name: "Buyer reviews" }),
   ).toBeVisible();
   await page.getByRole("link", { name: new RegExp(firm) }).click();
-  await page.getByLabel("Decision").selectOption("approved");
   await page
     .getByLabel("Review note")
     .fill("Profile and representative identity reviewed.");
-  await page.getByRole("button", { name: "Save decision" }).click();
+  await page.getByRole("button", { name: "Approve", exact: true }).click();
   await expect(
     page.getByRole("status").getByText("Buyer verification updated."),
   ).toBeVisible();
@@ -1894,6 +1895,78 @@ test("buyer submits a profile and a Succera admin approves it", async ({
   await page.goto("/app/verification");
   await expect(
     page.getByText("Buyer profile reviewed", { exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test("platform administration is hidden from anonymous and marketplace users", async ({
+  page,
+}) => {
+  const headers = { Origin: E2E_ORIGIN };
+  const suffix = Date.now();
+  await page.goto("/app/admin");
+  await expect(page).toHaveURL(/\/login$/);
+
+  for (const role of ["buyer", "owner", "advisor"] as const) {
+    expect(
+      (
+        await page.request.post("/api/auth", {
+          headers,
+          data: {
+            action: "register",
+            name: `Normal ${role}`,
+            company: `Normal ${role} company ${suffix}`,
+            email: `normal-${role}-${suffix}@example.test`,
+            password: "marketplace-user-password-2026",
+            role,
+          },
+        })
+      ).status(),
+    ).toBe(200);
+    await page.goto("/app/admin");
+    await expect(
+      page.getByRole("heading", { name: "Page not found." }),
+    ).toBeVisible();
+    if (role === "buyer") {
+      await page.goto("/app/admin/buyers");
+      await expect(
+        page.getByRole("heading", { name: "Page not found." }),
+      ).toBeVisible();
+      await page.goto("/app/admin/buyers/not-a-verification");
+      await expect(
+        page.getByRole("heading", { name: "Page not found." }),
+      ).toBeVisible();
+    }
+    await page.request.post("/api/auth", {
+      headers,
+      data: { action: "logout" },
+    });
+  }
+
+  expect(
+    (
+      await page.request.post("/api/auth", {
+        headers,
+        data: {
+          action: "login",
+          email: E2E_PLATFORM_ADMIN_EMAIL,
+          password: E2E_PLATFORM_ADMIN_PASSWORD,
+        },
+      })
+    ).status(),
+  ).toBe(200);
+  await page.goto("/app/admin");
+  await expect(
+    page.getByRole("heading", { name: "Platform administration" }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/app/admin/buyers");
+  await expect(
+    page.getByRole("heading", { name: "Buyer reviews" }),
   ).toBeVisible();
   expect(
     await page.evaluate(

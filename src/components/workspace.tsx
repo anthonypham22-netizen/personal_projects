@@ -965,7 +965,7 @@ export function Workspace({
       setBusy(false);
     }
   };
-  const nav = [
+  const workspaceNav = [
     { id: "overview", label: "Overview", Icon: LayoutDashboard },
     { id: "opportunities", label: "Discover", Icon: Compass },
     ...(buyerOrganizationTypes.has(data.organization.organization_type)
@@ -993,24 +993,27 @@ export function Workspace({
             id: "verification",
             label:
               data.is_platform_admin && data.user.role !== "buyer"
-                ? "Buyer reviews"
+                ? "Organization verification"
                 : "Verification",
             Icon: ShieldCheck,
           },
         ]
       : []),
-    ...(data.is_admin
-      ? [
-          {
-            id: "admin/buyers",
-            label: "Buyer approvals",
-            Icon: ShieldAlert,
-          },
-        ]
-      : []),
     { id: "settings", label: "Settings", Icon: Settings },
   ];
-  const current = nav.find((n) => n.id === section)?.label || "Workspace";
+  const adminNav = data.is_platform_admin
+    ? [
+        { id: "admin", label: "Admin home", Icon: ShieldCheck },
+        {
+          id: "admin/buyers",
+          label: "Buyer identity reviews",
+          Icon: ShieldAlert,
+        },
+      ]
+    : [];
+  const allNav = [...workspaceNav, ...adminNav];
+  const current =
+    allNav.find((item) => item.id === section)?.label || "Workspace";
   const deal = dealId ? data.deals.find((d) => d.id === dealId) : undefined;
   const logout = async () => {
     try {
@@ -1043,7 +1046,7 @@ export function Workspace({
           </div>
           <p className="nav-label">WORKSPACE</p>
           <nav aria-label="Workspace navigation">
-            {nav.map(({ id, label, Icon }) => (
+            {workspaceNav.map(({ id, label, Icon }) => (
               <Link
                 href={id === "overview" ? "/app" : `/app/${id}`}
                 key={id}
@@ -1061,6 +1064,19 @@ export function Workspace({
               </Link>
             ))}
           </nav>
+          {adminNav.length > 0 && (
+            <>
+              <p className="nav-label admin-nav-label">ADMIN</p>
+              <nav aria-label="Platform administration">
+                {adminNav.map(({ id, label, Icon }) => (
+                  <Link href={`/app/${id}`} key={id}>
+                    <Icon size={18} strokeWidth={1.7} />
+                    {label}
+                  </Link>
+                ))}
+              </nav>
+            </>
+          )}
           <div className="sidebar-bottom">
             <div className="workspace-note">
               <strong className="flex items-center gap-1">
@@ -1122,6 +1138,9 @@ export function Workspace({
                   Account
                 </Link>
               ) : null}
+              {data.is_platform_admin && (
+                <span className="badge">Platform admin</span>
+              )}
               <button
                 className="icon-button lg:hidden"
                 onClick={() => void logout()}
@@ -1132,7 +1151,7 @@ export function Workspace({
             </div>
           </header>
           <nav className="mobile-nav" aria-label="Mobile workspace navigation">
-            {nav.map((n) => (
+            {allNav.map((n) => (
               <Link
                 key={n.id}
                 href={n.id === "overview" ? "/app" : `/app/${n.id}`}

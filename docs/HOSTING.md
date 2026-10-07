@@ -9,14 +9,14 @@ single-host Docker development continue to use the private `DATA_DIR` filesystem
 
 Use three physically separate environments:
 
-| Boundary         | Local            | Staging                                                   | Production                  |
-| ---------------- | ---------------- | --------------------------------------------------------- | --------------------------- |
-| `APP_ENV`        | `development`    | `staging`                                                 | `production`                |
-| Database         | isolated PGlite  | separate staging Supabase project/branch when provisioned | Succera Production          |
-| Project ref      | none             | not yet provisioned                                       | `vtfzevaizyvgmynnyxsb`      |
-| Region           | local            | choose deliberately                                       | `ca-central-1`              |
-| `ALLOW_DEMO`     | `true`           | `true` for fictional QA                                   | `false`                     |
-| Data             | fictional/local  | fictional only                                            | approved customer data      |
+| Boundary         | Local            | Staging                                                   | Production                   |
+| ---------------- | ---------------- | --------------------------------------------------------- | ---------------------------- |
+| `APP_ENV`        | `development`    | `staging`                                                 | `production`                 |
+| Database         | isolated PGlite  | separate staging Supabase project/branch when provisioned | Succera Production           |
+| Project ref      | none             | not yet provisioned                                       | `vtfzevaizyvgmynnyxsb`       |
+| Region           | local            | choose deliberately                                       | `ca-central-1`               |
+| `ALLOW_DEMO`     | `true`           | `true` for fictional QA                                   | `false`                      |
+| Data             | fictional/local  | fictional only                                            | approved customer data       |
 | Document storage | local `DATA_DIR` | separate private store                                    | private Blob store in `yul1` |
 
 The older US-East Supabase project is not a Succera deployment target. Do not
@@ -68,7 +68,6 @@ APP_DOMAIN=succera.io
 APP_URL=https://succera.io
 DATABASE_URL=postgresql://SERVER_ONLY_SUPABASE_CONNECTION
 DATABASE_POOL_MAX=10
-ADMIN_EMAILS=reviewer@succera.example
 PRIVATE_FILE_STORAGE=vercel_blob
 # BLOB_READ_WRITE_TOKEN is injected by the linked private Vercel Blob store.
 ALLOW_DEMO=false
@@ -78,8 +77,8 @@ PUBLIC_NETWORK_INDEXING_ENABLED=false
 ```
 
 The production `DATABASE_URL` is accepted only when it identifies project ref
-`vtfzevaizyvgmynnyxsb`. Keep it and `ADMIN_EMAILS` in the deployment secret
-store, never source control, client JavaScript, or `NEXT_PUBLIC_*` variables.
+`vtfzevaizyvgmynnyxsb`. Keep it in the deployment secret store, never source
+control, client JavaScript, or `NEXT_PUBLIC_*` variables.
 Use Supabase's connection endpoint appropriate for a persistent Node server and
 size `DATABASE_POOL_MAX` conservatively for the plan's connection limit.
 
@@ -123,7 +122,8 @@ After deployment confirm:
 - anonymous and cross-buyer document requests fail;
 - an unapproved buyer cannot request confidential access or submit an LOI;
 - an approved buyer can enter the seller-controlled introduction/NDA workflow;
-- only `ADMIN_EMAILS` users can open `/app/admin/buyers` or review profiles;
+- only users explicitly marked with `users.is_platform_admin = 1` can open
+  `/app/admin` or review buyer profiles;
 - uploads survive a restart and are accessible only through authorized Succera
   application routes.
 

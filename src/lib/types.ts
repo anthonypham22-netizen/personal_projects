@@ -50,6 +50,15 @@ export const BUYER_IDENTITY_VERIFICATION_STATUSES = [
 ] as const;
 export type BuyerIdentityVerificationStatus =
   (typeof BUYER_IDENTITY_VERIFICATION_STATUSES)[number];
+export const BUYER_IDENTITY_VERIFICATION_STATUS_LABELS: Record<
+  BuyerIdentityVerificationStatus,
+  string
+> = {
+  pending: "Pending",
+  needs_info: "Needs info",
+  approved: "Approved",
+  rejected: "Rejected",
+};
 export const BUYER_IDENTITY_TYPES = [
   "independent_sponsor",
   "search_fund",
@@ -106,6 +115,7 @@ export type BuyerVerificationAdminEntry = BuyerIdentityVerification & {
   buyer_email: string;
   buyer_company: string;
   buyer_province: string;
+  buyer_role: Role;
   buyer_sectors: string;
   buyer_min_revenue: number;
   buyer_max_revenue: number;
@@ -944,7 +954,6 @@ export type WorkspaceData = {
   public_network_profile?: PublicOrganizationProfile;
   closed_transactions: ClosedTransaction[];
   is_platform_admin: boolean;
-  is_admin: boolean;
   verification_admin_queue?: VerificationAdminEntry[];
   verification_reviews?: VerificationReview[];
   closed_transaction_review_queue?: ClosedTransactionReviewEntry[];

@@ -4,13 +4,19 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  approveBuyerVerification,
   buyerIdentityVerificationForUser,
+  buyerVerificationCountsForAdmin,
+  isPlatformAdmin,
   listBuyerVerificationsForAdmin,
-  reviewBuyerIdentityVerification,
+  rejectBuyerVerification,
+  requestBuyerVerificationInfo,
 } from "../src/lib/buyer-identity-verification";
 import { closeDatabase, databaseReady, run } from "../src/lib/db";
 import {
   createSession,
+  canAccess,
+  getDeal,
   mutate,
   register,
   sessionUser,
@@ -71,7 +77,8 @@ before(async () => {
     "Review Advisory Inc.",
   );
   admin = await registerUser("ReviewAdmin", "advisor", "Succera Operations");
-  process.env.ADMIN_EMAILS = `  ${admin.email.toUpperCase()}  `;
+  await run("UPDATE users SET is_platform_admin=1 WHERE id=?", admin.id);
+  admin.is_platform_admin = 1;
   approvedBuyer = await registerUser(
     "ApprovedBuyer",
     "buyer",
@@ -129,7 +136,6 @@ before(async () => {
 });
 
 after(async () => {
-  delete process.env.ADMIN_EMAILS;
   await closeDatabase();
   rmSync(directory, { recursive: true, force: true });
 });
@@ -159,10 +165,9 @@ test("buyer submissions are role-scoped and admin review supports the full workf
   assert.equal(verification?.authorized_to_represent, true);
 
   assert.equal(
-    await reviewBuyerIdentityVerification(
+    await approveBuyerVerification(
       approvedBuyer,
       verification!.id,
-      "approved",
       "A buyer cannot approve itself.",
     ),
     false,
@@ -176,10 +181,9 @@ test("buyer submissions are role-scoped and admin review supports the full workf
   );
 
   assert.equal(
-    await reviewBuyerIdentityVerification(
+    await requestBuyerVerificationInfo(
       admin,
       verification!.id,
-      "needs_info",
       "Please clarify the buyer's committed capital source.",
     ),
     true,
@@ -187,6 +191,13 @@ test("buyer submissions are role-scoped and admin review supports the full workf
   verification = await buyerIdentityVerificationForUser(approvedBuyer.id);
   assert.equal(verification?.status, "needs_info");
   assert.match(verification?.review_notes ?? "", /clarify/i);
+  assert.equal(verification?.reviewed_by, admin.id);
+  assert.ok(verification?.reviewed_at);
+  assert.match(
+    (await workspace(approvedBuyer)).buyer_identity_verification
+      ?.review_notes ?? "",
+    /clarify/i,
+  );
 
   await mutate(approvedBuyer, {
     action: "submitBuyerIdentityVerification",
@@ -203,10 +214,9 @@ test("buyer submissions are role-scoped and admin review supports the full workf
   assert.equal(verification?.review_notes, "");
 
   assert.equal(
-    await reviewBuyerIdentityVerification(
+    await approveBuyerVerification(
       admin,
       verification!.id,
-      "approved",
       "Profile and representative identity reviewed.",
     ),
     true,
@@ -229,10 +239,9 @@ test("buyer submissions are role-scoped and admin review supports the full workf
   });
   const rejected = await buyerIdentityVerificationForUser(rejectedBuyer.id);
   assert.equal(
-    await reviewBuyerIdentityVerification(
+    await rejectBuyerVerification(
       admin,
       rejected!.id,
-      "rejected",
       "The submitted representative details could not be confirmed.",
     ),
     true,
@@ -246,6 +255,43 @@ test("buyer submissions are role-scoped and admin review supports the full workf
     action: "submitBuyerIdentityVerification",
     data: { ...submission, website_url: "https://pending.example.test" },
   });
+  const pending = await buyerIdentityVerificationForUser(pendingBuyer.id);
+  await run("UPDATE users SET is_platform_admin=1 WHERE id=?", pendingBuyer.id);
+  pendingBuyer.is_platform_admin = 1;
+  assert.equal(
+    await approveBuyerVerification(
+      pendingBuyer,
+      pending!.id,
+      "A platform administrator cannot review their own application.",
+    ),
+    false,
+  );
+  assert.equal(
+    (await buyerIdentityVerificationForUser(pendingBuyer.id))?.status,
+    "pending",
+  );
+  await run("UPDATE users SET is_platform_admin=0 WHERE id=?", pendingBuyer.id);
+  pendingBuyer.is_platform_admin = 0;
+});
+
+test("platform administration is granted only by the persisted admin flag", async () => {
+  process.env.ADMIN_EMAILS = owner.email;
+  assert.equal(isPlatformAdmin(owner), false);
+  assert.equal(isPlatformAdmin(advisor), false);
+  assert.equal(isPlatformAdmin(admin), true);
+  assert.deepEqual(await listBuyerVerificationsForAdmin(owner), []);
+  assert.deepEqual(await buyerVerificationCountsForAdmin(owner), {
+    pending: 0,
+    needs_info: 0,
+    approved: 0,
+    rejected: 0,
+  });
+  const counts = await buyerVerificationCountsForAdmin(admin);
+  assert.equal(counts.approved, 1);
+  assert.equal(counts.needs_info, 0);
+  assert.equal(counts.rejected, 1);
+  assert.equal(counts.pending, 1);
+  delete process.env.ADMIN_EMAILS;
 });
 
 test("buyer verification normalizes natural website and LinkedIn URLs", async () => {
@@ -385,7 +431,6 @@ test("admin review queues preserve demo and real-user isolation", async () => {
     false,
   );
 
-  process.env.ADMIN_EMAILS = `${admin.email},advisor@example.test`;
   const demoAdmin = (await sessionUser(await createSession("demo-advisor")))!;
   const demoQueue = await listBuyerVerificationsForAdmin(demoAdmin);
   assert.equal(demoQueue.length > 0, true);
@@ -403,4 +448,6 @@ test("admin review queues preserve demo and real-user isolation", async () => {
     approvedWorkspace.buyer_identity_verification?.status,
     "approved",
   );
+
+  assert.equal(await canAccess(admin, await getDeal(dealId)), false);
 });
