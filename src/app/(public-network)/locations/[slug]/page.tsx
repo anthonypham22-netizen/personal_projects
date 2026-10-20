@@ -3,6 +3,7 @@ import { ArrowRight } from "lucide-react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { PublicFirmGrid } from "@/components/public-network";
+import { pilotCapabilities } from "@/lib/pilot-capabilities";
 import { getPublicLocationBySlug } from "@/lib/public-network";
 import { publicPageMetadata } from "@/lib/public-metadata";
 
@@ -13,6 +14,11 @@ export async function generateMetadata({
 }: {
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
+  if (!pilotCapabilities.publicNetwork)
+    return {
+      title: "Private network",
+      robots: { index: false, follow: false },
+    };
   const directory = await getPublicLocationBySlug((await params).slug);
   if (!directory)
     return {
@@ -31,6 +37,7 @@ export default async function LocationRoute({
 }: {
   params: Promise<{ slug: string }>;
 }) {
+  if (!pilotCapabilities.publicNetwork) return null;
   const directory = await getPublicLocationBySlug((await params).slug);
   if (!directory) notFound();
   return (

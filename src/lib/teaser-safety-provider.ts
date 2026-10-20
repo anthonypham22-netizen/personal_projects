@@ -8,6 +8,7 @@ import {
 } from "./teaser-safety";
 import type { TeaserSafetyCapability } from "./types";
 import { isDemoAllowed } from "./app-environment";
+import { pilotCapabilities } from "./pilot-capabilities";
 
 const developmentProvider = (): TeaserSafetyProvider => ({
   id: "development",
@@ -166,6 +167,14 @@ export function configuredTeaserSafetyProvider():
 }
 
 export function teaserSafetyCapability(): TeaserSafetyCapability {
+  if (!pilotCapabilities.externalTeaserSafety)
+    return {
+      available: false,
+      provider_name: null,
+      external_data_processing: false,
+      notice:
+        "Automated teaser review is unavailable during the pilot. Review the anonymized teaser manually before sharing.",
+    };
   const provider = configuredTeaserSafetyProvider();
   return {
     available: Boolean(provider),
@@ -175,6 +184,6 @@ export function teaserSafetyCapability(): TeaserSafetyCapability {
       ? "The teaser draft is sent to the configured AI provider for this review. Legal company name, confidential summary, exact city, and customer records are not added by Succera."
       : provider
         ? "This development assistant runs locally and does not send the teaser to an external model."
-        : "No teaser safety provider is configured. The feature remains unavailable until an approved provider and data-handling policy are configured.",
+        : "Automated teaser review is unavailable during the pilot. Review the anonymized teaser manually before sharing.",
   };
 }

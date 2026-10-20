@@ -12,20 +12,25 @@ import {
   publicDirectorySlug,
 } from "@/lib/public-network";
 import {
+  noIndexMetadata,
   publicPageMetadata,
   isPublicNetworkIndexingEnabled,
 } from "@/lib/public-metadata";
+import { pilotCapabilities } from "@/lib/pilot-capabilities";
 
 export const dynamic = "force-dynamic";
 
-export const metadata = publicPageMetadata({
-  title: "The network",
-  description:
-    "Explore opt-in Canadian acquisition firms and M&A advisors on Succera. Confidential operating businesses and active deals remain private.",
-  path: "/network",
-});
+export const metadata = pilotCapabilities.publicNetwork
+  ? publicPageMetadata({
+      title: "The network",
+      description:
+        "Explore opt-in Canadian acquisition firms and M&A advisors on Succera. Confidential operating businesses and active deals remain private.",
+      path: "/network",
+    })
+  : noIndexMetadata;
 
 export default async function NetworkPage() {
+  if (!pilotCapabilities.publicNetwork) return null;
   const indexingEnabled = isPublicNetworkIndexingEnabled();
   const [firms, industries, locations, transactions] = await Promise.all([
     listPublicFirms(),

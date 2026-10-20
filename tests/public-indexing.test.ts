@@ -43,19 +43,24 @@ test("enabled indexing exposes only public-network routes", async () => {
   assert.deepEqual(robotsResult.rules, {
     userAgent: "*",
     allow: "/",
-    disallow: ["/app", "/api", "/login", "/register"],
+    disallow: [
+      "/app",
+      "/api",
+      "/login",
+      "/register",
+      "/network",
+      "/advisors",
+      "/buyers",
+      "/firms",
+      "/industries",
+      "/locations",
+      "/transactions",
+    ],
   });
   assert.equal(robotsResult.sitemap, "https://succera.example/sitemap.xml");
-
   const paths = (await sitemap()).map(({ url }) => new URL(url).pathname);
   assert.ok(paths.includes("/"));
-  assert.ok(paths.includes("/network"));
-  assert.ok(paths.includes("/buyers/evergreen-capital-demo-buyer"));
-  assert.ok(
-    paths.includes(
-      "/transactions/industrial-services-ontario-evergreen-services",
-    ),
-  );
+  assert.deepEqual(paths, ["/"]);
   assert.equal(
     paths.some((value) => value.startsWith("/app")),
     false,

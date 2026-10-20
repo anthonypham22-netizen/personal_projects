@@ -4,6 +4,7 @@ import { configuredElectronicSignatureProvider } from "@/lib/electronic-signatur
 import { requestElectronicNda } from "@/lib/electronic-signatures";
 import { checkOrigin, failure, jsonBody } from "@/lib/http";
 import { AppError } from "@/lib/service";
+import { pilotCapabilities } from "@/lib/pilot-capabilities";
 
 export const runtime = "nodejs";
 
@@ -18,6 +19,11 @@ export async function POST(request: Request) {
     };
     if (body.action !== "requestElectronicNda")
       throw new AppError("Unsupported electronic signature action.");
+    if (!pilotCapabilities.electronicSignatures)
+      throw new AppError(
+        "Electronic signatures are unavailable during the pilot. Use external NDA upload.",
+        503,
+      );
     const provider = configuredElectronicSignatureProvider();
     if (!provider)
       throw new AppError(

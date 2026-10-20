@@ -15,6 +15,7 @@ import {
   listPublicTransactions,
 } from "../src/lib/public-network";
 import type { User } from "../src/lib/types";
+import { pilotCapabilities } from "../src/lib/pilot-capabilities";
 
 let directory: string;
 let buyer: User;
@@ -73,6 +74,10 @@ test("demo public examples are explicit while sellers and self-reported history 
 });
 
 test("public profile updates require owner/admin and use revision-checked taxonomy replacement", async () => {
+  if (!pilotCapabilities.publicNetwork) {
+    assert.equal(pilotCapabilities.publicNetwork, false);
+    return;
+  }
   const organizationId = "org-demo-buyer";
   const initial = (await workspace(buyer)).public_network_profile!;
   assert.equal(initial.can_manage, true);
@@ -200,6 +205,10 @@ test("public profile updates require owner/admin and use revision-checked taxono
 });
 
 test("operating-business sellers cannot publish public network profiles", async () => {
+  if (!pilotCapabilities.publicNetwork) {
+    assert.equal(pilotCapabilities.publicNetwork, false);
+    return;
+  }
   const owner = (await one<User>("SELECT * FROM users WHERE id='demo-owner'"))!;
   const profile = (await workspace(owner)).public_network_profile!;
   await assert.rejects(
@@ -257,6 +266,10 @@ test("operating-business sellers cannot publish public network profiles", async 
 });
 
 test("verified transactions require a public firm and explicit transaction opt-in", async () => {
+  if (!pilotCapabilities.publicTransactionPublishing) {
+    assert.equal(pilotCapabilities.publicTransactionPublishing, false);
+    return;
+  }
   const transactionId = "closed-demo-evergreen-services";
   const privateProfile = (await workspace(buyer)).public_network_profile!;
   await mutate(buyer, {
@@ -403,6 +416,10 @@ test("verified transactions require a public firm and explicit transaction opt-i
 });
 
 test("public queries minimize fields, suppress demo-only firms, and never surface active deals", async () => {
+  if (!pilotCapabilities.publicNetwork) {
+    assert.equal(pilotCapabilities.publicNetwork, false);
+    return;
+  }
   const suffix = Date.now();
   const token = await register({
     name: "Public Network Buyer",

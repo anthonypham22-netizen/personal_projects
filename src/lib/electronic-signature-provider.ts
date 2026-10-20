@@ -4,6 +4,7 @@ import type {
   ElectronicSignatureStatus,
 } from "./types";
 import { isDemoAllowed } from "./app-environment";
+import { pilotCapabilities } from "./pilot-capabilities";
 
 export type CreateNdaEnvelopeInput = {
   localEnvelopeId: string;
@@ -126,6 +127,8 @@ export function electronicSignatureProviderForWebhook(providerId: string) {
 }
 
 export function electronicSignatureCapability(): ElectronicSignatureCapability {
+  if (!pilotCapabilities.electronicSignatures)
+    return { available: false, provider_name: null };
   const provider = configuredElectronicSignatureProvider();
   return {
     available: Boolean(provider),

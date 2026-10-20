@@ -37,12 +37,12 @@ export type TeaserSafetyReviewInput = {
   companyName: string;
   sector: string;
   province: string;
-  city: string;
-  revenue: number;
-  ebitda: number;
-  askingPrice: number;
-  employees: number;
-  founded: number;
+  city: string | null;
+  revenue: number | null;
+  ebitda: number | null;
+  askingPrice: number | null;
+  employees: number | null;
+  founded: number | null;
   transactionType: string;
   ownershipPercentageAvailable: number;
   sellerRolloverPossible: boolean;
@@ -238,7 +238,7 @@ export function deterministicTeaserFindings(
     });
   }
 
-  const city = input.city.trim();
+  const city = input.city?.trim() ?? "";
   if (city && lowerText.includes(normalized(city)))
     addFinding(findings, {
       type: "precise_location",
@@ -260,7 +260,11 @@ export function deterministicTeaserFindings(
       replacement: input.province,
     });
 
-  if (input.founded > 0 && new RegExp(`\\b${input.founded}\\b`).test(text))
+  if (
+    input.founded !== null &&
+    input.founded > 0 &&
+    new RegExp(`\\b${input.founded}\\b`).test(text)
+  )
     addFinding(findings, {
       type: "revealing_detail",
       severity: "low",
@@ -270,6 +274,7 @@ export function deterministicTeaserFindings(
       replacement: "an established business",
     });
   if (
+    input.employees !== null &&
     input.employees > 0 &&
     new RegExp(
       `\\b${input.employees}\\s+(?:employees?|staff|team members?)\\b`,
@@ -298,8 +303,8 @@ export function deterministicTeaserFindings(
   return findings;
 }
 
-const revenueBand = (amount: number) => {
-  if (amount <= 0) return null;
+const revenueBand = (amount: number | null) => {
+  if (amount === null || amount <= 0) return null;
   if (amount < 1_000_000) return "under C$1M";
   if (amount < 2_000_000) return "C$1M–C$2M";
   if (amount < 5_000_000) return "C$2M–C$5M";
@@ -308,8 +313,8 @@ const revenueBand = (amount: number) => {
   return "over C$20M";
 };
 
-const ebitdaBand = (amount: number) => {
-  if (amount <= 0) return null;
+const ebitdaBand = (amount: number | null) => {
+  if (amount === null || amount <= 0) return null;
   if (amount < 500_000) return "under C$500K";
   if (amount < 1_000_000) return "C$500K–C$1M";
   if (amount < 2_000_000) return "C$1M–C$2M";
@@ -347,12 +352,18 @@ const deterministicRewrite = (input: TeaserSafetyReviewInput) => {
     );
   else if (revenue)
     statements.push(`Annual revenue is in the ${revenue} range.`);
-  if (input.employees > 0)
+  if (input.employees !== null && input.employees > 0)
     statements.push(
       `Operations are supported by ${teamBand(input.employees)} people.`,
     );
-  const years = new Date().getUTCFullYear() - input.founded;
-  if (input.founded > 0 && years >= 5)
+  const years =
+    input.founded === null ? null : new Date().getUTCFullYear() - input.founded;
+  if (
+    input.founded !== null &&
+    years !== null &&
+    input.founded > 0 &&
+    years >= 5
+  )
     statements.push(
       `The business has more than ${Math.max(5, Math.floor(years / 5) * 5)} years of operating history.`,
     );
@@ -368,12 +379,23 @@ const deterministicHighlights = (input: TeaserSafetyReviewInput) => {
   const ebitda = ebitdaBand(input.ebitda);
   if (revenue) highlights.push(`Annual revenue in the ${revenue} range`);
   if (ebitda) highlights.push(`EBITDA in the ${ebitda} range`);
-  if (input.revenue > 0 && input.ebitda > 0)
+  if (
+    input.revenue !== null &&
+    input.ebitda !== null &&
+    input.revenue > 0 &&
+    input.ebitda > 0
+  )
     highlights.push(
       `Approximately ${Math.round((input.ebitda / input.revenue) * 100)}% EBITDA margin`,
     );
-  const years = new Date().getUTCFullYear() - input.founded;
-  if (input.founded > 0 && years >= 5)
+  const years =
+    input.founded === null ? null : new Date().getUTCFullYear() - input.founded;
+  if (
+    input.founded !== null &&
+    years !== null &&
+    input.founded > 0 &&
+    years >= 5
+  )
     highlights.push(
       `More than ${Math.max(5, Math.floor(years / 5) * 5)} years of operating history`,
     );
@@ -388,9 +410,11 @@ const deterministicHighlights = (input: TeaserSafetyReviewInput) => {
 
 const deterministicMissingFinancials = (input: TeaserSafetyReviewInput) => {
   const missing: string[] = [];
-  if (input.revenue <= 0) missing.push("Annual revenue");
-  if (input.ebitda <= 0) missing.push("EBITDA");
-  if (input.askingPrice <= 0) missing.push("Indicative valuation expectations");
+  if (input.revenue === null || input.revenue <= 0)
+    missing.push("Annual revenue");
+  if (input.ebitda === null || input.ebitda <= 0) missing.push("EBITDA");
+  if (input.askingPrice === null || input.askingPrice <= 0)
+    missing.push("Indicative valuation expectations");
   if (input.historicalFinancialPeriods <= 0)
     missing.push("Historical financial periods");
   if (

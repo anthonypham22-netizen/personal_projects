@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowRight, BadgeCheck, MapPin } from "lucide-react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { pilotCapabilities } from "@/lib/pilot-capabilities";
 import { getPublicTransactionBySlug } from "@/lib/public-network";
 import { publicPageMetadata } from "@/lib/public-metadata";
 
@@ -22,6 +23,11 @@ export async function generateMetadata({
 }: {
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
+  if (!pilotCapabilities.publicNetwork)
+    return {
+      title: "Private network",
+      robots: { index: false, follow: false },
+    };
   const transaction = await getPublicTransactionBySlug((await params).slug);
   if (!transaction)
     return {
@@ -40,6 +46,7 @@ export default async function TransactionRoute({
 }: {
   params: Promise<{ slug: string }>;
 }) {
+  if (!pilotCapabilities.publicNetwork) return null;
   const transaction = await getPublicTransactionBySlug((await params).slug);
   if (!transaction) notFound();
   return (

@@ -449,12 +449,12 @@ export type Deal = {
   company_name: string;
   sector: string;
   province: string;
-  city: string;
-  revenue: number;
-  ebitda: number;
-  asking_price: number;
-  employees: number;
-  founded: number;
+  city: string | null;
+  revenue: number | null;
+  ebitda: number | null;
+  asking_price: number | null;
+  employees: number | null;
+  founded: number | null;
   description: string;
   confidential_summary: string;
   transaction_type: DealTransactionType;
@@ -993,10 +993,12 @@ export const STAGES = [
   "Closing",
   "Closed",
 ];
-export const money = (n: number, compact = true) =>
-  new Intl.NumberFormat("en-CA", {
-    style: "currency",
-    currency: "CAD",
-    maximumFractionDigits: compact ? 1 : 0,
-    notation: compact ? "compact" : "standard",
-  }).format(n);
+export const money = (n: number | null, compact = true) =>
+  n === null
+    ? "Not provided"
+    : new Intl.NumberFormat("en-CA", {
+        style: "currency",
+        currency: "CAD",
+        maximumFractionDigits: compact ? 1 : 0,
+        notation: compact ? "compact" : "standard",
+      }).format(n);

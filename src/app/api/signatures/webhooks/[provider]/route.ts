@@ -3,6 +3,7 @@ import { electronicSignatureProviderForWebhook } from "@/lib/electronic-signatur
 import { processElectronicSignatureEvent } from "@/lib/electronic-signatures";
 import { failure } from "@/lib/http";
 import { AppError } from "@/lib/service";
+import { pilotCapabilities } from "@/lib/pilot-capabilities";
 
 export const runtime = "nodejs";
 
@@ -11,6 +12,8 @@ export async function POST(
   context: { params: Promise<{ provider: string }> },
 ) {
   try {
+    if (!pilotCapabilities.electronicSignatures)
+      throw new AppError("Electronic signatures are unavailable.", 404);
     const { provider: providerId } = await context.params;
     const provider = electronicSignatureProviderForWebhook(providerId);
     if (!provider) throw new AppError("Signing provider not configured.", 404);

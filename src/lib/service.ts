@@ -111,6 +111,7 @@ import {
   isPlatformAdmin,
   submitBuyerIdentityVerification,
 } from "./buyer-identity-verification";
+import { pilotCapabilities } from "./pilot-capabilities";
 
 export class AppError extends Error {
   constructor(
@@ -135,6 +136,22 @@ const optionalSignedAmount = z.preprocess(
   (value) =>
     value === "" || value === undefined || value === null ? null : value,
   z.coerce.number().int().min(-10_000_000_000).max(10_000_000_000).nullable(),
+);
+const optionalText = (max: number) =>
+  z.preprocess(
+    (value) =>
+      value === "" || value === undefined || value === null ? null : value,
+    z.string().trim().min(1).max(max).nullable(),
+  );
+const optionalCount = z.preprocess(
+  (value) =>
+    value === "" || value === undefined || value === null ? null : value,
+  z.coerce.number().int().min(0).max(100000).nullable(),
+);
+const optionalYear = z.preprocess(
+  (value) =>
+    value === "" || value === undefined || value === null ? null : value,
+  z.coerce.number().int().min(1800).max(new Date().getFullYear()).nullable(),
 );
 const normalizeOptionalHttpUrl = (value: unknown) => {
   if (value === "" || value === undefined || value === null) return null;
@@ -1127,7 +1144,11 @@ export function match(user: User, deal: Deal) {
     reasons.push("Industry fit");
   if (!user.province || user.province === deal.province)
     reasons.push("Geography fit");
-  if (deal.revenue >= user.min_revenue && deal.revenue <= user.max_revenue)
+  if (
+    deal.revenue !== null &&
+    deal.revenue >= user.min_revenue &&
+    deal.revenue <= user.max_revenue
+  )
     reasons.push("Revenue fit");
   return {
     match_score: Math.round((reasons.length / 3) * 100),
@@ -1136,16 +1157,22 @@ export function match(user: User, deal: Deal) {
 }
 
 const dealDetailsFields = {
-  title: text(3, 120),
+  title: z.preprocess(
+    (value) =>
+      value === "" || value === undefined || value === null
+        ? "Private mandate"
+        : value,
+    text(3, 120),
+  ),
   company_name: text(2, 180),
   sector: z.enum(SECTORS),
   province: z.enum(PROVINCES),
-  city: text(1, 100),
-  revenue: amount,
-  ebitda: amount,
-  asking_price: amount,
-  employees: z.coerce.number().int().min(0).max(100000),
-  founded: z.coerce.number().int().min(1800).max(new Date().getFullYear()),
+  city: optionalText(100),
+  revenue: optionalAmount,
+  ebitda: optionalSignedAmount,
+  asking_price: optionalAmount,
+  employees: optionalCount,
+  founded: optionalYear,
   description: text(30, 1200),
   confidential_summary: text(0, 5000),
   transaction_type: z.enum(DEAL_TRANSACTION_TYPES),
@@ -1160,6 +1187,14 @@ const dealDetailsFields = {
 };
 const dealDetailsSchema = z.object({
   ...dealDetailsFields,
+  title: dealDetailsFields.title.default("Private mandate"),
+  city: dealDetailsFields.city.default(null),
+  revenue: dealDetailsFields.revenue.default(null),
+  ebitda: dealDetailsFields.ebitda.default(null),
+  asking_price: dealDetailsFields.asking_price.default(null),
+  employees: dealDetailsFields.employees.default(null),
+  founded: dealDetailsFields.founded.default(null),
+  confidential_summary: dealDetailsFields.confidential_summary.default(""),
   transaction_type:
     dealDetailsFields.transaction_type.default("full_acquisition"),
   ownership_percentage_available:
@@ -1209,6 +1244,25 @@ const validateExpectedValueRange = (deal: {
     throw new AppError(
       "Minimum expected value must not exceed maximum expected value.",
     );
+};
+
+export function dealShareReadiness(
+  deal: Pick<Deal, "title" | "revenue" | "description">,
+) {
+  const missing: string[] = [];
+  if (!deal.title.trim() || deal.title === "Private mandate")
+    missing.push("project name");
+  if (deal.revenue === null) missing.push("annual revenue");
+  if (!deal.description.trim()) missing.push("anonymous business description");
+  return missing;
+}
+
+const requireDealReadyToShare = (
+  deal: Pick<Deal, "title" | "revenue" | "description">,
+) => {
+  const missing = dealShareReadiness(deal);
+  if (missing.length)
+    throw new AppError(`Complete before sharing: ${missing.join(", ")}.`, 409);
 };
 
 const buyerOrganizationTypes = new Set<OrganizationType>(
@@ -2301,6 +2355,11 @@ export async function mutate(
       }),
       data,
     );
+    if (profile.is_public && !pilotCapabilities.publicNetwork)
+      throw new AppError(
+        "Public directory profiles are unavailable during the pilot.",
+        503,
+      );
     if (
       new Set(profile.industries).size !== profile.industries.length ||
       new Set(profile.locations).size !== profile.locations.length
@@ -2381,6 +2440,11 @@ export async function mutate(
       z.object({ transaction_id: idSchema, public_opt_in: z.boolean() }),
       data,
     );
+    if (p.public_opt_in && !pilotCapabilities.publicTransactionPublishing)
+      throw new AppError(
+        "Public transaction publishing is unavailable during the pilot.",
+        503,
+      );
     const database = db();
     await inTransaction(database, async (transaction) => {
       const target = (await transaction
@@ -2985,21 +3049,22 @@ export async function mutate(
           p.max_expected_value,
           p.distribution_mode,
         );
-      await transaction
-        .prepare(
-          `INSERT INTO deal_financials(
-            id,deal_id,fiscal_year,period_type,revenue,ebitda,gross_profit,is_projected
-          ) VALUES(?,?,?,'annual',?,?,?,?)`,
-        )
-        .run(
-          financialId,
-          id,
-          p.financial_year,
-          p.revenue,
-          p.ebitda,
-          p.gross_profit,
-          p.financial_is_projected ? 1 : 0,
-        );
+      if (p.revenue !== null && p.ebitda !== null)
+        await transaction
+          .prepare(
+            `INSERT INTO deal_financials(
+              id,deal_id,fiscal_year,period_type,revenue,ebitda,gross_profit,is_projected
+            ) VALUES(?,?,?,'annual',?,?,?,?)`,
+          )
+          .run(
+            financialId,
+            id,
+            p.financial_year,
+            p.revenue,
+            p.ebitda,
+            p.gross_profit,
+            p.financial_is_projected ? 1 : 0,
+          );
       await recalculateDealMatches(transaction, id);
     });
     await audit(user, id, "Created a private mandate");
@@ -3018,6 +3083,11 @@ export async function mutate(
     throw new AppError("This deal is not available.", 404);
   if (action === "applyTeaserSafetySuggestion") {
     await requireManager(user, deal);
+    if (!pilotCapabilities.externalTeaserSafety)
+      throw new AppError(
+        "Automated teaser review is unavailable during the pilot. Review and edit the anonymous teaser manually.",
+        503,
+      );
     const reviewId = parse(idSchema, data.review_id);
     const database = db();
     await inTransaction(database, async (transaction) => {
@@ -3313,6 +3383,7 @@ export async function mutate(
   }
   if (action === "shareTeaser") {
     await requireManager(user, deal);
+    requireDealReadyToShare(deal);
     const p = parse(
       z.object({
         match_ids: z.array(idSchema).min(1).max(100),
@@ -3954,6 +4025,7 @@ export async function mutate(
       }),
       data,
     );
+    if (p.published) requireDealReadyToShare(deal);
     const database = db();
     await inTransaction(database, async (transaction) => {
       await transaction
@@ -3989,6 +4061,7 @@ export async function mutate(
         Boolean(deal.seller_financing_possible),
     });
     validateExpectedValueRange(p);
+    if (deal.published) requireDealReadyToShare(p);
     const database = db();
     await inTransaction(database, async (transaction) => {
       await transaction

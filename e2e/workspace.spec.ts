@@ -221,15 +221,12 @@ test("development role preview switches between seeded demo identities", async (
   }
 });
 
-test("public network exposes only opted-in firms and anonymized verified history", async ({
+test("public network is unavailable during the focused pilot", async ({
   page,
 }) => {
   await page.goto("/network");
-  await expect(page).toHaveTitle("The network · Succera");
   await expect(
-    page.getByRole("heading", {
-      name: "Find the people behind the next chapter.",
-    }),
+    page.getByRole("heading", { name: "Public directory unavailable." }),
   ).toBeVisible();
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
     "content",
@@ -237,33 +234,7 @@ test("public network exposes only opted-in firms and anonymized verified history
   );
   await expect(
     page.getByText("Evergreen Capital", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Northstar Advisory", { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByText("Cedar & Co.", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("Cedar Industrial Services Ltd.")).toHaveCount(0);
-  await expect(page.getByText("Atlas Logistics Inc.")).toHaveCount(0);
-
-  await page.goto("/firms/evergreen-capital-demo-buyer");
-  await expect(page).toHaveURL(/\/buyers\/evergreen-capital-demo-buyer$/);
-  await expect(
-    page.getByRole("heading", { name: "Evergreen Capital" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Verified transactions", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Fictional committed private investment fund."),
   ).toHaveCount(0);
-
-  await page.goto(
-    "/transactions/industrial-services-ontario-evergreen-services",
-  );
-  await expect(
-    page.getByRole("heading", { name: "Industrial services acquisition" }),
-  ).toBeVisible();
-  await expect(page.getByText("Cedar Industrial Services Ltd.")).toHaveCount(0);
 
   const robots = await page.request.get("/robots.txt");
   expect(await robots.text()).toContain("Disallow: /");
@@ -271,100 +242,33 @@ test("public network exposes only opted-in firms and anonymized verified history
   expect(await sitemap.text()).not.toContain("/app/deals");
 });
 
-test("advisor overview summarizes recorded marketplace funnel activity", async ({
+test("advisor overview hides advanced marketplace analytics", async ({
   page,
 }) => {
   await previewAs(page, "advisor");
   await expect(
     page.getByRole("heading", { name: "Marketplace analytics" }),
-  ).toBeVisible();
-  const analytics = page.locator(".marketplace-analytics-panel");
-  await expect(
-    analytics.getByRole("heading", { name: "Project Cedar", exact: true }),
-  ).toBeVisible();
-  const cedarFunnel = analytics.getByLabel("Project Cedar marketplace funnel");
-  await expect(
-    cedarFunnel.getByText("Teasers sent", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    cedarFunnel.getByText("Teaser views", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    cedarFunnel.getByText("Interested", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    cedarFunnel
-      .getByText("Recommended buyers", { exact: true })
-      .locator("..")
-      .locator("dd")
-      .first(),
-  ).toHaveText("1");
-  await expect(
-    cedarFunnel
-      .getByText("Interested", { exact: true })
-      .locator("..")
-      .locator("dd")
-      .first(),
-  ).toHaveText("0");
-  const cedarRates = analytics.getByLabel("Project Cedar marketplace rates");
-  await expect(
-    cedarRates.getByText("Average buyer response", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    cedarRates
-      .getByText("View rate", { exact: true })
-      .locator("..")
-      .locator("dd")
-      .first(),
-  ).toHaveText("—");
-  await expect(
-    cedarRates
-      .getByText("Pursuit rate", { exact: true })
-      .locator("..")
-      .locator("dd")
-      .first(),
-  ).toHaveText("—");
+  ).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "My mandates" })).toBeVisible();
 });
 
-test("buyer overview shows only organization-scoped marketplace activity", async ({
+test("buyer overview shows the pilot eligibility checklist instead of analytics", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await previewAs(page, "buyer");
   await expect(
-    page.getByRole("heading", { name: "Marketplace activity" }),
+    page.getByRole("heading", { name: "Buyer eligibility checklist" }),
   ).toBeVisible();
-  const analytics = page.getByLabel("Buyer marketplace activity");
-  for (const label of [
-    "Opportunities received",
-    "Opportunities viewed",
-    "Opportunities pursued",
-    "LOIs submitted",
-    "Active diligence",
-  ])
-    await expect(analytics.getByText(label, { exact: true })).toBeVisible();
-  for (const [label, value] of [
-    ["Opportunities received", "2"],
-    ["Opportunities viewed", "0"],
-    ["Opportunities pursued", "0"],
-    ["LOIs submitted", "1"],
-    ["Active diligence", "1"],
-  ])
-    await expect(
-      analytics
-        .getByText(label, { exact: true })
-        .locator("..")
-        .locator("dd")
-        .first(),
-    ).toHaveText(value);
   await expect(
-    page.getByText("Average buyer response", { exact: true }),
+    page.getByText("Buyer profile reviewed", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Separate organization-level review", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Marketplace activity" }),
   ).toHaveCount(0);
-  expect(
-    await analytics.evaluate(
-      (element) => element.scrollWidth <= element.clientWidth,
-    ),
-  ).toBe(true);
 });
 
 test("advisor can navigate mandates and record a shared diligence task", async ({
@@ -379,7 +283,7 @@ test("advisor can navigate mandates and record a shared diligence task", async (
     page.getByRole("link", { name: "Succera home", exact: true }),
   ).toBeVisible();
   await page.goto("/app/deals/cedar");
-  await page.getByRole("button", { name: "Tasks", exact: true }).click();
+  await page.getByText("Mandate settings and internal tools").click();
   await page.getByText("Add a diligence task", { exact: true }).click();
   const task = `Review customer schedule ${Date.now()}`;
   await page.getByLabel("Task", { exact: true }).fill(task);
@@ -406,9 +310,12 @@ test("owner can review financial history and choose a distribution strategy", as
   await expect(
     page.getByRole("heading", { name: "Historical financials" }),
   ).toBeVisible();
-  await expect(page.getByText("FY2025", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("table").getByText("FY2025", { exact: true }),
+  ).toBeVisible();
 
-  await page.getByRole("button", { name: "Mandate settings" }).click();
+  await page.getByText("Mandate settings and internal tools").click();
+  await page.getByText("Add project name and optional deal details").click();
   const distribution = page.getByLabel("Distribution strategy");
   await expect(distribution).toHaveValue("qualified_discovery");
   await distribution.selectOption("invite_only");
@@ -424,7 +331,7 @@ test("owner can inspect and curate recommended buyers", async ({ page }) => {
     page.getByRole("heading", { name: "Welcome back, Jamie." }),
   ).toBeVisible();
   await page.goto("/app/deals/cedar");
-  await page.getByRole("button", { name: "Recommended buyers" }).click();
+  await page.getByRole("button", { name: "Buyers" }).click();
 
   await expect(
     page.getByRole("heading", { name: "Recommended buyers" }),
@@ -440,13 +347,8 @@ test("owner can inspect and curate recommended buyers", async ({ page }) => {
   await expect(recommendation).toContainText("Acquisition criteria");
   await expect(recommendation).toContainText("Capital");
   await expect(recommendation).toContainText("Experience");
-  await expect(recommendation).toContainText("Marketplace reputation");
-  await expect(recommendation).toContainText("Response rate");
-  await expect(recommendation).toContainText("Median response");
-  await expect(recommendation).toContainText("Verified transactions");
-  await expect(recommendation).toContainText(
-    "Informational only and not included in the match score",
-  );
+  await expect(recommendation).not.toContainText("Marketplace reputation");
+  await expect(recommendation).not.toContainText("Response rate");
   await expect(recommendation).toContainText("Active acquisition projects");
   await expect(recommendation).toContainText("Project Northern Lights");
   await expect(recommendation).not.toContainText(
@@ -501,70 +403,19 @@ test("buyer can maintain a seller-facing firm profile", async ({ page }) => {
   ).toHaveValue("");
 });
 
-test("buyer adds a transaction tombstone for review and sellers see its verification state", async ({
+test("buyer transaction publishing controls are hidden during the pilot", async ({
   page,
 }) => {
-  const industry = `Specialty distribution ${Date.now()}`;
-  const headers = { Origin: E2E_ORIGIN };
   await previewAs(page, "buyer");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/verification");
 
   await expect(
     page.getByRole("heading", { name: "Closed transaction history" }),
-  ).toBeVisible();
-  await page.getByLabel("Industry").fill(industry);
-  await page.getByLabel("Province").selectOption("Ontario");
-  await page.getByLabel("Enterprise value (CAD)").fill("18000000");
-  await page.getByLabel("Closing date").fill("2025-06-30");
-  await page
-    .getByLabel("Anonymized transaction description")
-    .fill(
-      "Majority acquisition of a Canadian recurring-revenue distribution business.",
-    );
-  await page.getByRole("button", { name: "Add transaction record" }).click();
-  const buyerTombstone = page
-    .locator(".transaction-tombstones-own article")
-    .filter({ hasText: industry });
-  await expect(buyerTombstone).toContainText("Self-reported");
-
-  await page.request.post("/api/auth", {
-    headers,
-    data: { action: "logout" },
-  });
-  await previewAs(page, "advisor");
-  await expect(page).toHaveURL(/\/app$/);
-  await page.goto("/app/verification");
-  const review = page
-    .locator(".verification-review-card")
-    .filter({ hasText: industry });
-  await expect(review).toContainText("Evergreen Capital");
-  await review
-    .getByRole("button", { name: "Mark as Succera verified" })
-    .click();
+  ).toHaveCount(0);
   await expect(
-    page
-      .getByRole("status")
-      .getByText("Transaction history verified by Succera."),
+    page.getByRole("heading", { name: "Buyer profile review" }).first(),
   ).toBeVisible();
-
-  await page.request.post("/api/auth", {
-    headers,
-    data: { action: "logout" },
-  });
-  await previewAs(page, "owner");
-  await expect(page).toHaveURL(/\/app$/);
-  await page.goto("/app/deals/cedar");
-  await page.getByRole("button", { name: "Recommended buyers" }).click();
-  const recommendation = page.getByRole("article").filter({
-    has: page.getByRole("checkbox", {
-      name: /Select Evergreen Capital.*Project Maple/,
-    }),
-  });
-  await recommendation.getByText("View profile").click();
-  await expect(recommendation).toContainText("Closed transaction history");
-  await expect(recommendation).toContainText(industry);
-  await expect(recommendation).toContainText("Succera verified");
 });
 
 test("advisor can inspect the event-backed buyer funnel and record a milestone", async ({
@@ -575,7 +426,7 @@ test("advisor can inspect the event-backed buyer funnel and record a milestone",
     page.getByRole("heading", { name: "Welcome back, Alex." }),
   ).toBeVisible();
   await page.goto("/app/deals/cedar");
-  await page.getByRole("button", { name: "Buyer funnel" }).click();
+  await page.getByRole("button", { name: "Buyers" }).click();
 
   await expect(
     page.getByRole("heading", { name: "Buyer funnel" }),
@@ -603,93 +454,15 @@ test("advisor can inspect the event-backed buyer funnel and record a milestone",
   await expect(buyerRow).toContainText("IOI");
 });
 
-test("deal managers can review attribution while buyers cannot access it", async ({
+test("transaction attribution is retained but hidden from the pilot interface", async ({
   page,
 }) => {
   await previewAs(page, "advisor");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/deals/cedar");
-  await page.getByRole("button", { name: "Attribution", exact: true }).click();
-
-  await expect(
-    page.getByRole("heading", { name: "Transaction attribution" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("No fees are calculated or charged here."),
-  ).toBeVisible();
-  const attribution = page
-    .locator(".attribution-card")
-    .filter({ hasText: "Evergreen Capital" });
-  await expect(attribution).toContainText("Seller sourced");
-  await attribution
-    .getByLabel("Relationship source")
-    .selectOption("external_relationship");
-  await attribution.getByLabel("Introduction date").fill("2025-01-15");
-  await attribution.getByRole("button", { name: "Save attribution" }).click();
-  await expect(
-    page.getByRole("status").getByText("Transaction attribution saved."),
-  ).toBeVisible();
-  await expect(attribution.getByLabel("Relationship source")).toHaveValue(
-    "external_relationship",
-  );
-
-  await page.getByRole("button", { name: "Buyer funnel" }).click();
-  const buyerRow = page.getByRole("row").filter({
-    hasText: "Evergreen Capital",
-  });
-  await buyerRow
-    .getByRole("button", { name: /Inspect Evergreen Capital/ })
-    .click();
-  await page
-    .getByLabel("Record milestone for Evergreen Capital")
-    .selectOption("closed");
-  await page.getByRole("button", { name: "Record milestone" }).click();
-  await expect(buyerRow).toContainText("Closed");
-
-  await page.getByRole("button", { name: "Attribution", exact: true }).click();
-  const closedAttribution = page
-    .locator(".attribution-card")
-    .filter({ hasText: "Evergreen Capital" });
-  await expect(closedAttribution.getByLabel("Closing date")).toBeVisible();
-  await expect(
-    closedAttribution.getByLabel("Enterprise value (C$)"),
-  ).toBeVisible();
-  await closedAttribution
-    .getByRole("button", { name: "Save attribution" })
-    .click();
-  await expect(
-    page.getByRole("status").getByText("Transaction attribution saved."),
-  ).toBeVisible();
-  await closedAttribution.getByLabel("Closing date").fill("2026-01-15");
-  await closedAttribution.getByLabel("Enterprise value (C$)").fill("12500000");
-  await closedAttribution
-    .getByRole("button", { name: "Save attribution" })
-    .click();
-  await expect(
-    page.getByRole("status").getByText("Transaction attribution saved."),
-  ).toBeVisible();
-  await page.reload();
-  await page.getByRole("button", { name: "Attribution", exact: true }).click();
-  const persistedAttribution = page
-    .locator(".attribution-card")
-    .filter({ hasText: "Evergreen Capital" });
-  await expect(persistedAttribution.getByLabel("Closing date")).toHaveValue(
-    "2026-01-15",
-  );
-  await expect(
-    persistedAttribution.getByLabel("Enterprise value (C$)"),
-  ).toHaveValue("12500000");
-
-  await previewAs(page, "buyer");
-  await expect(page).toHaveURL(/\/app$/);
-  await page.goto("/app/deals/cedar");
   await expect(
     page.getByRole("button", { name: "Attribution", exact: true }),
   ).toHaveCount(0);
-  const buyerWorkspace = await (
-    await page.request.get("/api/workspace")
-  ).json();
-  expect(buyerWorkspace).not.toHaveProperty("transaction_attributions");
 });
 
 test("seller-side teams can keep private notes out of buyer workspaces", async ({
@@ -700,7 +473,7 @@ test("seller-side teams can keep private notes out of buyer workspaces", async (
     page.getByRole("heading", { name: "Welcome back, Alex." }),
   ).toBeVisible();
   await page.goto("/app/deals/cedar");
-  await page.getByRole("button", { name: "Internal notes" }).click();
+  await page.getByText("Mandate settings and internal tools").click();
 
   await expect(
     page.getByRole("heading", { name: "Internal notes" }),
@@ -731,7 +504,7 @@ test("seller-side teams can keep private notes out of buyer workspaces", async (
   await expect(page.getByText(note, { exact: true })).toHaveCount(0);
 });
 
-test("users can review notifications and control email delivery preferences", async ({
+test("users receive in-app notifications while pilot email controls stay hidden", async ({
   page,
 }) => {
   await previewAs(page, "buyer");
@@ -757,28 +530,13 @@ test("users can review notifications and control email delivery preferences", as
 
   await page.goto("/app/settings");
   await expect(
-    page.getByRole("heading", { name: "Email notification preferences" }),
+    page.getByRole("heading", { name: "In-app notifications" }),
   ).toBeVisible();
-  await page
-    .getByLabel("Email delivery for New messages")
-    .selectOption("daily_digest");
-
-  // A different workspace action refreshes shared data. The unsaved selector
-  // should remain local until the notification form is explicitly saved.
-  await page.getByLabel("Full name").fill("Taylor Buyer");
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByLabel("Email delivery for New messages")).toHaveValue(
-    "daily_digest",
-  );
-
-  await page
-    .getByLabel("Email delivery for New messages")
-    .selectOption("disabled");
-  await page
-    .getByRole("button", { name: "Save notification preferences" })
-    .click();
-  await expect(page.getByLabel("Email delivery for New messages")).toHaveValue(
-    "disabled",
+  await expect(
+    page.getByText("Pilot email delivery is not enabled.", { exact: false }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Email delivery for New messages")).toHaveCount(
+    0,
   );
 });
 
@@ -890,7 +648,7 @@ test("seller shares a private teaser and sees the buyer response", async ({
   ).toBe(200);
 
   await page.goto(`/app/deals/${dealId}`);
-  await page.getByRole("button", { name: "Recommended buyers" }).click();
+  await page.getByRole("button", { name: "Buyers" }).click();
   await expect(
     page.getByRole("heading", { name: "Share teaser" }),
   ).toBeVisible();
@@ -947,7 +705,7 @@ test("seller shares a private teaser and sees the buyer response", async ({
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL(/\/app$/);
   await page.goto(`/app/deals/${dealId}`);
-  await page.getByRole("button", { name: "Recommended buyers" }).click();
+  await page.getByRole("button", { name: "Buyers" }).click();
   await expect(page.getByText("Pursued", { exact: true })).toBeVisible();
 });
 
@@ -1220,9 +978,7 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL(/\/app$/);
   await page.goto(`/app/deals/${dealId}`);
-  await page
-    .getByRole("button", { name: "Introduction requests", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Buyers", exact: true }).click();
   const introductionWorkbench = page.getByRole("region", {
     name: "Introduction requests",
   });
@@ -1237,7 +993,9 @@ test("matched buyer requests a seller-controlled Qualified Discovery introductio
       Number.parseFloat(getComputedStyle(element).borderRadius),
     );
   expect(countRadius).toBeGreaterThan(100);
-  const requestCard = page.getByRole("article").filter({ hasText: buyerFirm });
+  const requestCard = introductionWorkbench
+    .getByRole("article")
+    .filter({ hasText: buyerFirm });
   await expect(requestCard).toContainText(projectName);
   await expect(requestCard).toContainText(/\d+%/);
   await requestCard
@@ -1318,7 +1076,7 @@ test("buyer receives a cached personalized CIM while the seller keeps the origin
     page.getByRole("heading", { name: "Welcome back, Jamie." }),
   ).toBeVisible();
   await page.goto("/app/deals/cedar");
-  await page.getByRole("button", { name: "Data room" }).click();
+  await page.getByRole("button", { name: "Documents & NDA" }).click();
   await page.getByText("Upload a document", { exact: true }).click();
   await page.getByLabel("Choose file").setInputFiles({
     name,
@@ -1374,163 +1132,61 @@ test("buyer receives a cached personalized CIM while the seller keeps the origin
   expect((await PDFDocument.load(personalized)).getPageCount()).toBe(1);
 });
 
-test("owner can send a provider-managed electronic NDA without granting early access", async ({
+test("electronic NDA controls are unavailable while external NDA remains", async ({
   page,
 }) => {
+  const headers = { Origin: E2E_ORIGIN };
   await previewAs(page, "owner");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/deals/harbour");
-  await page.getByRole("button", { name: "Buyer access" }).click();
-  const buyerCard = page.getByRole("article").filter({
+  await page.getByRole("button", { name: "Buyers" }).click();
+  const buyerCard = page.locator(".access-card").filter({
     hasText: "Evergreen Capital",
   });
-  await buyerCard.getByRole("button", { name: "Send electronic NDA" }).click();
   await expect(
-    page.getByRole("status").getByText(/Electronic NDA sent through/),
+    buyerCard.getByRole("button", { name: "Send electronic NDA" }),
+  ).toHaveCount(0);
+  await expect(
+    buyerCard.getByRole("button", { name: "Use external NDA" }),
   ).toBeVisible();
-  await expect(buyerCard).toContainText("Awaiting buyer signature");
-  await expect(buyerCard).toContainText("Development signature provider");
-  await expect(buyerCard).toContainText(
-    "Succera grants access only after the provider verifies completion",
+  const directRequest = await page.request.post("/api/signatures", {
+    headers,
+    data: {
+      action: "requestElectronicNda",
+      data: { deal_id: "harbour", buyer_id: "demo-buyer" },
+    },
+  });
+  expect(directRequest.status()).toBe(503);
+  expect((await directRequest.json()).error).toMatch(
+    /unavailable during the pilot/i,
   );
-  await expect(buyerCard).toContainText("Nda pending");
-  await expect(buyerCard).not.toContainText("Approved");
+  expect(
+    (
+      await page.request.post("/api/signatures/webhooks/development", {
+        data: { status: "completed" },
+      })
+    ).status(),
+  ).toBe(404);
 });
 
-test("seller reviews and explicitly applies a private teaser safety suggestion", async ({
+test("automated teaser review is unavailable during the pilot", async ({
   page,
 }) => {
   const headers = { Origin: E2E_ORIGIN };
   await previewAs(page, "owner");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/deals/atlas");
-  await page.getByRole("button", { name: "Teaser safety" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Check what the teaser could reveal." }),
-  ).toBeVisible();
-  await expect(page.getByText("No safety review yet")).toBeVisible();
-  await expect(
-    page.getByText("Local development safety assistant", { exact: true }),
-  ).toBeVisible();
-
-  await page.getByRole("button", { name: "Run safety review" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Review recommended" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Review every word before applying" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Financial scale in the teaser narrative"),
-  ).toBeVisible();
-
-  await page
-    .getByRole("button", { name: "Apply to private teaser draft" })
-    .click();
-  await expect(page.getByText("Applied", { exact: true })).toBeVisible();
-  const ownerWorkspace = await (
-    await page.request.get("/api/workspace")
-  ).json();
-  const atlas = ownerWorkspace.deals.find(
-    (deal: { id: string }) => deal.id === "atlas",
+  await expect(page.getByRole("button", { name: "Teaser safety" })).toHaveCount(
+    0,
   );
-  expect(atlas.published).toBe(0);
-  expect(atlas.description).toContain(
-    "annual revenue in the C$10M–C$20M range",
-  );
-  expect(ownerWorkspace.teaser_safety_reviews[0].applied_at).toBeTruthy();
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(
-    page.getByRole("heading", { name: "Check what the teaser could reveal." }),
-  ).toBeVisible();
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
-  ).toBe(true);
-
-  const projectedDealResponse = await page.request.post("/api/workspace", {
-    headers,
-    data: {
-      action: "createDeal",
-      data: {
-        title: `Projected safety check ${Date.now()}`,
-        company_name: "Projected Safety Check Inc.",
-        sector: "Technology",
-        province: "Ontario",
-        city: "Toronto",
-        revenue: 4_000_000,
-        ebitda: 700_000,
-        asking_price: 6_000_000,
-        employees: 18,
-        founded: 2016,
-        description:
-          "A Canadian technology business with approximately C$4 million in annual revenue.",
-        confidential_summary: "Used to test historical financial coverage.",
-        financial_year: 2027,
-        financial_is_projected: true,
-      },
-    },
-  });
-  expect(projectedDealResponse.status()).toBe(200);
-  const projectedDealId = (await projectedDealResponse.json()).id;
-  const projectedOnlyReview = await page.request.post("/api/teaser-safety", {
-    headers,
-    data: { deal_id: projectedDealId },
-  });
-  expect(projectedOnlyReview.status()).toBe(200);
-  expect(
-    (await projectedOnlyReview.json()).review.missing_financials,
-  ).toContain("Historical financial periods");
-  expect(
-    (
-      await page.request.post("/api/workspace", {
-        headers,
-        data: {
-          action: "upsertDealFinancial",
-          data: {
-            deal_id: projectedDealId,
-            fiscal_year: 2026,
-            period_type: "annual",
-            revenue: 3_700_000,
-            ebitda: 620_000,
-            gross_profit: 1_900_000,
-            is_projected: false,
-          },
-        },
-      })
-    ).status(),
-  ).toBe(200);
-  const historicalReview = await page.request.post("/api/teaser-safety", {
-    headers,
-    data: { deal_id: projectedDealId },
-  });
-  expect(historicalReview.status()).toBe(200);
-  expect(
-    (await historicalReview.json()).review.missing_financials,
-  ).not.toContain("Historical financial periods");
-
-  await page.request.post("/api/auth", {
-    headers,
-    data: { action: "logout" },
-  });
-  await previewAs(page, "buyer");
-  await expect(page).toHaveURL(/\/app$/);
-  const unauthorized = await page.request.post("/api/teaser-safety", {
+  const response = await page.request.post("/api/teaser-safety", {
     headers,
     data: { deal_id: "atlas" },
   });
-  const nonexistent = await page.request.post("/api/teaser-safety", {
-    headers,
-    data: { deal_id: "not-a-real-mandate" },
-  });
-  expect(unauthorized.status()).toBe(404);
-  expect(nonexistent.status()).toBe(404);
-  expect(await unauthorized.json()).toEqual(await nonexistent.json());
-  const buyerWorkspace = await (
-    await page.request.get("/api/workspace")
-  ).json();
-  expect(buyerWorkspace.teaser_safety_reviews).toBeUndefined();
+  expect(response.status()).toBe(503);
+  expect((await response.json()).error).toMatch(
+    /unavailable during the pilot/i,
+  );
 });
 
 test("buyer demo cannot enumerate registered Qualified Discovery inventory", async ({
@@ -2006,13 +1662,47 @@ test("mobile public page has no horizontal overflow", async ({ page }) => {
     ),
   ).toBe(true);
   await expect(
-    page.getByRole("heading", {
-      name: "Find the people behind the next chapter.",
-    }),
+    page.getByRole("heading", { name: "Public directory unavailable." }),
   ).toBeVisible();
 
   await page.setViewportSize({ width: 820, height: 1180 });
-  await expect(page.getByRole("link", { name: "The network" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "The network" })).toHaveCount(0);
   await page.goto("/");
   await expect(page.getByRole("link", { name: "For sellers" })).toBeHidden();
+});
+
+test("capture focused pilot visual baselines", async ({ page }, testInfo) => {
+  await previewAs(page, "buyer");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.screenshot({
+    path: testInfo.outputPath("buyer-overview-desktop.png"),
+    fullPage: true,
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/app/verification");
+  await page.screenshot({
+    path: testInfo.outputPath("buyer-onboarding-mobile.png"),
+    fullPage: true,
+  });
+
+  await previewAs(page, "owner");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/app/new");
+  await page.screenshot({
+    path: testInfo.outputPath("seller-private-draft.png"),
+    fullPage: true,
+  });
+  await page.goto("/app/deals/cedar");
+  await page.screenshot({
+    path: testInfo.outputPath("deal-room-overview.png"),
+    fullPage: true,
+  });
+
+  await previewAs(page, "advisor");
+  await page.goto("/app/admin/buyers");
+  await page.screenshot({
+    path: testInfo.outputPath("admin-buyer-review.png"),
+    fullPage: true,
+  });
 });

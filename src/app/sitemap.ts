@@ -4,11 +4,14 @@ import {
   publicAbsoluteUrl,
   isPublicNetworkIndexingEnabled,
 } from "@/lib/public-metadata";
+import { pilotCapabilities } from "@/lib/pilot-capabilities";
 
 export const dynamic = "force-dynamic";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   if (!isPublicNetworkIndexingEnabled()) return [];
+  if (!pilotCapabilities.publicNetwork)
+    return [{ url: publicAbsoluteUrl("/") }];
   return [
     { url: publicAbsoluteUrl("/") },
     { url: publicAbsoluteUrl("/network") },

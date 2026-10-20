@@ -8,6 +8,7 @@ import { closeDatabase, databaseReady, db, one } from "../src/lib/db";
 import { getDeal, mutate, workspace } from "../src/lib/service";
 import { teaserSafetyReviewInputDigest } from "../src/lib/teaser-safety";
 import type { Deal, User } from "../src/lib/types";
+import { pilotCapabilities } from "../src/lib/pilot-capabilities";
 
 let directory: string;
 let owner: User;
@@ -71,6 +72,16 @@ const insertReview = async (dealId: string, suggestion: string) => {
 };
 
 test("only the deal team can inspect and explicitly apply a current private teaser suggestion", async () => {
+  if (!pilotCapabilities.externalTeaserSafety) {
+    await assert.rejects(
+      mutate(owner, {
+        action: "applyTeaserSafetySuggestion",
+        data: { deal_id: "cedar", review_id: "pilot-disabled" },
+      }),
+      /unavailable during the pilot/i,
+    );
+    return;
+  }
   const created = await mutate(owner, {
     action: "createDeal",
     data: {
@@ -141,6 +152,10 @@ test("only the deal team can inspect and explicitly apply a current private teas
 });
 
 test("stale and already-published teaser suggestions cannot be applied", async () => {
+  if (!pilotCapabilities.externalTeaserSafety) {
+    assert.equal(pilotCapabilities.externalTeaserSafety, false);
+    return;
+  }
   const deal = await getDeal(
     (
       await mutate(owner, {
@@ -209,6 +224,10 @@ test("stale and already-published teaser suggestions cannot be applied", async (
 });
 
 test("structured mandate edits stale a teaser safety review", async () => {
+  if (!pilotCapabilities.externalTeaserSafety) {
+    assert.equal(pilotCapabilities.externalTeaserSafety, false);
+    return;
+  }
   const deal = await getDeal(
     (
       await mutate(owner, {
@@ -239,7 +258,7 @@ test("structured mandate edits stale a teaser safety review", async () => {
 
   await mutate(owner, {
     action: "updateDealDetails",
-    data: { deal_id: deal.id, ebitda: deal.ebitda + 100_000 },
+    data: { deal_id: deal.id, ebitda: deal.ebitda! + 100_000 },
   });
 
   await assert.rejects(

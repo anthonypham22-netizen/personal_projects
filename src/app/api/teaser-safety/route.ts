@@ -13,6 +13,7 @@ import {
 } from "@/lib/teaser-safety";
 import { configuredTeaserSafetyProvider } from "@/lib/teaser-safety-provider";
 import type { TeaserSafetyReview } from "@/lib/types";
+import { pilotCapabilities } from "@/lib/pilot-capabilities";
 
 export const runtime = "nodejs";
 
@@ -102,6 +103,11 @@ export async function POST(request: Request) {
     if (!parsed.success) throw new AppError("A valid mandate is required.");
     limit(`teaser-safety:${user.id}`, 20, 60);
     const deal = await managedDealOrNotFound(user, parsed.data.deal_id);
+    if (!pilotCapabilities.externalTeaserSafety)
+      throw new AppError(
+        "Automated teaser review is unavailable during the pilot. Review the anonymous teaser manually.",
+        503,
+      );
     const provider = configuredTeaserSafetyProvider();
     if (!provider)
       throw new AppError(

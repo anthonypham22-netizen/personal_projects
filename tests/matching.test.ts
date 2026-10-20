@@ -111,6 +111,25 @@ test("ordinary mandate mismatches lower dimensions without excluding the buyer",
   assert.ok(result.score < 45);
 });
 
+test("unknown draft financial values never count as confirmed matches", () => {
+  const result = matchDealToBuyerProject(
+    {
+      ...deal,
+      revenue: null,
+      ebitda: null,
+      asking_price: null,
+      min_expected_value: null,
+      max_expected_value: null,
+    } as unknown as Deal,
+    project,
+  );
+
+  assert.equal(reason(result, "revenue").score, 0);
+  assert.equal(reason(result, "ebitda").score, 0);
+  assert.equal(reason(result, "enterprise_value").score, 0);
+  assert.match(reason(result, "revenue").explanation, /not provided/i);
+});
+
 test("publishable teaser prose does not influence deterministic match scores", () => {
   const baseline = matchDealToBuyerProject(deal, project);
   const rewritten = matchDealToBuyerProject(

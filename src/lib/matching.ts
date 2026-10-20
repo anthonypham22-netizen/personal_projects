@@ -40,19 +40,22 @@ export type MatchContext = {
 const normalized = (value: string) => value.trim().toLocaleLowerCase("en-CA");
 
 const within = (
-  value: number,
+  value: number | null,
   minimum: number | null,
   maximum: number | null,
 ) =>
+  value !== null &&
   (minimum === null || value >= minimum) &&
   (maximum === null || value <= maximum);
 
 const rangeExplanation = (
   label: string,
-  value: number,
+  value: number | null,
   minimum: number | null,
   maximum: number | null,
 ) => {
+  if (value === null)
+    return `${label} was not provided and is not counted as a confirmed match.`;
   if (minimum === null && maximum === null)
     return `${label} is unrestricted by the buyer mandate.`;
   return within(value, minimum, maximum)
@@ -63,7 +66,7 @@ const rangeExplanation = (
 const rangeScore = (
   dimension: "revenue" | "ebitda",
   label: string,
-  value: number,
+  value: number | null,
   minimum: number | null,
   maximum: number | null,
   maximumScore: number,
@@ -84,6 +87,14 @@ const rangesOverlap = (
   (rightMinimum === null || leftMaximum >= rightMinimum);
 
 function ebitdaReason(deal: Deal, project: BuyerProject): MatchReason {
+  if (deal.ebitda === null)
+    return {
+      dimension: "ebitda",
+      score: 0,
+      maximum: MATCH_WEIGHTS.ebitda,
+      explanation:
+        "EBITDA was not provided and is not counted as a confirmed match.",
+    };
   const amountRestricted =
     project.min_ebitda !== null || project.max_ebitda !== null;
   const marginRestricted =
@@ -93,7 +104,10 @@ function ebitdaReason(deal: Deal, project: BuyerProject): MatchReason {
     project.min_ebitda,
     project.max_ebitda,
   );
-  const margin = deal.revenue > 0 ? (deal.ebitda / deal.revenue) * 100 : null;
+  const margin =
+    deal.revenue !== null && deal.revenue > 0
+      ? (deal.ebitda / deal.revenue) * 100
+      : null;
   const marginMatches =
     margin !== null &&
     within(margin, project.min_ebitda_margin, project.max_ebitda_margin);
@@ -163,20 +177,22 @@ export function matchDealToBuyerProject(
   const dealValues = [
     deal.min_expected_value ?? deal.asking_price,
     deal.max_expected_value ?? deal.asking_price,
-  ];
-  const dealValueMinimum = Math.min(...dealValues);
-  const dealValueMaximum = Math.max(...dealValues);
+  ].filter((value): value is number => value !== null);
+  const dealValueMinimum = dealValues.length ? Math.min(...dealValues) : null;
+  const dealValueMaximum = dealValues.length ? Math.max(...dealValues) : null;
   const valueUnrestricted =
     project.min_enterprise_value === null &&
     project.max_enterprise_value === null;
   const valueMatches =
-    valueUnrestricted ||
-    rangesOverlap(
-      dealValueMinimum,
-      dealValueMaximum,
-      project.min_enterprise_value,
-      project.max_enterprise_value,
-    );
+    dealValueMinimum !== null &&
+    dealValueMaximum !== null &&
+    (valueUnrestricted ||
+      rangesOverlap(
+        dealValueMinimum,
+        dealValueMaximum,
+        project.min_enterprise_value,
+        project.max_enterprise_value,
+      ));
 
   const searchable = normalized(
     `${deal.title} ${deal.company_name} ${deal.sector} ${deal.confidential_summary} ${deal.management_transition} ${deal.reason_for_transaction}`,
@@ -251,11 +267,14 @@ export function matchDealToBuyerProject(
       dimension: "enterprise_value",
       score: valueMatches ? MATCH_WEIGHTS.enterprise_value : 0,
       maximum: MATCH_WEIGHTS.enterprise_value,
-      explanation: valueUnrestricted
-        ? "Enterprise value is unrestricted by the buyer mandate."
-        : valueMatches
-          ? "The seller's expected value overlaps the buyer mandate range."
-          : "The seller's expected value does not overlap the buyer mandate range.",
+      explanation:
+        dealValueMinimum === null
+          ? "Expected value was not provided and is not counted as a confirmed match."
+          : valueUnrestricted
+            ? "Enterprise value is unrestricted by the buyer mandate."
+            : valueMatches
+              ? "The seller's expected value overlaps the buyer mandate range."
+              : "The seller's expected value does not overlap the buyer mandate range.",
     },
     {
       dimension: "ownership",

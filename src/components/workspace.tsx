@@ -965,41 +965,19 @@ export function Workspace({
       setBusy(false);
     }
   };
+  const isBuyerWorkspace = data.user.role === "buyer";
   const workspaceNav = [
     { id: "overview", label: "Overview", Icon: LayoutDashboard },
-    { id: "opportunities", label: "Discover", Icon: Compass },
-    ...(buyerOrganizationTypes.has(data.organization.organization_type)
-      ? [
-          {
-            id: "projects",
-            label: "Acquisition Projects",
-            Icon: SlidersHorizontal,
-          },
-        ]
+    ...(isBuyerWorkspace
+      ? [{ id: "opportunities", label: "Opportunities", Icon: Compass }]
       : []),
     {
       id: "deals",
-      label: data.user.role === "buyer" ? "My pipeline" : "My mandates",
+      label: isBuyerWorkspace ? "My deals" : "My mandates",
       Icon: BriefcaseBusiness,
     },
-    { id: "documents", label: "Documents", Icon: FolderLock },
     { id: "messages", label: "Messages", Icon: MessagesSquare },
-    { id: "tasks", label: "Tasks", Icon: ListTodo },
-    { id: "network", label: "Advisor network", Icon: Users },
-    ...(buyerOrganizationTypes.has(data.organization.organization_type) ||
-    data.is_platform_admin
-      ? [
-          {
-            id: "verification",
-            label:
-              data.is_platform_admin && data.user.role !== "buyer"
-                ? "Organization verification"
-                : "Verification",
-            Icon: ShieldCheck,
-          },
-        ]
-      : []),
-    { id: "settings", label: "Settings", Icon: Settings },
+    { id: "settings", label: "Account", Icon: Settings },
   ];
   const adminNav = data.is_platform_admin
     ? [
@@ -1237,6 +1215,10 @@ function Overview() {
   );
   const open = data.tasks.filter((t) => t.status === "open");
   const pending = data.access.filter((a) => a.status === "requested");
+  const activeAskingPrices = pipeline
+    .filter((deal) => deal.stage !== "Closed")
+    .map((deal) => deal.asking_price)
+    .filter((value): value is number => value !== null);
   const buyerReview = data.buyer_identity_verification;
   const buyerReviewState = !buyerReview
     ? { label: "Not submitted", cta: "Complete profile" }
@@ -1247,6 +1229,38 @@ function Overview() {
         : buyerReview.status === "approved"
           ? { label: "Reviewed", cta: null }
           : { label: "Unable to approve", cta: "View feedback" };
+  const buyerEligibility = [
+    {
+      label: "Acquisition criteria",
+      complete: data.buyer_projects.some(
+        (project) => project.status === "active",
+      ),
+      note: "At least one active acquisition project",
+    },
+    {
+      label: "Buyer profile reviewed",
+      complete: buyerReview?.status === "approved",
+      note: "Individual profile review",
+    },
+    {
+      label: "Firm review for Qualified Discovery",
+      complete: verificationStatusMeets(
+        data.organization.verification_status,
+        data.qualified_discovery_min_verification_status,
+      ),
+      note: "Separate organization-level review",
+    },
+    {
+      label: "Deal approval",
+      complete: data.access.some((access) => access.status === "approved"),
+      note: "Granted separately for each opportunity",
+    },
+    {
+      label: "NDA",
+      complete: data.access.some((access) => access.nda_status === "approved"),
+      note: "Executed and approved for the specific deal",
+    },
+  ];
   const stats =
     user.role === "buyer"
       ? [
@@ -1285,11 +1299,11 @@ function Overview() {
           {
             label: "Indicative deal value",
             value: money(
-              pipeline
-                .filter((d) => d.stage !== "Closed")
-                .reduce((s, d) => s + d.asking_price, 0),
+              activeAskingPrices.length
+                ? activeAskingPrices.reduce((sum, value) => sum + value, 0)
+                : null,
             ),
-            note: "Total asking prices · CAD",
+            note: "Known asking prices · CAD",
             Icon: Building2,
           },
           {
@@ -1315,7 +1329,7 @@ function Overview() {
         {canCreateMandates ? (
           <Link className="button button-green" href="/app/new">
             <Plus size={17} />
-            New mandate
+            Create private mandate
           </Link>
         ) : user.role === "buyer" ? (
           <Link className="button button-green" href="/app/opportunities">
@@ -1337,26 +1351,52 @@ function Overview() {
         ))}
       </div>
       {user.role === "buyer" && (
-        <div className="buyer-review-state">
-          <div>
-            <span>Buyer profile</span>
-            <strong>{buyerReviewState.label}</strong>
-          </div>
-          <p>
-            Profile review is required before confidential deal access can be
-            requested.
-          </p>
-          {buyerReviewState.cta && (
+        <>
+          <div className="buyer-review-state">
+            <div>
+              <span>Buyer profile</span>
+              <strong>{buyerReviewState.label}</strong>
+            </div>
+            <p>
+              Profile review is required before confidential deal access can be
+              requested.
+            </p>
             <Link
               className="button button-quiet button-small"
               href="/app/verification"
             >
-              {buyerReviewState.cta} <ArrowRight size={15} />
+              {buyerReviewState.cta ?? "View profile"} <ArrowRight size={15} />
             </Link>
-          )}
-        </div>
+          </div>
+          <Panel title="Buyer eligibility checklist">
+            <div className="panel-body grid gap-3 md:grid-cols-2">
+              {buyerEligibility.map((item) => (
+                <div
+                  className="flex items-start gap-3 rounded-xl border border-slate-200 p-3"
+                  key={item.label}
+                >
+                  {item.complete ? (
+                    <CircleCheck
+                      className="mt-0.5 text-emerald-700"
+                      size={17}
+                    />
+                  ) : (
+                    <CircleHelp className="mt-0.5 text-amber-700" size={17} />
+                  )}
+                  <span className="grid gap-1 text-sm">
+                    <strong>{item.label}</strong>
+                    <small className="text-slate-500">{item.note}</small>
+                  </span>
+                </div>
+              ))}
+              <p className="muted md:col-span-2">
+                Profile and firm review do not guarantee funds, identity, or a
+                transaction. Sellers approve access and NDAs deal by deal.
+              </p>
+            </div>
+          </Panel>
+        </>
       )}
-      <MarketplaceAnalytics />
       <div className="dashboard-grid">
         <div className="dashboard-primary">
           <Panel title="Your transaction pipeline" link="/app/deals">
@@ -2546,76 +2586,114 @@ function MandateDetailFields({
   deal?: Deal;
   includeInitialFinancial?: boolean;
 }) {
+  const transactionChoices = includeInitialFinancial
+    ? transactionOptions.filter(({ value }) =>
+        ["full_acquisition", "majority_acquisition"].includes(value),
+      )
+    : transactionOptions;
   return (
     <div className="mandate-form">
       <fieldset className="mandate-section">
-        <legend>Company profile</legend>
+        <legend>Private draft essentials</legend>
         <p>
-          Identity details remain restricted to the deal team and approved
-          buyers.
+          Start with what you know. The company name stays confidential and
+          nothing is shared until you explicitly publish or send outreach.
         </p>
         <div className="form-grid">
-          <Field
-            label="Project name (shown in teaser)"
-            name="title"
-            value={deal?.title}
-            help="Use a confidential code name rather than the company name."
-          />
           <Field
             label="Legal company name (confidential)"
             name="company_name"
             value={deal?.company_name}
           />
+          <SelectField
+            label="Industry"
+            name="sector"
+            options={SECTORS}
+            value={deal?.sector ?? SECTORS[0]}
+          />
+          <SelectField
+            label="Province or territory"
+            name="province"
+            options={PROVINCES}
+            value={deal?.province ?? "Ontario"}
+          />
+          <Field
+            label="Annual revenue (CAD, if known)"
+            name="revenue"
+            type="number"
+            value={deal?.revenue ?? undefined}
+            min={0}
+            required={false}
+          />
+          <label className="full">
+            Brief business description
+            <textarea
+              name="description"
+              minLength={30}
+              maxLength={1200}
+              required
+              defaultValue={deal?.description}
+              placeholder="Describe the business without naming the company, its customers, or its employees."
+            />
+            <span className="field-hint">
+              This becomes the anonymous teaser after you review and share it.
+            </span>
+          </label>
+        </div>
+      </fieldset>
+
+      <details className="disclosure">
+        <summary>Add project name and optional deal details</summary>
+        <div className="mandate-section form-grid">
+          <Field
+            label="Project name"
+            name="title"
+            value={deal?.title === "Private mandate" ? "" : deal?.title}
+            required={false}
+            help="Use a confidential code name. This is required before sharing."
+          />
+          <Field
+            label="City (confidential)"
+            name="city"
+            value={deal?.city ?? undefined}
+            required={false}
+          />
           <Field
             label="Year founded"
             name="founded"
             type="number"
-            value={deal?.founded ?? 2010}
+            value={deal?.founded ?? undefined}
             min={1800}
             max={new Date().getFullYear()}
+            required={false}
           />
           <Field
             label="Employees (confidential)"
             name="employees"
             type="number"
-            value={deal?.employees}
+            value={deal?.employees ?? undefined}
             min={0}
-          />
-        </div>
-      </fieldset>
-
-      <fieldset className="mandate-section">
-        <legend>Financials</legend>
-        <p>
-          Enter Canadian-dollar amounts. A historical period is created with
-          every new mandate.
-        </p>
-        <div className="form-grid">
-          <Field
-            label="Annual revenue (CAD)"
-            name="revenue"
-            type="number"
-            value={deal?.revenue}
-            min={0}
+            required={false}
           />
           <Field
             label="EBITDA (CAD)"
             name="ebitda"
             type="number"
-            value={deal?.ebitda}
-            min={0}
+            value={deal?.ebitda ?? undefined}
+            required={false}
           />
           <Field
             label="Indicative asking price (CAD)"
             name="asking_price"
             type="number"
-            value={deal?.asking_price}
+            value={deal?.asking_price ?? undefined}
             min={0}
+            required={false}
           />
           {includeInitialFinancial && (
             <>
               <Field
-                label="Gross profit (CAD, optional)"
+                label="Gross profit (CAD)"
                 name="gross_profit"
                 type="number"
                 required={false}
@@ -2627,26 +2705,14 @@ function MandateDetailFields({
                 value={new Date().getFullYear() - 1}
                 min={1800}
                 max={2200}
+                required={false}
               />
-              <label className="checkbox-label financial-projection">
-                <input type="checkbox" name="financial_is_projected" />
-                This period is projected
-              </label>
             </>
           )}
-        </div>
-      </fieldset>
-
-      <fieldset className="mandate-section">
-        <legend>Transaction objectives</legend>
-        <p>
-          Capture the structure and outcomes the seller is prepared to consider.
-        </p>
-        <div className="form-grid">
           <OptionSelectField
             label="Transaction type"
             name="transaction_type"
-            options={transactionOptions}
+            options={transactionChoices}
             value={deal?.transaction_type ?? "full_acquisition"}
           />
           <Field
@@ -2658,7 +2724,7 @@ function MandateDetailFields({
             max={100}
           />
           <Field
-            label="Minimum expected value (CAD, optional)"
+            label="Minimum expected value (CAD)"
             name="min_expected_value"
             type="number"
             value={deal?.min_expected_value ?? ""}
@@ -2666,7 +2732,7 @@ function MandateDetailFields({
             required={false}
           />
           <Field
-            label="Maximum expected value (CAD, optional)"
+            label="Maximum expected value (CAD)"
             name="max_expected_value"
             type="number"
             value={deal?.max_expected_value ?? ""}
@@ -2695,7 +2761,6 @@ function MandateDetailFields({
               name="management_transition"
               maxLength={2000}
               defaultValue={deal?.management_transition}
-              placeholder="Describe the founder and management team's expected role after closing."
             />
           </label>
           <label className="full">
@@ -2704,52 +2769,7 @@ function MandateDetailFields({
               name="reason_for_transaction"
               maxLength={2000}
               defaultValue={deal?.reason_for_transaction}
-              placeholder="Summarize the seller's objectives without exposing identifying details."
             />
-          </label>
-        </div>
-      </fieldset>
-
-      <fieldset className="mandate-section">
-        <legend>Geography and industry</legend>
-        <div className="form-grid">
-          <SelectField
-            label="Industry"
-            name="sector"
-            options={SECTORS}
-            value={deal?.sector ?? SECTORS[0]}
-          />
-          <SelectField
-            label="Province or territory"
-            name="province"
-            options={PROVINCES}
-            value={deal?.province ?? "Ontario"}
-          />
-          <Field label="City (confidential)" name="city" value={deal?.city} />
-        </div>
-      </fieldset>
-
-      <fieldset className="mandate-section">
-        <legend>Confidential teaser</legend>
-        <p>
-          The anonymous teaser can be shared only according to the distribution
-          strategy below.
-        </p>
-        <div className="form-grid">
-          <label className="full">
-            Anonymous teaser
-            <textarea
-              name="description"
-              minLength={30}
-              maxLength={1200}
-              required
-              defaultValue={deal?.description}
-              placeholder="Describe the opportunity without identifying the company, its customers, or its employees."
-            />
-            <span className="field-hint">
-              Never include the company name, website, owner identity, customer
-              names, or employee names.
-            </span>
           </label>
           <label className="full">
             Confidential business summary
@@ -2757,40 +2777,16 @@ function MandateDetailFields({
               name="confidential_summary"
               maxLength={5000}
               defaultValue={deal?.confidential_summary}
-              placeholder="Details available only to the deal team and approved buyers."
             />
           </label>
+          <OptionSelectField
+            label="Distribution strategy"
+            name="distribution_mode"
+            options={distributionOptions}
+            value={deal?.distribution_mode ?? "private_outreach"}
+          />
         </div>
-      </fieldset>
-
-      <fieldset className="mandate-section distribution-section">
-        <legend>Distribution strategy</legend>
-        <OptionSelectField
-          label="Distribution strategy"
-          name="distribution_mode"
-          options={distributionOptions}
-          value={deal?.distribution_mode ?? "private_outreach"}
-        />
-        <div className="distribution-guide">
-          <p>
-            <strong>Invite only</strong>
-            <span>Only buyers explicitly invited by the deal team.</span>
-          </p>
-          <p>
-            <strong>Private outreach</strong>
-            <span>
-              Controlled outreach managed by the seller or advisor. This is the
-              default.
-            </span>
-          </p>
-          <p>
-            <strong>Qualified Discovery</strong>
-            <span>
-              Signed-in buyers may see the anonymous teaser and request access.
-            </span>
-          </p>
-        </div>
-      </fieldset>
+      </details>
     </div>
   );
 }
@@ -3318,6 +3314,18 @@ function DealDetail({ deal }: { deal: Deal }) {
     (recipient) => recipient.deal_id === deal.id,
   );
   const primaryOutreach = myOutreach[0];
+  const shareChecklist = [
+    {
+      label: "Confidential project name",
+      complete: Boolean(deal.title.trim() && deal.title !== "Private mandate"),
+    },
+    { label: "Annual revenue", complete: deal.revenue !== null },
+    {
+      label: "Anonymous business description",
+      complete: Boolean(deal.description.trim()),
+    },
+  ];
+  const readyToShare = shareChecklist.every((item) => item.complete);
   const viewedOutreach = useRef("");
   const sentRecipientIds = myOutreach
     .filter((recipient) => recipient.status === "sent")
@@ -3334,23 +3342,15 @@ function DealDetail({ deal }: { deal: Deal }) {
   const tabs = deal.has_access
     ? [
         "Overview",
-        ...(deal.can_manage ? ["Mandate settings"] : []),
-        ...(deal.can_manage ? ["Teaser safety"] : []),
-        ...(deal.can_manage ? ["Recommended buyers"] : []),
-        ...(deal.can_manage ? ["Buyer funnel"] : []),
-        ...(deal.can_manage ? ["Attribution"] : []),
-        ...(data.user.role !== "buyer" ? ["Internal notes"] : []),
-        "Data room",
+        ...(deal.can_manage ? ["Buyers"] : []),
+        "Documents & NDA",
         "Messages",
-        "Tasks",
-        "LOIs",
-        ...(deal.can_manage ? ["Introduction requests"] : []),
-        ...(deal.can_manage ? ["Buyer access"] : []),
+        "Offers",
       ]
     : [
         "Overview",
         ...(myAccess && !["revoked", "denied"].includes(myAccess.status)
-          ? ["Data room", "Messages"]
+          ? ["Documents & NDA", "Messages"]
           : []),
       ];
   return (
@@ -3391,239 +3391,269 @@ function DealDetail({ deal }: { deal: Deal }) {
         ))}
       </div>
       {tab === "Overview" ? (
-        <div className="detail-grid">
-          <div className="detail-main">
-            {data.user.role === "buyer" &&
-              myOutreach.map((outreach) => (
-                <PrivateOutreachPanel
-                  deal={deal}
-                  outreach={outreach}
-                  key={outreach.id}
-                />
-              ))}
-            <Panel title="The opportunity">
-              <div className="panel-body">
-                <p className="mb-6 leading-relaxed text-slate-600">
-                  {deal.description}
-                </p>
-                <dl className="detail-metrics">
-                  {[
-                    ["Annual revenue", money(deal.revenue, false)],
-                    ["EBITDA", money(deal.ebitda, false)],
-                    [
-                      "Indicative asking price",
-                      money(deal.asking_price, false),
-                    ],
-                    [
-                      "EBITDA margin",
-                      deal.revenue
-                        ? `${Math.round((deal.ebitda / deal.revenue) * 100)}%`
-                        : "—",
-                    ],
-                  ].map(([label, value]) => (
-                    <div key={label}>
-                      <dt>{label}</dt>
-                      <dd>{value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </div>
-            </Panel>
-            <Panel title="Transaction profile">
-              <div className="panel-body">
-                <dl className="detail-metrics transaction-metrics">
-                  <div>
-                    <dt>Transaction type</dt>
-                    <dd>{projectTransactionLabel(deal.transaction_type)}</dd>
-                  </div>
-                  <div>
-                    <dt>Ownership available</dt>
-                    <dd>{deal.ownership_percentage_available}%</dd>
-                  </div>
-                  <div>
-                    <dt>Expected value</dt>
-                    <dd>{expectedValueLabel(deal)}</dd>
-                  </div>
-                  <div>
-                    <dt>Seller flexibility</dt>
-                    <dd>
-                      {[
-                        deal.seller_rollover_possible && "Rollover",
-                        deal.seller_financing_possible && "Financing",
-                      ]
-                        .filter(Boolean)
-                        .join(" · ") || "Not specified"}
-                    </dd>
-                  </div>
-                </dl>
-                {deal.has_access &&
-                  (deal.management_transition ||
-                    deal.reason_for_transaction) && (
-                    <div className="transaction-notes">
-                      {deal.reason_for_transaction && (
-                        <div>
-                          <strong>Reason for transaction</strong>
-                          <p>{deal.reason_for_transaction}</p>
-                        </div>
-                      )}
-                      {deal.management_transition && (
-                        <div>
-                          <strong>Management transition</strong>
-                          <p>{deal.management_transition}</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-              </div>
-            </Panel>
-            {deal.has_access && <FinancialHistory deal={deal} />}
-            {deal.has_access ? (
-              <Panel title="Behind the business">
+        <>
+          <div className="detail-grid">
+            <div className="detail-main">
+              {data.user.role === "buyer" &&
+                myOutreach.map((outreach) => (
+                  <PrivateOutreachPanel
+                    deal={deal}
+                    outreach={outreach}
+                    key={outreach.id}
+                  />
+                ))}
+              <Panel title="The opportunity">
                 <div className="panel-body">
-                  <p className="mb-5 whitespace-pre-wrap leading-relaxed text-slate-600">
-                    {deal.confidential_summary ||
-                      "No additional summary has been added."}
+                  <p className="mb-6 leading-relaxed text-slate-600">
+                    {deal.description}
                   </p>
                   <dl className="detail-metrics">
-                    <div>
-                      <dt>Location</dt>
-                      <dd>{deal.city}</dd>
-                    </div>
-                    <div>
-                      <dt>Year founded</dt>
-                      <dd>{deal.founded}</dd>
-                    </div>
-                    <div>
-                      <dt>Employees</dt>
-                      <dd>{deal.employees}</dd>
-                    </div>
-                    <div>
-                      <dt>Currency</dt>
-                      <dd>CAD</dd>
-                    </div>
+                    {[
+                      ["Annual revenue", money(deal.revenue, false)],
+                      ["EBITDA", money(deal.ebitda, false)],
+                      [
+                        "Indicative asking price",
+                        money(deal.asking_price, false),
+                      ],
+                      [
+                        "EBITDA margin",
+                        deal.revenue && deal.ebitda !== null
+                          ? `${Math.round((deal.ebitda / deal.revenue) * 100)}%`
+                          : "—",
+                      ],
+                    ].map(([label, value]) => (
+                      <div key={label}>
+                        <dt>{label}</dt>
+                        <dd>{value}</dd>
+                      </div>
+                    ))}
                   </dl>
                 </div>
               </Panel>
-            ) : (
-              <Panel title="Confidential details">
+              <Panel title="Transaction profile">
                 <div className="panel-body">
-                  <LockKeyhole className="mb-3 text-emerald-800" size={25} />
-                  <p className="text-sm leading-relaxed text-slate-600">
-                    The company’s identity and confidential documents are
-                    available after the deal team reviews your request and
-                    verifies an externally signed NDA.
-                  </p>
-                </div>
-              </Panel>
-            )}
-          </div>
-          <aside className="detail-sidebar">
-            {deal.can_manage ? (
-              <>
-                <Panel title="Manage this mandate">
-                  <div className="panel-body">
-                    <MutationForm
-                      action="updateDeal"
-                      extra={{ deal_id: deal.id }}
-                    >
-                      <SelectField
-                        name="stage"
-                        label="Transaction stage"
-                        options={STAGES}
-                        value={deal.stage}
-                      />
-                      <label className="checkbox-label">
-                        <input
-                          type="checkbox"
-                          name="published"
-                          defaultChecked={!!deal.published}
-                        />
-                        Publish the anonymous teaser to signed-in buyers
-                      </label>
-                      <p className="field-hint">
-                        Publishing makes the teaser visible only when the
-                        distribution strategy is Qualified Discovery. Change the
-                        strategy under Mandate settings.
-                      </p>
-                    </MutationForm>
-                  </div>
-                </Panel>
-                <Panel title="Deal team">
-                  <div className="panel-body">
-                    <p className="muted mb-4">
-                      Authorized members of the owner and advisor firms can
-                      manage documents, buyer access, and transaction activity.
-                    </p>
-                    {deal.can_manage_owner_side ? (
-                      <MutationForm
-                        action="appointAdvisor"
-                        extra={{ deal_id: deal.id }}
-                        label="Appoint advisor"
-                      >
-                        <label>
-                          Advisor
-                          <select
-                            name="advisor_id"
-                            defaultValue={deal.advisor_id || ""}
-                            required
-                          >
-                            <option value="">Select advisor</option>
-                            {data.advisors.map((a) => (
-                              <option value={a.id} key={a.id}>
-                                {a.name} · {a.company}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="checkbox-label">
-                          <input type="checkbox" required />I authorize this
-                          advisor to access and manage this mandate.
-                        </label>
-                      </MutationForm>
-                    ) : (
-                      <p className="muted">
-                        You have deal-team access through your organization.
-                      </p>
+                  <dl className="detail-metrics transaction-metrics">
+                    <div>
+                      <dt>Transaction type</dt>
+                      <dd>{projectTransactionLabel(deal.transaction_type)}</dd>
+                    </div>
+                    <div>
+                      <dt>Ownership available</dt>
+                      <dd>{deal.ownership_percentage_available}%</dd>
+                    </div>
+                    <div>
+                      <dt>Expected value</dt>
+                      <dd>{expectedValueLabel(deal)}</dd>
+                    </div>
+                    <div>
+                      <dt>Seller flexibility</dt>
+                      <dd>
+                        {[
+                          deal.seller_rollover_possible && "Rollover",
+                          deal.seller_financing_possible && "Financing",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ") || "Not specified"}
+                      </dd>
+                    </div>
+                  </dl>
+                  {deal.has_access &&
+                    (deal.management_transition ||
+                      deal.reason_for_transaction) && (
+                      <div className="transaction-notes">
+                        {deal.reason_for_transaction && (
+                          <div>
+                            <strong>Reason for transaction</strong>
+                            <p>{deal.reason_for_transaction}</p>
+                          </div>
+                        )}
+                        {deal.management_transition && (
+                          <div>
+                            <strong>Management transition</strong>
+                            <p>{deal.management_transition}</p>
+                          </div>
+                        )}
+                      </div>
                     )}
-                  </div>
-                </Panel>
-              </>
-            ) : data.user.role === "buyer" &&
-              (!myOutreach.length || myAccess) ? (
-              <BuyerNextStep
-                deal={deal}
-                access={myAccess}
-                onOpenDataRoom={() => setTab("Data room")}
-              />
-            ) : (
-              <Panel title="Read-only deal access">
-                <div className="panel-body">
-                  <p className="muted">
-                    You can review this mandate through your firm. A firm owner,
-                    administrator, or member must make changes.
-                  </p>
                 </div>
               </Panel>
-            )}{" "}
-            {data.user.role === "buyer" && (
-              <Panel
-                title={
-                  primaryOutreach ? "Matched mandate" : "Why this could fit"
-                }
-              >
-                <div className="panel-body">
-                  <strong className="text-2xl tabular-nums text-emerald-800">
-                    {primaryOutreach?.match_score ?? deal.match_score}%
-                  </strong>
-                  <p className="muted mb-4">
-                    {primaryOutreach
-                      ? `Matched to ${primaryOutreach.buyer_project_name}`
-                      : deal.matched_project_name
-                        ? `Matched to ${deal.matched_project_name}`
-                        : "Rules-based criteria match"}
-                  </p>
-                  {(primaryOutreach?.match_reasons ?? deal.match_reasons)?.map(
-                    (r) => (
+              {deal.has_access && <FinancialHistory deal={deal} />}
+              {deal.has_access ? (
+                <Panel title="Behind the business">
+                  <div className="panel-body">
+                    <p className="mb-5 whitespace-pre-wrap leading-relaxed text-slate-600">
+                      {deal.confidential_summary ||
+                        "No additional summary has been added."}
+                    </p>
+                    <dl className="detail-metrics">
+                      <div>
+                        <dt>Location</dt>
+                        <dd>{deal.city || "Not provided"}</dd>
+                      </div>
+                      <div>
+                        <dt>Year founded</dt>
+                        <dd>{deal.founded ?? "Not provided"}</dd>
+                      </div>
+                      <div>
+                        <dt>Employees</dt>
+                        <dd>{deal.employees ?? "Not provided"}</dd>
+                      </div>
+                      <div>
+                        <dt>Currency</dt>
+                        <dd>CAD</dd>
+                      </div>
+                    </dl>
+                  </div>
+                </Panel>
+              ) : (
+                <Panel title="Confidential details">
+                  <div className="panel-body">
+                    <LockKeyhole className="mb-3 text-emerald-800" size={25} />
+                    <p className="text-sm leading-relaxed text-slate-600">
+                      The company’s identity and confidential documents are
+                      available after the deal team reviews your request and
+                      verifies an externally signed NDA.
+                    </p>
+                  </div>
+                </Panel>
+              )}
+            </div>
+            <aside className="detail-sidebar">
+              {deal.can_manage ? (
+                <>
+                  <Panel title="Manage this mandate">
+                    <div className="panel-body">
+                      <div className="mb-5 rounded-xl border border-slate-200 p-4">
+                        <strong className="text-sm">
+                          Complete before sharing
+                        </strong>
+                        <div className="mt-3 grid gap-2 text-sm">
+                          {shareChecklist.map((item) => (
+                            <span
+                              className="flex items-center gap-2 text-slate-600"
+                              key={item.label}
+                            >
+                              {item.complete ? (
+                                <CircleCheck
+                                  size={15}
+                                  className="text-emerald-700"
+                                />
+                              ) : (
+                                <CircleHelp
+                                  size={15}
+                                  className="text-amber-700"
+                                />
+                              )}
+                              {item.label}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <MutationForm
+                        action="updateDeal"
+                        extra={{ deal_id: deal.id }}
+                      >
+                        <SelectField
+                          name="stage"
+                          label="Transaction stage"
+                          options={STAGES}
+                          value={deal.stage}
+                        />
+                        <label className="checkbox-label">
+                          <input
+                            type="checkbox"
+                            name="published"
+                            defaultChecked={!!deal.published}
+                            disabled={!readyToShare && !deal.published}
+                          />
+                          Share the anonymous teaser with eligible buyers
+                        </label>
+                        <p className="field-hint">
+                          Private drafts never appear in discovery or outreach.
+                          Sharing is enabled only after the checklist is
+                          complete.
+                        </p>
+                      </MutationForm>
+                    </div>
+                  </Panel>
+                  <Panel title="Deal team">
+                    <div className="panel-body">
+                      <p className="muted mb-4">
+                        Authorized members of the owner and advisor firms can
+                        manage documents, buyer access, and transaction
+                        activity.
+                      </p>
+                      {deal.can_manage_owner_side ? (
+                        <MutationForm
+                          action="appointAdvisor"
+                          extra={{ deal_id: deal.id }}
+                          label="Appoint advisor"
+                        >
+                          <label>
+                            Advisor
+                            <select
+                              name="advisor_id"
+                              defaultValue={deal.advisor_id || ""}
+                              required
+                            >
+                              <option value="">Select advisor</option>
+                              {data.advisors.map((a) => (
+                                <option value={a.id} key={a.id}>
+                                  {a.name} · {a.company}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="checkbox-label">
+                            <input type="checkbox" required />I authorize this
+                            advisor to access and manage this mandate.
+                          </label>
+                        </MutationForm>
+                      ) : (
+                        <p className="muted">
+                          You have deal-team access through your organization.
+                        </p>
+                      )}
+                    </div>
+                  </Panel>
+                </>
+              ) : data.user.role === "buyer" &&
+                (!myOutreach.length || myAccess) ? (
+                <BuyerNextStep
+                  deal={deal}
+                  access={myAccess}
+                  onOpenDataRoom={() => setTab("Documents & NDA")}
+                />
+              ) : (
+                <Panel title="Read-only deal access">
+                  <div className="panel-body">
+                    <p className="muted">
+                      You can review this mandate through your firm. A firm
+                      owner, administrator, or member must make changes.
+                    </p>
+                  </div>
+                </Panel>
+              )}{" "}
+              {data.user.role === "buyer" && (
+                <Panel
+                  title={
+                    primaryOutreach ? "Matched mandate" : "Why this could fit"
+                  }
+                >
+                  <div className="panel-body">
+                    <strong className="text-2xl tabular-nums text-emerald-800">
+                      {primaryOutreach?.match_score ?? deal.match_score}%
+                    </strong>
+                    <p className="muted mb-4">
+                      {primaryOutreach
+                        ? `Matched to ${primaryOutreach.buyer_project_name}`
+                        : deal.matched_project_name
+                          ? `Matched to ${deal.matched_project_name}`
+                          : "Rules-based criteria match"}
+                    </p>
+                    {(
+                      primaryOutreach?.match_reasons ?? deal.match_reasons
+                    )?.map((r) => (
                       <p
                         className="my-2 flex items-center gap-2 text-sm"
                         key={r}
@@ -3633,34 +3663,52 @@ function DealDetail({ deal }: { deal: Deal }) {
                           ? matchDimensionLabel(r)
                           : r}
                       </p>
-                    ),
-                  )}
-                  <Link
-                    href="/app/projects"
-                    className="mt-4 inline-block text-sm text-emerald-800 underline"
-                  >
-                    Edit your criteria
-                  </Link>
-                </div>
-              </Panel>
-            )}
-          </aside>
+                    ))}
+                    <Link
+                      href="/app/projects"
+                      className="mt-4 inline-block text-sm text-emerald-800 underline"
+                    >
+                      Edit your criteria
+                    </Link>
+                  </div>
+                </Panel>
+              )}
+            </aside>
+          </div>
+          {deal.can_manage && (
+            <details className="disclosure">
+              <summary>Mandate settings and internal tools</summary>
+              <div className="space-y-6">
+                <MandateSettings deal={deal} />
+                {data.user.role !== "buyer" && <InternalNotes deal={deal} />}
+                <Panel title="Diligence checklist">
+                  <div className="px-5">
+                    {data.tasks
+                      .filter((task) => task.deal_id === deal.id)
+                      .map((task) => (
+                        <TaskRow task={task} key={task.id} />
+                      ))}
+                    {!data.tasks.some((task) => task.deal_id === deal.id) && (
+                      <Empty
+                        title="No tasks yet"
+                        body="Shared diligence requests and deadlines will appear here."
+                      />
+                    )}
+                  </div>
+                </Panel>
+                <TaskForm deal={deal} />
+              </div>
+            </details>
+          )}
+        </>
+      ) : tab === "Buyers" ? (
+        <div className="space-y-8">
+          <RecommendedBuyers deal={deal} />
+          <IntroductionRequests deal={deal} />
+          <BuyerFunnel deal={deal} />
+          <BuyerAccess deal={deal} />
         </div>
-      ) : tab === "Mandate settings" ? (
-        <MandateSettings deal={deal} />
-      ) : tab === "Teaser safety" ? (
-        <TeaserSafetyAssistant deal={deal} />
-      ) : tab === "Recommended buyers" ? (
-        <RecommendedBuyers deal={deal} />
-      ) : tab === "Buyer funnel" ? (
-        <BuyerFunnel deal={deal} />
-      ) : tab === "Attribution" ? (
-        <TransactionAttributionPanel deal={deal} />
-      ) : tab === "Internal notes" ? (
-        <InternalNotes deal={deal} />
-      ) : tab === "Introduction requests" ? (
-        <IntroductionRequests deal={deal} />
-      ) : tab === "Data room" ? (
+      ) : tab === "Documents & NDA" ? (
         <>
           <DocumentTable
             documents={data.documents.filter((d) => d.deal_id === deal.id)}
@@ -3673,29 +3721,10 @@ function DealDetail({ deal }: { deal: Deal }) {
         </>
       ) : tab === "Messages" ? (
         <ConversationArea dealId={deal.id} />
-      ) : tab === "Tasks" ? (
-        <>
-          <Panel title="Diligence checklist">
-            <div className="px-5">
-              {data.tasks
-                .filter((t) => t.deal_id === deal.id)
-                .map((t) => (
-                  <TaskRow task={t} key={t.id} />
-                ))}
-              {!data.tasks.some((t) => t.deal_id === deal.id) && (
-                <Empty
-                  title="No tasks yet"
-                  body="Shared diligence requests and deadlines will appear here."
-                />
-              )}
-            </div>
-          </Panel>
-          {deal.can_manage && <TaskForm deal={deal} />}
-        </>
-      ) : tab === "LOIs" ? (
+      ) : tab === "Offers" ? (
         <Offers deal={deal} />
       ) : (
-        <BuyerAccess deal={deal} />
+        <ConversationArea dealId={deal.id} />
       )}
       {tab === "Overview" &&
         deal.can_manage &&
@@ -3896,17 +3925,6 @@ function BuyerFunnel({ deal }: { deal: Deal }) {
           .includes(query.toLowerCase())) &&
       (!stage || buyer.current_stage === stage),
   );
-  const metricItems = [
-    ["Pursuit rate", funnelRate(funnel.metrics.pursuit_rate)],
-    ["NDA conversion", funnelRate(funnel.metrics.nda_conversion)],
-    ["CIM conversion", funnelRate(funnel.metrics.cim_conversion)],
-    ["IOI conversion", funnelRate(funnel.metrics.ioi_conversion)],
-    ["LOI conversion", funnelRate(funnel.metrics.loi_conversion)],
-    [
-      "Average response",
-      responseTimeLabel(funnel.metrics.average_response_hours),
-    ],
-  ];
   const recordMilestone = async (buyer: BuyerFunnelEntry) => {
     const eventType = milestones[buyer.buyer_organization_id] || "ioi_received";
     await act("recordBuyerFunnelEvent", {
@@ -3940,14 +3958,6 @@ function BuyerFunnel({ deal }: { deal: Deal }) {
           </div>
         ))}
       </div>
-      <dl className="funnel-metrics">
-        {metricItems.map(([label, value]) => (
-          <div key={label}>
-            <dt>{label}</dt>
-            <dd>{value}</dd>
-          </div>
-        ))}
-      </dl>
       <div className="funnel-controls">
         <label className="search-field">
           <span className="sr-only">Search buyer funnel</span>
@@ -4822,8 +4832,6 @@ function RecommendedBuyers({ deal }: { deal: Deal }) {
   const { data, act, busy } = useWorkspace();
   const [organizationType, setOrganizationType] = useState("");
   const [province, setProvince] = useState("");
-  const [verifiedOnly, setVerifiedOnly] = useState(false);
-  const [experiencedOnly, setExperiencedOnly] = useState(false);
   const [statusFilter, setStatusFilter] = useState("all");
   const [sort, setSort] = useState("score-desc");
   const [chosen, setChosen] = useState<Set<string>>(new Set());
@@ -4844,9 +4852,6 @@ function RecommendedBuyers({ deal }: { deal: Deal }) {
         (!organizationType ||
           match.buyer_organization_type === organizationType) &&
         (!province || match.buyer_organization_province === province) &&
-        (!verifiedOnly ||
-          isFirmVerified(match.buyer_organization_verification_status)) &&
-        (!experiencedOnly || match.relevant_acquisitions > 0) &&
         (statusFilter === "all" ||
           (statusFilter === "active"
             ? match.status !== "excluded"
@@ -4973,24 +4978,6 @@ function RecommendedBuyers({ deal }: { deal: Deal }) {
             <option value="name">Buyer name</option>
           </select>
         </label>
-        <div className="recommendation-toggles">
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={verifiedOnly}
-              onChange={(event) => setVerifiedOnly(event.target.checked)}
-            />
-            Verified only
-          </label>
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={experiencedOnly}
-              onChange={(event) => setExperiencedOnly(event.target.checked)}
-            />
-            Relevant experience
-          </label>
-        </div>
       </div>
 
       <div className="recommendation-batchbar">
@@ -5055,6 +5042,10 @@ function DistributionDocket({
     "We are representing a Canadian business that appears to fit your acquisition criteria. Review the confidential teaser and let us know whether you would like to pursue the opportunity.",
   );
   const [preview, setPreview] = useState(false);
+  const sharingMissing = [
+    deal.title === "Private mandate" ? "project name" : null,
+    deal.revenue === null ? "annual revenue" : null,
+  ].filter(Boolean) as string[];
   const share = () =>
     act("shareTeaser", {
       deal_id: deal.id,
@@ -5079,6 +5070,11 @@ function DistributionDocket({
         </div>
         <span className="distribution-count">{selectedMatches.length}</span>
       </div>
+      {sharingMissing.length > 0 && (
+        <p className="notice">
+          Complete before sharing: {sharingMissing.join(", ")}.
+        </p>
+      )}
       {selectedMatches.length ? (
         <>
           <div
@@ -5133,7 +5129,12 @@ function DistributionDocket({
             <button
               type="button"
               className="button button-green"
-              disabled={busy || !subject.trim() || !message.trim()}
+              disabled={
+                busy ||
+                sharingMissing.length > 0 ||
+                !subject.trim() ||
+                !message.trim()
+              }
               onClick={share}
             >
               <Send size={16} /> Share teaser
@@ -5198,10 +5199,6 @@ function BuyerRecommendation({
   const primaryProject = match.buyer_firm_profile.active_projects.find(
     (project) => project.id === match.buyer_project_id,
   );
-  const reputation = match.buyer_firm_profile.reputation;
-  const responseSampleLabel = reputation.response_opportunities
-    ? `${reputation.response_opportunities} private invitation${reputation.response_opportunities === 1 ? "" : "s"}`
-    : "No private invitations yet";
   return (
     <article
       className={cn(
@@ -5407,60 +5404,6 @@ function BuyerRecommendation({
               </section>
 
               <section>
-                <h4>Marketplace reputation</h4>
-                <dl className="buyer-profile-facts buyer-reputation-metrics">
-                  <div>
-                    <dt>Response rate</dt>
-                    <dd>
-                      {funnelRate(reputation.response_rate)}
-                      <small> {responseSampleLabel}</small>
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Median response</dt>
-                    <dd>
-                      {responseTimeLabel(reputation.median_response_hours)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Opportunities pursued</dt>
-                    <dd>{reputation.opportunities_pursued}</dd>
-                  </div>
-                  <div>
-                    <dt>LOIs submitted</dt>
-                    <dd>{reputation.lois_submitted}</dd>
-                  </div>
-                  <div>
-                    <dt>Verified transactions</dt>
-                    <dd>{reputation.transactions_closed}</dd>
-                  </div>
-                  <div>
-                    <dt>Relevant transactions</dt>
-                    <dd>
-                      {reputation.relevant_transactions}{" "}
-                      <small>verified in this sector</small>
-                    </dd>
-                  </div>
-                </dl>
-                <p className="buyer-reputation-note">
-                  Derived from recorded Succera marketplace activity and
-                  verified transaction history. Informational only and not
-                  included in the match score.
-                </p>
-              </section>
-
-              <section>
-                <h4>Closed transaction history</h4>
-                {match.buyer_firm_profile.closed_transactions.length ? (
-                  <TransactionTombstones
-                    transactions={match.buyer_firm_profile.closed_transactions}
-                  />
-                ) : (
-                  <p>No closed transaction records have been added.</p>
-                )}
-              </section>
-
-              <section>
                 <h4>Active acquisition projects</h4>
                 {match.buyer_firm_profile.active_projects.length ? (
                   <div className="buyer-profile-projects">
@@ -5614,8 +5557,8 @@ function AccessCard({ access: a, deal }: { access: Access; deal: Deal }) {
           </p>
           <p className="mt-1 text-xs text-slate-500">
             {a.buyer_identity_verified
-              ? "Buyer verification approved"
-              : "Buyer verification not yet approved"}
+              ? "Buyer profile reviewed"
+              : "Buyer profile review pending"}
           </p>
         </div>
         <Status value={a.status} />
@@ -6215,81 +6158,22 @@ function Network() {
 }
 
 function NotificationPreferencesPanel() {
-  const { data, busy, act } = useWorkspace();
-  const [preferences, setPreferences] = useState(data.notification_preferences);
-  const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!dirty && !saving) setPreferences(data.notification_preferences);
-  }, [data.notification_preferences, dirty, saving]);
-
   return (
-    <Panel title="Email notification preferences">
-      <form
-        className="notification-preferences"
-        aria-busy={saving}
-        onSubmit={async (event) => {
-          event.preventDefault();
-          setSaving(true);
-          const result = await act("notificationPreferences", { preferences });
-          if (result) {
-            setDirty(false);
-            setPreferences(preferences);
-          }
-          setSaving(false);
-        }}
-      >
+    <Panel title="In-app notifications">
+      <div className="notification-preferences">
         <div className="notification-preferences-intro">
           <span className="preference-icon">
-            <Mail size={18} strokeWidth={1.7} />
+            <Bell size={18} strokeWidth={1.7} />
           </span>
           <div>
-            <strong>Choose when Succera should email you.</strong>
+            <strong>Transaction updates appear inside Succera.</strong>
             <p>
-              In-app notifications always remain available. This environment
-              records outbound email safely until a production provider is
-              configured.
+              Pilot email delivery is not enabled. Check the notification bell
+              and your messages in Succera for new activity.
             </p>
           </div>
         </div>
-        <div className="notification-preference-list">
-          {NOTIFICATION_TYPES.map((type) => (
-            <label className="notification-preference-row" key={type}>
-              <span>
-                <strong>{notificationTypeLabels[type]}</strong>
-                <small>{notificationTypeDescriptions[type]}</small>
-              </span>
-              <select
-                aria-label={`Email delivery for ${notificationTypeLabels[type]}`}
-                value={preferences[type]}
-                disabled={saving}
-                onChange={(event) =>
-                  setPreferences((current) => {
-                    setDirty(true);
-                    return {
-                      ...current,
-                      [type]: event.target.value as NotificationFrequency,
-                    };
-                  })
-                }
-              >
-                {NOTIFICATION_FREQUENCIES.map((frequency) => (
-                  <option key={frequency} value={frequency}>
-                    {notificationFrequencyLabels[frequency]}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ))}
-        </div>
-        <div className="form-actions">
-          <button className="button button-green" disabled={busy || saving}>
-            {busy || saving ? <LoaderCircle size={16} /> : <Check size={16} />}
-            Save notification preferences
-          </button>
-        </div>
-      </form>
+      </div>
     </Panel>
   );
 }
@@ -6690,7 +6574,6 @@ function BuyerVerificationPanel() {
           </div>
         </Panel>
       )}
-      <BuyerTransactionHistoryPanel />
       <Panel title="Buyer verification">
         <div className="verification-summary">
           <div>
@@ -7509,7 +7392,6 @@ function SettingsPage() {
               )}
             </div>
           </Panel>
-          <PublicNetworkProfilePanel />
           <Panel title={`Team · ${data.organization_members.length}`}>
             <div className="team-list">
               {data.organization_members.map((member) => (
