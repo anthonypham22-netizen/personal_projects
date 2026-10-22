@@ -3,6 +3,11 @@
   --font-sans: Arial, Helvetica, sans-serif;
 }
 @layer base {
+  :root {
+    --motion-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --motion-fast: 160ms;
+    --motion-ui: 200ms;
+  }
   * {
     @apply box-border;
   }
@@ -88,6 +93,17 @@
   }
   .button {
     @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-transparent px-4 py-2.5 text-sm font-semibold;
+    transition:
+      background-color var(--motion-fast) ease,
+      border-color var(--motion-fast) ease,
+      color var(--motion-fast) ease;
+  }
+  .marketing-page .button {
+    transition:
+      transform var(--motion-fast) var(--motion-ease-out),
+      background-color var(--motion-fast) ease,
+      border-color var(--motion-fast) ease,
+      color var(--motion-fast) ease;
   }
   .button-dark {
     @apply bg-slate-900 text-white hover:bg-slate-700;
@@ -142,13 +158,25 @@
     @apply inline-flex size-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-600;
   }
   .marketing-header {
-    @apply border-b border-slate-200 bg-white;
+    @apply relative z-20 border-b border-slate-200 bg-white/95;
   }
   .marketing-nav {
     @apply mx-auto flex max-w-7xl items-center justify-between gap-8 px-6 py-5 lg:px-10;
   }
   .marketing-nav nav {
     @apply hidden gap-8 text-sm text-slate-600 md:flex;
+  }
+  .marketing-nav nav a {
+    @apply relative;
+  }
+  .marketing-nav nav a::after {
+    @apply absolute -bottom-2 left-0 h-px w-full origin-left bg-emerald-700;
+    content: "";
+    opacity: 0;
+    transform: scaleX(0.55);
+    transition:
+      opacity var(--motion-fast) ease,
+      transform var(--motion-fast) var(--motion-ease-out);
   }
   .homepage-nav nav {
     @apply md:hidden lg:flex;
@@ -157,7 +185,25 @@
     @apply flex items-center gap-6;
   }
   .hero {
-    @apply bg-slate-50;
+    @apply relative isolate overflow-hidden bg-slate-50;
+    background-image:
+      radial-gradient(
+        circle at 82% 18%,
+        rgb(5 150 105 / 0.12),
+        transparent 32rem
+      ),
+      radial-gradient(
+        circle at 12% 90%,
+        rgb(180 138 58 / 0.08),
+        transparent 26rem
+      );
+  }
+  .hero::before {
+    @apply pointer-events-none absolute -right-48 top-12 -z-10 size-[34rem] rounded-full border border-emerald-800/10;
+    content: "";
+    box-shadow:
+      0 0 0 48px rgb(5 150 105 / 0.025),
+      0 0 0 96px rgb(5 150 105 / 0.02);
   }
   .hero-inner {
     @apply mx-auto grid max-w-7xl items-center gap-16 px-6 pb-20 pt-20 lg:grid-cols-2 lg:px-10 lg:pt-24;
@@ -186,6 +232,10 @@
   }
   .hero-product {
     @apply overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl;
+    transform-origin: center;
+    transition:
+      transform var(--motion-ui) var(--motion-ease-out),
+      border-color var(--motion-ui) ease;
   }
   .mock-header {
     @apply flex items-center gap-3 border-b border-slate-200 px-6 py-4 text-sm font-semibold;
@@ -213,6 +263,9 @@
   }
   .product-step-icon {
     @apply flex size-10 items-center justify-center rounded-xl bg-slate-50 text-emerald-800;
+    transition:
+      transform var(--motion-ui) var(--motion-ease-out),
+      background-color var(--motion-ui) ease;
   }
   .product-step strong {
     @apply block text-xs font-semibold tracking-[0.12em] text-slate-950;
@@ -281,9 +334,14 @@
   }
   .feature {
     @apply relative rounded-xl border border-slate-200 bg-slate-50/60 p-6;
+    transition:
+      transform var(--motion-ui) var(--motion-ease-out),
+      border-color var(--motion-ui) ease,
+      background-color var(--motion-ui) ease;
   }
   .feature > svg {
     @apply mb-6 text-emerald-800;
+    transition: transform var(--motion-ui) var(--motion-ease-out);
   }
   .feature-number {
     @apply absolute right-6 top-6 text-xs tabular-nums text-slate-400;
@@ -305,9 +363,13 @@
   }
   .audience-grid article {
     @apply border-t border-slate-700 pt-7;
+    transition:
+      transform var(--motion-ui) var(--motion-ease-out),
+      border-color var(--motion-ui) ease;
   }
   .audience-grid svg {
     @apply text-emerald-300;
+    transition: transform var(--motion-ui) var(--motion-ease-out);
   }
   .audience-grid h3 {
     @apply my-5 text-xl font-semibold;
@@ -318,11 +380,21 @@
   .audience-grid a {
     @apply mt-7 flex items-center justify-between gap-2 text-sm font-semibold;
   }
+  .audience-grid a svg {
+    transition: transform var(--motion-fast) var(--motion-ease-out);
+  }
   .process-grid {
     @apply grid gap-6 md:grid-cols-4;
   }
   .process-grid li {
-    @apply border-t border-slate-200 pt-6;
+    @apply relative border-t border-slate-200 pt-6;
+    transition: transform var(--motion-ui) var(--motion-ease-out);
+  }
+  .process-grid li::before {
+    @apply absolute -top-px left-0 h-px w-full origin-left bg-emerald-700;
+    content: "";
+    transform: scaleX(0);
+    transition: transform var(--motion-ui) var(--motion-ease-out);
   }
   .process-grid li > span {
     @apply mb-6 block text-sm tabular-nums text-emerald-800;
@@ -345,6 +417,17 @@
   }
   .closing-cta {
     @apply bg-emerald-900 px-6 py-16 text-center text-white;
+    background-image:
+      radial-gradient(
+        circle at 18% 20%,
+        rgb(255 255 255 / 0.08),
+        transparent 22rem
+      ),
+      radial-gradient(
+        circle at 84% 90%,
+        rgb(180 138 58 / 0.14),
+        transparent 24rem
+      );
   }
   .closing-cta h2 {
     @apply text-4xl;
@@ -2816,6 +2899,165 @@
     @apply mt-5;
   }
 }
+
+@keyframes marketing-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes marketing-card-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(24px, 0, 0) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes marketing-step-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes marketing-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .hero-copy > .eyebrow,
+  .hero-copy > h1,
+  .hero-copy > .hero-description,
+  .hero-copy > .hero-actions,
+  .hero-copy > .hero-proof {
+    animation: marketing-rise 500ms var(--motion-ease-out) backwards;
+  }
+  .hero-copy > h1 {
+    animation-delay: 60ms;
+  }
+  .hero-copy > .hero-description {
+    animation-delay: 120ms;
+  }
+  .hero-copy > .hero-actions {
+    animation-delay: 180ms;
+  }
+  .hero-copy > .hero-proof {
+    animation-delay: 240ms;
+  }
+  .hero-product {
+    animation: marketing-card-enter 500ms var(--motion-ease-out) 120ms backwards;
+  }
+  .product-step,
+  .mock-progress {
+    animation: marketing-step-enter 500ms var(--motion-ease-out) backwards;
+  }
+  .product-step:nth-child(1) {
+    animation-delay: 300ms;
+  }
+  .product-step:nth-child(2) {
+    animation-delay: 360ms;
+  }
+  .product-step:nth-child(3) {
+    animation-delay: 420ms;
+  }
+  .mock-progress {
+    animation-delay: 480ms;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .marketing-nav nav a:hover::after,
+  .marketing-nav nav a:focus-visible::after {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  .marketing-page .button:hover {
+    transform: translate3d(0, -2px, 0);
+  }
+  .marketing-page .button:hover svg {
+    transform: translate3d(2px, 0, 0);
+  }
+  .hero-product:hover,
+  .feature:hover,
+  .audience-grid article:hover,
+  .process-grid li:hover {
+    transform: translate3d(0, -4px, 0);
+  }
+  .hero-product:hover,
+  .feature:hover {
+    @apply border-emerald-200 bg-white;
+  }
+  .product-step:hover .product-step-icon {
+    @apply bg-emerald-50;
+    transform: scale(1.05);
+  }
+  .feature:hover > svg,
+  .audience-grid article:hover > svg {
+    transform: translate3d(0, -3px, 0) rotate(-3deg);
+  }
+  .audience-grid article:hover {
+    @apply border-emerald-400;
+  }
+  .audience-grid article:hover a svg {
+    transform: translate3d(3px, -3px, 0);
+  }
+  .process-grid li:hover::before {
+    transform: scaleX(1);
+  }
+}
+
+.marketing-page .button:active {
+  transform: translate3d(0, 1px, 0) scale(0.99);
+  transition-duration: 120ms;
+}
+
+.marketing-page .button svg {
+  transition: transform var(--motion-fast) var(--motion-ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-copy > .eyebrow,
+  .hero-copy > h1,
+  .hero-copy > .hero-description,
+  .hero-copy > .hero-actions,
+  .hero-copy > .hero-proof,
+  .hero-product,
+  .product-step,
+  .mock-progress {
+    animation: marketing-fade 200ms ease both;
+  }
+  .marketing-page .button:hover,
+  .marketing-page .button:active,
+  .hero-product:hover,
+  .feature:hover,
+  .audience-grid article:hover,
+  .process-grid li:hover,
+  .product-step:hover .product-step-icon,
+  .feature:hover > svg,
+  .audience-grid article:hover > svg,
+  .audience-grid article:hover a svg {
+    transform: none;
+  }
+}
+
 @media (max-width: 480px) {
   .nav-actions {
     gap: 12px;

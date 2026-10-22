@@ -26,7 +26,7 @@ export const metadata: Metadata = {
 
 export default function Home() {
   return (
-    <>
+    <div className="marketing-page">
       <header className="marketing-header">
         <div className="marketing-nav homepage-nav">
           <Brand />
@@ -328,6 +328,6 @@ export default function Home() {
         <p>Connecting the next chapter of Canadian business.</p>
         <span>© {new Date().getFullYear()} Succera</span>
       </footer>
-    </>
+    </div>
   );
 }
