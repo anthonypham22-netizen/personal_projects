@@ -28,7 +28,7 @@ before(async () => {
   process.env.ALLOW_REGISTRATION = "true";
   await databaseReady();
   buyer = (await one<User>("SELECT * FROM users WHERE id='demo-buyer'"))!;
-  reviewer = (await one<User>("SELECT * FROM users WHERE id='demo-advisor'"))!;
+  reviewer = (await one<User>("SELECT * FROM users WHERE id='demo-admin'"))!;
 });
 
 after(async () => {

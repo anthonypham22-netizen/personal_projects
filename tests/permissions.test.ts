@@ -22,6 +22,7 @@ import { notifyUsers } from "../src/lib/notifications";
 import { approveBuyerVerification } from "../src/lib/buyer-identity-verification";
 let directory: string;
 let buyer: User, otherBuyer: User, owner: User, advisor: User;
+let platformAdmin: User;
 before(async () => {
   directory = mkdtempSync(path.join(tmpdir(), "northlane-permissions-"));
   process.env.DATA_DIR = directory;
@@ -34,6 +35,9 @@ before(async () => {
   ))!;
   owner = (await one<User>("SELECT * FROM users WHERE id='demo-owner'"))!;
   advisor = (await one<User>("SELECT * FROM users WHERE id='demo-advisor'"))!;
+  platformAdmin = (await one<User>(
+    "SELECT * FROM users WHERE id='demo-admin'",
+  ))!;
 });
 after(async () => {
   await closeDatabase();
@@ -104,7 +108,7 @@ test("buyer transaction tombstones remain scoped and require platform verificati
     buyer.is_platform_admin = 0;
   }
   const reviewerBefore = (await workspace(
-    advisor,
+    platformAdmin,
   )) as WorkspaceWithTransactions;
   assert.equal(
     reviewerBefore.closed_transaction_review_queue?.some(
@@ -112,7 +116,7 @@ test("buyer transaction tombstones remain scoped and require platform verificati
     ),
     true,
   );
-  await mutate(advisor, {
+  await mutate(platformAdmin, {
     action: "verifyClosedTransaction",
     data: { transaction_id: created.id },
   });
@@ -123,7 +127,7 @@ test("buyer transaction tombstones remain scoped and require platform verificati
   assert.equal(verified?.verification_label, "Succera verified");
   assert.equal(
     (
-      (await workspace(advisor)) as WorkspaceWithTransactions
+      (await workspace(platformAdmin)) as WorkspaceWithTransactions
     ).closed_transaction_review_queue?.some((entry) => entry.id === created.id),
     false,
   );

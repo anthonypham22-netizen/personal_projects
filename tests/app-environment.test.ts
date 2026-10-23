@@ -168,7 +168,7 @@ test("staging initializes the isolated synthetic marketplace", () => {
     );
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout.trim()), {
-      demoUsers: 5,
+      demoUsers: 6,
       deals: 6,
       documents: 6,
     });
@@ -243,20 +243,22 @@ test("production demo authentication requests are rejected", async () => {
   });
   try {
     const { POST } = await import("../src/app/api/auth/route");
-    const response = await POST(
-      new Request("https://succera.io/api/auth", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://succera.io",
-        },
-        body: JSON.stringify({ action: "demo", role: "owner" }),
-      }),
-    );
-    assert.equal(response.status, 403);
-    assert.deepEqual(await response.json(), {
-      error: "Demonstration accounts are disabled.",
-    });
+    for (const role of ["owner", "advisor", "buyer", "admin"]) {
+      const response = await POST(
+        new Request("https://succera.io/api/auth", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Origin: "https://succera.io",
+          },
+          body: JSON.stringify({ action: "demo", role }),
+        }),
+      );
+      assert.equal(response.status, 403);
+      assert.deepEqual(await response.json(), {
+        error: "Demonstration accounts are disabled.",
+      });
+    }
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];

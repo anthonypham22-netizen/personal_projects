@@ -1,6 +1,7 @@
 export async function submitAuth(
   body: Record<string, unknown>,
   fallbackMessage: string,
+  destination: "/app" | "/app/admin" = "/app",
 ) {
   const response = await fetch("/api/auth", {
     method: "POST",
@@ -9,5 +10,5 @@ export async function submitAuth(
   });
   const result = (await response.json()) as { error?: string };
   if (!response.ok) throw new Error(result.error || fallbackMessage);
-  window.location.assign("/app");
+  window.location.assign(destination);
 }

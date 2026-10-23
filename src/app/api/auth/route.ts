@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     if (body.action === "demo") {
       if (!isDemoAllowed())
         throw new AppError("Demonstration accounts are disabled.", 403);
-      if (!["buyer", "owner", "advisor"].includes(body.role))
+      if (!["buyer", "owner", "advisor", "admin"].includes(body.role))
         throw new AppError("Invalid role.");
       db();
       await limit("demo-login", 100, 60);

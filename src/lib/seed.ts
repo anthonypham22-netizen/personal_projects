@@ -470,12 +470,51 @@ async function syncDemoNotifications(d: DatabaseClient) {
   });
 }
 
+async function syncDemoAdministrator(d: DatabaseClient) {
+  // Repair earlier demo datasets that made the marketplace advisor an admin.
+  // Never change privileges on registered customer accounts.
+  await d
+    .prepare(
+      `UPDATE users SET is_platform_admin=0
+       WHERE is_demo=1 AND is_platform_admin<>0
+         AND id IN ('demo-owner','demo-advisor','demo-advisor-2','demo-buyer','demo-buyer-2')`,
+    )
+    .run();
+
+  if (!(await d.prepare("SELECT id FROM users WHERE id='demo-admin'").get())) {
+    await d
+      .prepare(
+        `INSERT INTO users(
+          id,email,password_hash,name,company,role,province,bio,sectors,is_demo,is_platform_admin
+        ) VALUES('demo-admin','platform-admin@example.test',?,'Succera Administrator',
+          'Succera Operations','advisor','Ontario',
+          'Internal administrator for fictional development and staging demonstrations.','',1,1)`,
+      )
+      .run(hashPassword(randomBytes(32).toString("hex")));
+  }
+  await d
+    .prepare(
+      "UPDATE users SET is_platform_admin=1 WHERE id='demo-admin' AND is_demo=1 AND is_platform_admin<>1",
+    )
+    .run();
+  await d
+    .prepare(
+      `INSERT OR IGNORE INTO organizations(id,name,slug,organization_type,province)
+       VALUES('org-demo-admin','Succera Operations','succera-operations-demo-admin','advisor','Ontario')`,
+    )
+    .run();
+  await d
+    .prepare(
+      `INSERT OR IGNORE INTO organization_members(id,organization_id,user_id,role,status)
+       VALUES('membership-demo-admin','org-demo-admin','demo-admin','owner','active')`,
+    )
+    .run();
+}
+
 async function syncDemoVerification(d: DatabaseClient) {
   if (!(await tableExists(d, "buyer_verification_profiles"))) return;
 
-  await d
-    .prepare("UPDATE users SET is_platform_admin=1 WHERE id='demo-advisor'")
-    .run();
+  await syncDemoAdministrator(d);
   await d
     .prepare(
       `UPDATE organizations

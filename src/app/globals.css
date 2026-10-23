@@ -848,7 +848,7 @@
     @apply mt-8 rounded-lg border border-rose-400/40 bg-rose-400/10 p-4 text-sm text-rose-200;
   }
   .dev-preview-grid {
-    @apply mt-10 grid gap-4 md:grid-cols-3;
+    @apply mt-10 grid gap-4 md:grid-cols-2;
   }
   .dev-preview-card {
     @apply flex min-h-64 flex-col rounded-xl border border-slate-700 bg-slate-900 p-6 shadow-lg;

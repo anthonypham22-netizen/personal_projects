@@ -180,13 +180,17 @@ test("development role preview switches between seeded demo identities", async (
   await page.goto("/login");
   await expect(page.getByText("DEV MODE — Role Preview")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: /View as (Owner|Advisor|Buyer)/ }),
+    page.getByRole("button", {
+      name: /View as (Owner|Advisor|Buyer|Administrator)/,
+    }),
   ).toHaveCount(0);
 
   await page.goto("/register");
   await expect(page.getByText("DEV MODE — Role Preview")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: /View as (Owner|Advisor|Buyer)/ }),
+    page.getByRole("button", {
+      name: /View as (Owner|Advisor|Buyer|Administrator)/,
+    }),
   ).toHaveCount(0);
 
   await page.goto("/dev/preview");
@@ -218,7 +222,72 @@ test("development role preview switches between seeded demo identities", async (
     await expect(
       page.getByRole("link", { name: "Switch demo role" }),
     ).toHaveAttribute("href", "/dev/preview");
+    await expect(page.getByRole("link", { name: "Admin home" })).toHaveCount(0);
+    await expect(
+      page.getByRole("link", { name: "Buyer identity reviews" }),
+    ).toHaveCount(0);
   }
+});
+
+test("administrator preview has a separate identity and cannot leak privileges to marketplace previews", async ({
+  page,
+}) => {
+  const headers = { Origin: E2E_ORIGIN };
+  await page.goto("/dev/preview");
+  await page.getByRole("button", { name: "View as Administrator" }).click();
+  await expect(page).toHaveURL(/\/app\/admin$/);
+  await expect(
+    page.getByRole("heading", { name: "Platform administration" }),
+  ).toBeVisible();
+  const adminState = await (await page.request.get("/api/workspace")).json();
+  expect(adminState.user.id).toBe("demo-admin");
+  expect(adminState.is_platform_admin).toBe(true);
+  expect(adminState.deals).toHaveLength(0);
+  await page.getByRole("link", { name: "Open review queue" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Buyer reviews" }),
+  ).toBeVisible();
+
+  for (const role of ["owner", "advisor", "buyer"] as const) {
+    await previewAs(page, role);
+    const state = await (await page.request.get("/api/workspace")).json();
+    expect(state.user.id).toBe(`demo-${role}`);
+    expect(state.is_platform_admin).toBe(false);
+    expect(
+      (
+        await page.request.post(
+          "/api/admin/buyer-verifications/not-a-verification",
+          {
+            headers,
+            data: {
+              action: "approve",
+              notes: "Unauthorized demo role attempt.",
+            },
+          },
+        )
+      ).status(),
+    ).toBe(403);
+    await page.goto("/app/admin");
+    await expect(
+      page.getByRole("heading", { name: "Page not found." }),
+    ).toBeVisible();
+  }
+
+  for (const role of ["demo-admin", "platform_admin", "../../admin"]) {
+    expect(
+      (
+        await page.request.post("/api/auth", {
+          headers,
+          data: { action: "demo", role, user_id: "demo-admin" },
+        })
+      ).status(),
+    ).toBe(400);
+  }
+  const remainingSession = await (
+    await page.request.get("/api/workspace")
+  ).json();
+  expect(remainingSession.user.id).toBe("demo-buyer");
+  expect(remainingSession.is_platform_admin).toBe(false);
 });
 
 test("public network is unavailable during the focused pilot", async ({
@@ -314,13 +383,11 @@ test("owner can review financial history and choose a distribution strategy", as
     page.getByRole("table").getByText("FY2025", { exact: true }),
   ).toBeVisible();
 
-  await page.getByText("Mandate settings and internal tools").click();
-  await page.getByText("Add project name and optional deal details").click();
   const distribution = page.getByLabel("Distribution strategy");
   await expect(distribution).toHaveValue("qualified_discovery");
   await distribution.selectOption("invite_only");
   await page
-    .getByRole("button", { name: "Save mandate details", exact: true })
+    .getByRole("button", { name: "Save mandate settings", exact: true })
     .click();
   await expect(distribution).toHaveValue("invite_only");
 });
@@ -331,7 +398,7 @@ test("owner can inspect and curate recommended buyers", async ({ page }) => {
     page.getByRole("heading", { name: "Welcome back, Jamie." }),
   ).toBeVisible();
   await page.goto("/app/deals/cedar");
-  await page.getByRole("button", { name: "Buyers" }).click();
+  await page.getByRole("button", { name: "Buyers", exact: true }).click();
 
   await expect(
     page.getByRole("heading", { name: "Recommended buyers" }),
@@ -426,7 +493,7 @@ test("advisor can inspect the event-backed buyer funnel and record a milestone",
     page.getByRole("heading", { name: "Welcome back, Alex." }),
   ).toBeVisible();
   await page.goto("/app/deals/cedar");
-  await page.getByRole("button", { name: "Buyers" }).click();
+  await page.getByRole("button", { name: "Buyers", exact: true }).click();
 
   await expect(
     page.getByRole("heading", { name: "Buyer funnel" }),
@@ -648,7 +715,7 @@ test("seller shares a private teaser and sees the buyer response", async ({
   ).toBe(200);
 
   await page.goto(`/app/deals/${dealId}`);
-  await page.getByRole("button", { name: "Buyers" }).click();
+  await page.getByRole("button", { name: "Buyers", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Share teaser" }),
   ).toBeVisible();
@@ -705,7 +772,7 @@ test("seller shares a private teaser and sees the buyer response", async ({
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL(/\/app$/);
   await page.goto(`/app/deals/${dealId}`);
-  await page.getByRole("button", { name: "Buyers" }).click();
+  await page.getByRole("button", { name: "Buyers", exact: true }).click();
   await expect(page.getByText("Pursued", { exact: true })).toBeVisible();
 });
 
@@ -1139,7 +1206,7 @@ test("electronic NDA controls are unavailable while external NDA remains", async
   await previewAs(page, "owner");
   await expect(page).toHaveURL(/\/app$/);
   await page.goto("/app/deals/harbour");
-  await page.getByRole("button", { name: "Buyers" }).click();
+  await page.getByRole("button", { name: "Buyers", exact: true }).click();
   const buyerCard = page.locator(".access-card").filter({
     hasText: "Evergreen Capital",
   });
@@ -1699,8 +1766,13 @@ test("capture focused pilot visual baselines", async ({ page }, testInfo) => {
     fullPage: true,
   });
 
-  await previewAs(page, "advisor");
-  await page.goto("/app/admin/buyers");
+  await page.goto("/dev/preview");
+  await page.getByRole("button", { name: "View as Administrator" }).click();
+  await expect(page).toHaveURL(/\/app\/admin$/);
+  await page.goto("/app/admin/buyers?status=all");
+  await expect(
+    page.getByRole("heading", { name: "Buyer reviews" }),
+  ).toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath("admin-buyer-review.png"),
     fullPage: true,
