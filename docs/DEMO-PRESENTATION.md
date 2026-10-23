@@ -87,7 +87,7 @@ financial fields. Create the mandate, then:
 2. Select **Review buyers and share teaser** to open the Buyers tab.
 3. Select Evergreen Capital's **Project Northern Lights** recommendation, choose
    **Select chosen (1)**, then explicitly click **Share teaser**.
-4. Switch to **Buyer** and open **Discover** (`/app/opportunities`). The new
+4. Switch to **Buyer** and open **Opportunities** (`/app/opportunities`). The new
    mandate appears as a **Private invitation**. Open it to show the anonymized
    teaser. Company identity and confidential documents remain gated.
 
