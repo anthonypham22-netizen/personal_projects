@@ -9,9 +9,12 @@ import {
   Building2,
   Handshake,
   LoaderCircle,
+  ShieldCheck,
 } from "lucide-react";
 import type { Role } from "@/lib/types";
 import { submitAuth } from "@/lib/client-auth";
+
+type PreviewRole = Role | "admin";
 
 const previewRoles = [
   {
@@ -34,24 +37,32 @@ const previewRoles = [
     description: "Inspect acquisition projects, opportunities, and diligence.",
     Icon: BriefcaseBusiness,
   },
+  {
+    role: "admin",
+    label: "Administrator",
+    description:
+      "Inspect Succera's internal buyer review queue with a separate demo account.",
+    Icon: ShieldCheck,
+  },
 ] as const satisfies ReadonlyArray<{
-  role: Role;
+  role: PreviewRole;
   label: string;
   description: string;
   Icon: typeof Building2;
 }>;
 
 export function RolePreview() {
-  const [busyRole, setBusyRole] = useState<Role>();
+  const [busyRole, setBusyRole] = useState<PreviewRole>();
   const [error, setError] = useState("");
 
-  async function preview(role: Role) {
+  async function preview(role: PreviewRole) {
     setBusyRole(role);
     setError("");
     try {
       await submitAuth(
         { action: "demo", role },
         "Unable to start role preview.",
+        role === "admin" ? "/app/admin" : "/app",
       );
     } catch (previewError) {
       setError(
@@ -74,8 +85,8 @@ export function RolePreview() {
           <span>DEV MODE — Role Preview</span>
           <h1>Inspect each workspace without changing a customer account.</h1>
           <p>
-            Each action creates a session for the corresponding seeded demo user
-            and opens the existing role-aware workspace.
+            Choose an owner, advisor, or buyer workspace, or open Succera's
+            separate administrator view to review fictional buyer applications.
           </p>
         </header>
 

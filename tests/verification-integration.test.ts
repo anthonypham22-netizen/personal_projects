@@ -20,7 +20,7 @@ before(async () => {
   delete process.env.QUALIFIED_DISCOVERY_MIN_VERIFICATION_STATUS;
   await databaseReady();
   buyer = (await one<User>("SELECT * FROM users WHERE id='demo-buyer'"))!;
-  reviewer = (await one<User>("SELECT * FROM users WHERE id='demo-advisor'"))!;
+  reviewer = (await one<User>("SELECT * FROM users WHERE id='demo-admin'"))!;
   owner = (await one<User>("SELECT * FROM users WHERE id='demo-owner'"))!;
 });
 

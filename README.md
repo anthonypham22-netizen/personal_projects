@@ -37,7 +37,12 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000). When `APP_ENV=development`
 and `ALLOW_DEMO=true`, `/dev/preview` can establish a session as a seeded owner,
-advisor, or buyer. Customer login pages never expose demo controls.
+advisor, or buyer, or a separate Succera administrator. Marketplace previews do
+not have administrator privileges. Customer login pages never expose demo controls.
+
+For a prepared walkthrough, environment setup, and how a new mandate reaches a
+buyer, see [the developer demo guide](docs/DEMO-PRESENTATION.md). Restart an existing
+development server after updating so the demo-account seed repair is applied.
 
 With no `DATABASE_URL`, development uses an isolated PGlite data directory at
 `DATA_DIR/postgres`. This is Postgres-compatible local storage, not a production

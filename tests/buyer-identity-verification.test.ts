@@ -431,7 +431,7 @@ test("admin review queues preserve demo and real-user isolation", async () => {
     false,
   );
 
-  const demoAdmin = (await sessionUser(await createSession("demo-advisor")))!;
+  const demoAdmin = (await sessionUser(await createSession("demo-admin")))!;
   const demoQueue = await listBuyerVerificationsForAdmin(demoAdmin);
   assert.equal(demoQueue.length > 0, true);
   assert.equal(

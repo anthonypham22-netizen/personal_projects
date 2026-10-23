@@ -2779,12 +2779,6 @@ function MandateDetailFields({
               defaultValue={deal?.confidential_summary}
             />
           </label>
-          <OptionSelectField
-            label="Distribution strategy"
-            name="distribution_mode"
-            options={distributionOptions}
-            value={deal?.distribution_mode ?? "private_outreach"}
-          />
         </div>
       </details>
     </div>
@@ -2814,7 +2808,7 @@ function NewDeal({ onCreated }: { onCreated: (id: string) => void }) {
     <>
       <Heading
         title="Create a private mandate."
-        description="Start with the essentials. Your teaser stays private until you publish it."
+        description="Start with the essentials. Choose how to share the teaser after you create the mandate."
       />
       <Panel title="Sell-side mandate">
         <div className="panel-body">
@@ -3305,6 +3299,104 @@ function TeaserSafetyAssistant({ deal }: { deal: Deal }) {
   );
 }
 
+function MandateDistributionForm({
+  deal,
+  readyToShare,
+  onOpenBuyers,
+}: {
+  deal: Deal;
+  readyToShare: boolean;
+  onOpenBuyers: () => void;
+}) {
+  const [distributionMode, setDistributionMode] = useState(
+    deal.distribution_mode,
+  );
+  const [published, setPublished] = useState(Boolean(deal.published));
+  const isDiscovery = distributionMode === "qualified_discovery";
+
+  return (
+    <>
+      <MutationForm
+        action="updateDeal"
+        extra={{
+          deal_id: deal.id,
+          published: isDiscovery && published,
+        }}
+        label="Save mandate settings"
+      >
+        <SelectField
+          name="stage"
+          label="Transaction stage"
+          options={STAGES}
+          value={deal.stage}
+        />
+        <label>
+          Distribution strategy
+          <select
+            name="distribution_mode"
+            value={distributionMode}
+            onChange={(event) => {
+              setDistributionMode(
+                event.target.value as Deal["distribution_mode"],
+              );
+              setPublished(false);
+            }}
+            aria-describedby="mandate-distribution-help"
+          >
+            {distributionOptions.map((option) => (
+              <option value={option.value} key={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="field-hint" id="mandate-distribution-help">
+          {isDiscovery
+            ? "Publish the anonymous teaser for buyer firms that meet the verification requirements and match an active acquisition project. Company identity and documents remain restricted."
+            : distributionMode === "private_outreach"
+              ? "Select buyer projects in Buyers, then use Share teaser to send a private invitation. Saving these settings does not send outreach or list the mandate in discovery."
+              : "Keep this mandate out of discovery. Open Buyers to invite an existing buyer account by email or send a private teaser to selected buyer projects."}
+        </p>
+        {isDiscovery && (
+          <>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                name="published"
+                checked={published}
+                onChange={(event) => setPublished(event.target.checked)}
+                disabled={!readyToShare && !published}
+              />
+              Publish in Qualified Discovery
+            </label>
+            {!readyToShare && (
+              <p className="field-hint">
+                Complete the sharing checklist before publishing.
+              </p>
+            )}
+          </>
+        )}
+        <p className="field-hint">
+          Save changes to apply this strategy. Existing invitations and approved
+          access are managed separately in Buyers.
+        </p>
+      </MutationForm>
+      {!isDiscovery && (
+        <button
+          type="button"
+          className="button button-quiet mt-4 w-full"
+          onClick={onOpenBuyers}
+        >
+          {distributionMode === "private_outreach"
+            ? "Review buyers and share teaser"
+            : "Manage buyer invitations"}
+          <ArrowRight size={16} />
+        </button>
+      )}
+    </>
+  );
+}
+
 function DealDetail({ deal }: { deal: Deal }) {
   const { data, act, busy } = useWorkspace();
   const [tab, setTab] = useState("Overview");
@@ -3549,31 +3641,12 @@ function DealDetail({ deal }: { deal: Deal }) {
                           ))}
                         </div>
                       </div>
-                      <MutationForm
-                        action="updateDeal"
-                        extra={{ deal_id: deal.id }}
-                      >
-                        <SelectField
-                          name="stage"
-                          label="Transaction stage"
-                          options={STAGES}
-                          value={deal.stage}
-                        />
-                        <label className="checkbox-label">
-                          <input
-                            type="checkbox"
-                            name="published"
-                            defaultChecked={!!deal.published}
-                            disabled={!readyToShare && !deal.published}
-                          />
-                          Share the anonymous teaser with eligible buyers
-                        </label>
-                        <p className="field-hint">
-                          Private drafts never appear in discovery or outreach.
-                          Sharing is enabled only after the checklist is
-                          complete.
-                        </p>
-                      </MutationForm>
+                      <MandateDistributionForm
+                        key={`${deal.id}:${deal.distribution_mode}:${deal.published}:${deal.stage}`}
+                        deal={deal}
+                        readyToShare={readyToShare}
+                        onOpenBuyers={() => setTab("Buyers")}
+                      />
                     </div>
                   </Panel>
                   <Panel title="Deal team">

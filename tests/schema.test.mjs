@@ -157,7 +157,7 @@ test("a fresh database migrates, seeds, and remains idempotent", async () => {
     );
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM users").get().count,
-      5,
+      6,
     );
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM documents").get().count,
@@ -165,7 +165,7 @@ test("a fresh database migrates, seeds, and remains idempotent", async () => {
     );
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM organizations").get().count,
-      5,
+      6,
     );
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM buyer_projects").get().count,
@@ -197,7 +197,7 @@ test("a fresh database migrates, seeds, and remains idempotent", async () => {
     assert.equal(
       database.prepare("SELECT COUNT(*) count FROM organization_members").get()
         .count,
-      5,
+      6,
     );
     assert.equal(
       database
@@ -273,6 +273,12 @@ test("a fresh database migrates, seeds, and remains idempotent", async () => {
     assert.equal(
       database
         .prepare("SELECT is_platform_admin FROM users WHERE id='demo-advisor'")
+        .get().is_platform_admin,
+      0,
+    );
+    assert.equal(
+      database
+        .prepare("SELECT is_platform_admin FROM users WHERE id='demo-admin'")
         .get().is_platform_admin,
       1,
     );
